@@ -222,8 +222,9 @@ def check_bazel_version(bazel_path):
 
 def write_bazelrc(python_bin_path=None, remote_build=None,
                   cuda_toolkit_path=None, cudnn_install_path=None,
-                  cuda_version=None, cudnn_version=None, rocm_toolkit_path=None,
-                  cpu=None):
+                  cuda_compute_capabilities=None, cuda_version=None,
+                  cudnn_version=None, rocm_toolkit_path=None,
+                  rocm_amdgpu_targets=None, cpu=None):
   tf_cuda_paths = []
 
   with open("../.jax_configure.bazelrc", "w") as f:
@@ -244,6 +245,9 @@ def write_bazelrc(python_bin_path=None, remote_build=None,
         tf_cuda_paths.append(cudnn_install_path)
       f.write("build --action_env CUDNN_INSTALL_PATH=\"{cudnn_install_path}\"\n"
               .format(cudnn_install_path=cudnn_install_path))
+    if cuda_compute_capabilities:
+      f.write("build --action_env TF_CUDA_COMPUTE_CAPABILITIES=\"{cuda_cc}\"\n"
+              .format(cuda_cc=cuda_compute_capabilities))
     if len(tf_cuda_paths):
       f.write("build --action_env TF_CUDA_PATHS=\"{tf_cuda_paths}\"\n"
               .format(tf_cuda_paths=",".join(tf_cuda_paths)))
@@ -256,6 +260,9 @@ def write_bazelrc(python_bin_path=None, remote_build=None,
     if rocm_toolkit_path:
       f.write("build --action_env ROCM_PATH=\"{rocm_toolkit_path}\"\n"
               .format(rocm_toolkit_path=rocm_toolkit_path))
+    if rocm_amdgpu_targets:
+      f.write("build --action_env TF_ROCM_AMDGPU_TARGETS=\"{rocm_targets}\"\n"
+              .format(rocm_targets=rocm_amdgpu_targets))
     if cpu is not None:
       f.write("build --distinct_host_configuration=true\n")
       f.write(f"build --cpu={cpu}\n")
@@ -376,7 +383,7 @@ def main():
       help="CUDNN version, e.g., 8")
   parser.add_argument(
       "--cuda_compute_capabilities",
-      default="3.5,5.2,6.0,6.1,7.0",
+      default=None,
       help="A comma-separated list of CUDA compute capabilities to support.")
   parser.add_argument(
       "--rocm_path",
@@ -384,7 +391,7 @@ def main():
       help="Path to the ROCm toolkit.")
   parser.add_argument(
       "--rocm_amdgpu_targets",
-      default="gfx803,gfx900,gfx906,gfx1010",
+      default=None,
       help="A comma-separated list of ROCm amdgpu targets to support.")
   parser.add_argument(
       "--bazel_startup_options",
@@ -450,14 +457,17 @@ def main():
 
   cuda_toolkit_path = args.cuda_path
   cudnn_install_path = args.cudnn_path
+  cuda_compute_capabilities=args.cuda_compute_capabilities
   rocm_toolkit_path = args.rocm_path
+  rocm_amdgpu_targets=args.rocm_amdgpu_targets
   print("CUDA enabled: {}".format("yes" if args.enable_cuda else "no"))
   if args.enable_cuda:
     if cuda_toolkit_path:
       print("CUDA toolkit path: {}".format(cuda_toolkit_path))
     if cudnn_install_path:
       print("CUDNN library path: {}".format(cudnn_install_path))
-    print("CUDA compute capabilities: {}".format(args.cuda_compute_capabilities))
+    if cuda_compute_capabilities:
+      print("CUDA compute capabilities: {}".format(args.cuda_compute_capabilities))
     if args.cuda_version:
       print("CUDA version: {}".format(args.cuda_version))
     if args.cudnn_version:
@@ -470,6 +480,7 @@ def main():
   if args.enable_rocm:
     if rocm_toolkit_path:
       print("ROCm toolkit path: {}".format(rocm_toolkit_path))
+    if rocm_amdgpu_targets:
       print("ROCm amdgpu targets: {}".format(args.rocm_amdgpu_targets))
 
   write_bazelrc(
@@ -477,9 +488,11 @@ def main():
       remote_build=args.remote_build,
       cuda_toolkit_path=cuda_toolkit_path,
       cudnn_install_path=cudnn_install_path,
+      cuda_compute_capabilities=cuda_compute_capabilities,
       cuda_version=args.cuda_version,
       cudnn_version=args.cudnn_version,
       rocm_toolkit_path=rocm_toolkit_path,
+      rocm_amdgpu_targets=rocm_amdgpu_targets,
       cpu=args.target_cpu,
   )
 
