@@ -1,4 +1,4 @@
-/* Copyright 2019 Google LLC
+/* Copyright 2021 Google LLC
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -13,51 +13,49 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#ifndef JAXLIB_CUBLAS_KERNELS_H_
-#define JAXLIB_CUBLAS_KERNELS_H_
+#ifndef JAXLIB_HIPBLAS_KERNELS_H_
+#define JAXLIB_HIPBLAS_KERNELS_H_
 
 #include <cstddef>
 
-#include "third_party/gpus/cuda/include/cublas_v2.h"
-#include "third_party/gpus/cuda/include/cuda.h"
-#include "third_party/gpus/cuda/include/cuda_runtime_api.h"
+#include "rocm/include/hip/hip_runtime_api.h"
+#include "rocm/include/hipblas.h"
 #include "tensorflow/compiler/xla/service/custom_call_status.h"
 
 namespace jax {
 
-// Set of types known to Cusolver.
-enum class CublasType {
+// Set of types known to Hipsolver.
+enum class HipblasType {
   F32,
   F64,
   C64,
   C128,
 };
 
-
 // Batched triangular solve: trsmbatched
 
 struct TrsmBatchedDescriptor {
-  CublasType type;
+  HipblasType type;
   int batch, m, n;
-  cublasSideMode_t side;
-  cublasFillMode_t uplo;
-  cublasOperation_t trans;
-  cublasDiagType_t diag;
+  hipblasSideMode_t side;
+  hipblasFillMode_t uplo;
+  hipblasOperation_t trans;
+  hipblasDiagType_t diag;
 };
 
-void TrsmBatched(cudaStream_t stream, void** buffers, const char* opaque,
+void TrsmBatched(hipStream_t stream, void** buffers, const char* opaque,
                  size_t opaque_len, XlaCustomCallStatus* status);
 
 // Batched LU decomposition: getrfbatched
 
 struct GetrfBatchedDescriptor {
-  CublasType type;
+  HipblasType type;
   int batch, n;
 };
 
-void GetrfBatched(cudaStream_t stream, void** buffers, const char* opaque,
+void GetrfBatched(hipStream_t stream, void** buffers, const char* opaque,
                   size_t opaque_len, XlaCustomCallStatus* status);
 
 }  // namespace jax
 
-#endif  // JAXLIB_CUBLAS_KERNELS_H_
+#endif  // JAXLIB_HIPBLAS_KERNELS_H_
