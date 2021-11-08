@@ -1,4 +1,4 @@
-/* Copyright 2019 Google LLC
+/* Copyright 2021 Google LLC
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -13,7 +13,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#include "jaxlib/cuda_gpu_kernel_helpers.h"
+#include "jaxlib/hip_gpu_kernel_helpers.h"
 
 #include <stdexcept>
 
@@ -23,67 +23,95 @@ limitations under the License.
 
 namespace jax {
 namespace {
-std::string ErrorString(cudaError_t error) { return cudaGetErrorString(error); }
+std::string ErrorString(hipError_t error) { return hipGetErrorString(error); }
 
-std::string ErrorString(cusparseStatus_t status) {
-  return cusparseGetErrorString(status);
-}
-
-std::string ErrorString(cusolverStatus_t status) {
+std::string ErrorString(hipsparseStatus_t status) {
+  // TODO(reza): check and see if we can use hipify
   switch (status) {
-    case CUSOLVER_STATUS_SUCCESS:
-      return "cuSolver success.";
-    case CUSOLVER_STATUS_NOT_INITIALIZED:
-      return "cuSolver has not been initialized";
-    case CUSOLVER_STATUS_ALLOC_FAILED:
-      return "cuSolver allocation failed";
-    case CUSOLVER_STATUS_INVALID_VALUE:
-      return "cuSolver invalid value error";
-    case CUSOLVER_STATUS_ARCH_MISMATCH:
-      return "cuSolver architecture mismatch error";
-    case CUSOLVER_STATUS_MAPPING_ERROR:
-      return "cuSolver mapping error";
-    case CUSOLVER_STATUS_EXECUTION_FAILED:
-      return "cuSolver execution failed";
-    case CUSOLVER_STATUS_INTERNAL_ERROR:
-      return "cuSolver internal error";
-    case CUSOLVER_STATUS_MATRIX_TYPE_NOT_SUPPORTED:
-      return "cuSolver matrix type not supported error";
-    case CUSOLVER_STATUS_NOT_SUPPORTED:
-      return "cuSolver not supported error";
-    case CUSOLVER_STATUS_ZERO_PIVOT:
-      return "cuSolver zero pivot error";
-    case CUSOLVER_STATUS_INVALID_LICENSE:
-      return "cuSolver invalid license error";
+    case HIPSPARSE_STATUS_SUCCESS:
+      return "hipSparse sucess.";
+    case HIPSPARSE_STATUS_NOT_INITIALIZED:
+      return "hipSparse has not been initialized.";
+    case HIPSPARSE_STATUS_ALLOC_FAILED:
+      return "hipSparse allocation failed.";
+    case HIPSPARSE_STATUS_INVALID_VALUE:
+      return "hipSparse invalid value error.";
+    case HIPSPARSE_STATUS_ARCH_MISMATCH:
+      return "hipSparse architecture mismatch error.";
+    case HIPSPARSE_STATUS_MAPPING_ERROR:
+      return "hipSpase mapping error.";
+    case HIPSPARSE_STATUS_EXECUTION_FAILED:
+      return "hipSparse execution failed.";
+    case HIPSPARSE_STATUS_INTERNAL_ERROR:
+      return "hipSparse internal error.";
+    case HIPSPARSE_STATUS_MATRIX_TYPE_NOT_SUPPORTED:
+      return "hipSparse matrix type not supported error.";
+    case HIPSPARSE_STATUS_ZERO_PIVOT:
+      return "hipSparse zero pivot error.";
+    case HIPSPARSE_STATUS_NOT_SUPPORTED:
+      return "hipSparse not supported error.";
+    case HIPSPARSE_STATUS_INSUFFICIENT_RESOURCES:
+      return "hipSparse insufficient reosourse error.";
     default:
-      return absl::StrCat("Unknown cuSolver error: ", status);
+      return absl::StrCat("Unknown hipSparse error: ", status, ".");
   }
 }
 
-std::string ErrorString(cublasStatus_t status) {
+std::string ErrorString(hipsolverStatus_t status) {
   switch (status) {
-    case CUBLAS_STATUS_SUCCESS:
-      return "cuBlas success";
-    case CUBLAS_STATUS_NOT_INITIALIZED:
-      return "cuBlas has not been initialized";
-    case CUBLAS_STATUS_ALLOC_FAILED:
-      return "cuBlas allocation failure";
-    case CUBLAS_STATUS_INVALID_VALUE:
-      return "cuBlas invalid value error";
-    case CUBLAS_STATUS_ARCH_MISMATCH:
-      return "cuBlas architecture mismatch";
-    case CUBLAS_STATUS_MAPPING_ERROR:
-      return "cuBlas mapping error";
-    case CUBLAS_STATUS_EXECUTION_FAILED:
-      return "cuBlas execution failed";
-    case CUBLAS_STATUS_INTERNAL_ERROR:
-      return "cuBlas internal error";
-    case CUBLAS_STATUS_NOT_SUPPORTED:
-      return "cuBlas not supported error";
-    case CUBLAS_STATUS_LICENSE_ERROR:
-      return "cuBlas license error";
+    case HIPSOLVER_STATUS_SUCCESS:
+      return "hipSolver success.";
+    case HIPSOLVER_STATUS_NOT_INITIALIZED:
+      return "hipSolver has not been initialized.";
+    case HIPSOLVER_STATUS_ALLOC_FAILED:
+      return "hipSolver allocation failed.";
+    case HIPSOLVER_STATUS_INVALID_VALUE:
+      return "hipSolver invalid value error.";
+    case HIPSOLVER_STATUS_MAPPING_ERROR:
+      return "hipSolver mapping error.";
+    case HIPSOLVER_STATUS_EXECUTION_FAILED:
+      return "hipSolver execution failed.";
+    case HIPSOLVER_STATUS_INTERNAL_ERROR:
+      return "hipSolver internal error.";
+    case HIPSOLVER_STATUS_NOT_SUPPORTED:
+      return "hipSolver status not supported.";
+    case HIPSOLVER_STATUS_ARCH_MISMATCH:
+      return "hipSolver architecture mismatch error.";
+    case HIPSOLVER_STATUS_HANDLE_IS_NULLPTR:
+      return "hipSolver null pointer handle error.";
+    case HIPSOLVER_STATUS_INVALID_ENUM:
+      return "hipSolver unsupported enum status error.";
     default:
-      return "Unknown cuBlas error";
+      return absl::StrCat("Unknown hipSolver error: ", status, ".");
+  }
+}
+
+std::string ErrorString(hipblasStatus_t status) {
+  switch (status) {
+    case HIPBLAS_STATUS_SUCCESS:
+      return "hipBlas success.";
+    case HIPBLAS_STATUS_NOT_INITIALIZED:
+      return "hipBlas has not been initialized.";
+    case HIPBLAS_STATUS_ALLOC_FAILED:
+      return "hipBlas resource allocation failed.";
+    case HIPBLAS_STATUS_INVALID_VALUE:
+      return "hipBlas invalid value error.";
+    case HIPBLAS_STATUS_MAPPING_ERROR:
+      return "hipBlas mapping error.";
+    case HIPBLAS_STATUS_EXECUTION_FAILED:
+      return "hipBlas execution failed.";
+    case HIPBLAS_STATUS_INTERNAL_ERROR:
+      return "hipBlas internal error.";
+    case HIPBLAS_STATUS_NOT_SUPPORTED:
+      return "hipBlas not supported error.";
+    case HIPBLAS_STATUS_ARCH_MISMATCH:
+      return "hipBlas architecture mismatch.";
+    case HIPBLAS_STATUS_HANDLE_IS_NULLPTR:
+      return "hipBlas null pointer handle error.";
+    case HIPBLAS_STATUS_INVALID_ENUM:
+      return "hipBlas unsupported enum status error.";
+    default:
+      return absl::StrCat("Unknown hipBlas error: ", status, ".");
   }
 }
 
@@ -95,37 +123,37 @@ std::string ErrorString(T status, const char* file, std::int64_t line,
 }
 }  // namespace
 
-absl::Status AsStatus(cudaError_t error, const char* file, std::int64_t line,
+absl::Status AsStatus(hipError_t error, const char* file, std::int64_t line,
                       const char* expr) {
-  if (error != cudaSuccess)
+  if (error != hipSuccess)
     return absl::InternalError(ErrorString(error, file, line, expr));
   return absl::OkStatus();
 }
 
-absl::Status AsStatus(cusolverStatus_t status, const char* file,
+absl::Status AsStatus(hipsolverStatus_t status, const char* file,
                       std::int64_t line, const char* expr) {
-  if (status != CUSOLVER_STATUS_SUCCESS)
+  if (status != HIPSOLVER_STATUS_SUCCESS)
     return absl::InternalError(ErrorString(status, file, line, expr));
   return absl::OkStatus();
 }
 
-absl::Status AsStatus(cusparseStatus_t status, const char* file,
+absl::Status AsStatus(hipsparseStatus_t status, const char* file,
                       std::int64_t line, const char* expr) {
-  if (status != CUSPARSE_STATUS_SUCCESS)
+  if (status != HIPSPARSE_STATUS_SUCCESS)
     return absl::InternalError(ErrorString(status, file, line, expr));
   return absl::OkStatus();
 }
 
-absl::Status AsStatus(cublasStatus_t status, const char* file,
+absl::Status AsStatus(hipblasStatus_t status, const char* file,
                       std::int64_t line, const char* expr) {
-  if (status != CUBLAS_STATUS_SUCCESS)
+  if (status != HIPBLAS_STATUS_SUCCESS)
     return absl::InternalError(ErrorString(status, file, line, expr));
   return absl::OkStatus();
 }
 
-absl::StatusOr<std::unique_ptr<void* []>> MakeBatchPointers(
-    cudaStream_t stream, void* buffer, void* dev_ptrs, int batch,
-    int batch_elem_size) {
+absl::StatusOr<std::unique_ptr<void* []>>
+MakeBatchPointers(hipStream_t stream, void* buffer, void* dev_ptrs, int batch,
+                  int batch_elem_size) {
   char* ptr = static_cast<char*>(buffer);
   auto host_ptrs = absl::make_unique<void*[]>(batch);
   for (int i = 0; i < batch; ++i) {
@@ -133,8 +161,8 @@ absl::StatusOr<std::unique_ptr<void* []>> MakeBatchPointers(
     ptr += batch_elem_size;
   }
   JAX_RETURN_IF_ERROR(JAX_AS_STATUS(
-      cudaMemcpyAsync(dev_ptrs, host_ptrs.get(), sizeof(void*) * batch,
-                      cudaMemcpyHostToDevice, stream)));
+      hipMemcpyAsync(dev_ptrs, host_ptrs.get(), sizeof(void*) * batch,
+                     hipMemcpyHostToDevice, stream)));
   return std::move(host_ptrs);
 }
 }  // namespace jax
