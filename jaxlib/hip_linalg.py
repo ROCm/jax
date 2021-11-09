@@ -20,9 +20,9 @@ import numpy as np
 from jaxlib import xla_client
 
 try:
-  from . import _cuda_linalg
-  for _name, _value in _cuda_linalg.registrations().items():
-    xla_client.register_custom_call_target(_name, _value, platform="CUDA")
+  from . import _hip_linalg
+  for _name, _value in _hip_linalg.registrations().items():
+    xla_client.register_custom_call_target(_name, _value, platform="ROCM")
 except ImportError:
   pass
 
@@ -40,7 +40,7 @@ def lu_pivots_to_permutation(c, pivots, *, permutation_size):
   batch_size = _prod(dims[:-1])
   pivot_size = dims[-1]
 
-  opaque = _cuda_linalg.cuda_lu_pivots_to_permutation_descriptor(
+  opaque = _hip_linalg.hip_lu_pivots_to_permutation_descriptor(
       batch_size, pivot_size, permutation_size)
   pivots_layout = tuple(range(len(dims) - 1, -1, -1))
   pivots_shape_with_layout = xla_client.Shape.array_shape(
@@ -54,7 +54,7 @@ def lu_pivots_to_permutation(c, pivots, *, permutation_size):
 
   return xla_client.ops.CustomCallWithLayout(
       c,
-      b"cuda_lu_pivots_to_permutation",
+      b"hip_lu_pivots_to_permutation",
       operands=(pivots,),
       shape_with_layout=permutations_shape_with_layout,
       operand_shapes_with_layout=(pivots_shape_with_layout,),
