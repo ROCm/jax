@@ -13,13 +13,13 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#ifndef JAXLIB_CUDA_LU_PIVOT_KERNELS_H_
-#define JAXLIB_CUDA_LU_PIVOT_KERNELS_H_
+#ifndef JAXLIB_HIP_LU_PIVOT_KERNELS_H_
+#define JAXLIB_HIP_LU_PIVOT_KERNELS_H_
 
 #include <cstddef>
 #include <string>
 
-#include "third_party/gpus/cuda/include/cuda_runtime_api.h"
+#include "rocm/include/hip/hip_runtime_api.h"
 #include "tensorflow/compiler/xla/service/custom_call_status.h"
 
 namespace jax {
@@ -31,13 +31,13 @@ struct LuPivotsToPermutationDescriptor {
 };
 
 void LaunchLuPivotsToPermutationKernel(
-    cudaStream_t stream, void** buffers,
+    hipStream_t stream, void** buffers,
     LuPivotsToPermutationDescriptor descriptor);
 
-void CudaLuPivotsToPermutation(cudaStream_t stream, void** buffers,
-                               const char* opaque, size_t opaque_len,
-                               XlaCustomCallStatus* status);
+void HipLuPivotsToPermutation(hipStream_t stream, void** buffers,
+                              const char* opaque, size_t opaque_len,
+                              XlaCustomCallStatus* status);
 
 }  // namespace jax
 
-#endif  // JAXLIB_CUDA_LU_PIVOT_KERNELS_H_
+#endif  // JAXLIB_HIP_LU_PIVOT_KERNELS_H_
