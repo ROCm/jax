@@ -1,4 +1,4 @@
-/* Copyright 2019 Google LLC
+/* Copyright 2021 Google LLC
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -13,26 +13,26 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#ifndef JAXLIB_CUSOLVER_KERNELS_H_
-#define JAXLIB_CUSOLVER_KERNELS_H_
+#ifndef JAXLIB_HIPSOLVER_KERNELS_H_
+#define JAXLIB_HIPSOLVER_KERNELS_H_
 
 #include "absl/status/statusor.h"
-#include "third_party/gpus/cuda/include/cuda.h"
-#include "third_party/gpus/cuda/include/cuda_runtime_api.h"
-#include "third_party/gpus/cuda/include/cusolverDn.h"
+#include "rocm/include/hip/hip_runtime_api.h"
+#include "rocm/include/hipsolver.h"
+#include "rocm/include/hipblas.h"
 #include "jaxlib/handle_pool.h"
 #include "tensorflow/compiler/xla/service/custom_call_status.h"
 
 namespace jax {
 
-using SolverHandlePool = HandlePool<cusolverDnHandle_t, cudaStream_t>;
+using SolverHandlePool = HandlePool<hipsolverHandle_t, hipStream_t>;
 
 template <>
 absl::StatusOr<SolverHandlePool::Handle> SolverHandlePool::Borrow(
-    cudaStream_t stream);
+    hipStream_t stream);
 
-// Set of types known to Cusolver.
-enum class CusolverType {
+// Set of types known to Hipsolver.
+enum class HipsolverType {
   F32,
   F64,
   C64,
@@ -42,94 +42,68 @@ enum class CusolverType {
 // potrf: Cholesky decomposition
 
 struct PotrfDescriptor {
-  CusolverType type;
-  cublasFillMode_t uplo;
+  HipsolverType type;
+  hipblasFillMode_t uplo;
   std::int64_t batch, n;
   int lwork;
 };
 
-void Potrf(cudaStream_t stream, void** buffers, const char* opaque,
+void Potrf(hipStream_t stream, void** buffers, const char* opaque,
            size_t opaque_len, XlaCustomCallStatus* status);
 // getrf: LU decomposition
 
 struct GetrfDescriptor {
-  CusolverType type;
+  HipsolverType type;
   int batch, m, n;
 };
 
-void Getrf(cudaStream_t stream, void** buffers, const char* opaque,
+void Getrf(hipStream_t stream, void** buffers, const char* opaque,
            size_t opaque_len, XlaCustomCallStatus* status);
 
 // geqrf: QR decomposition
 
 struct GeqrfDescriptor {
-  CusolverType type;
+  HipsolverType type;
   int batch, m, n, lwork;
 };
 
-void Geqrf(cudaStream_t stream, void** buffers, const char* opaque,
+void Geqrf(hipStream_t stream, void** buffers, const char* opaque,
            size_t opaque_len, XlaCustomCallStatus* status);
 
 // orgqr/ungqr: apply elementary Householder transformations
 
 struct OrgqrDescriptor {
-  CusolverType type;
+  HipsolverType type;
   int batch, m, n, k, lwork;
 };
 
-void Orgqr(cudaStream_t stream, void** buffers, const char* opaque,
+void Orgqr(hipStream_t stream, void** buffers, const char* opaque,
            size_t opaque_len, XlaCustomCallStatus* status);
 
 // Symmetric (Hermitian) eigendecomposition, QR algorithm: syevd/heevd
 
 struct SyevdDescriptor {
-  CusolverType type;
-  cublasFillMode_t uplo;
+  HipsolverType type;
+  hipblasFillMode_t uplo;
   int batch, n;
   int lwork;
 };
 
-void Syevd(cudaStream_t stream, void** buffers, const char* opaque,
-           size_t opaque_len, XlaCustomCallStatus* status);
-
-// Symmetric (Hermitian) eigendecomposition, Jacobi algorithm: syevj/heevj
-// Supports batches of matrices up to size 32.
-
-struct SyevjDescriptor {
-  CusolverType type;
-  cublasFillMode_t uplo;
-  int batch, n;
-  int lwork;
-};
-
-void Syevj(cudaStream_t stream, void** buffers, const char* opaque,
+void Syevd(hipStream_t stream, void** buffers, const char* opaque,
            size_t opaque_len, XlaCustomCallStatus* status);
 
 // Singular value decomposition using QR algorithm: gesvd
 
 struct GesvdDescriptor {
-  CusolverType type;
+  HipsolverType type;
   int batch, m, n;
   int lwork;
   signed char jobu, jobvt;
 };
 
-void Gesvd(cudaStream_t stream, void** buffers, const char* opaque,
+void Gesvd(hipStream_t stream, void** buffers, const char* opaque,
            size_t opaque_len, XlaCustomCallStatus* status);
-
-// Singular value decomposition using Jacobi algorithm: gesvdj
-
-struct GesvdjDescriptor {
-  CusolverType type;
-  int batch, m, n;
-  int lwork;
-  cusolverEigMode_t jobz;
-};
-
-void Gesvdj(cudaStream_t stream, void** buffers, const char* opaque,
-            size_t opaque_len, XlaCustomCallStatus* status);
 
 }  // namespace jax
 
-#endif  // JAXLIB_CUSOLVER_KERNELS_H_
-
+#endif  // JAXLIB_HIPSOLVER_KERNELS_H_
