@@ -17,10 +17,10 @@ limitations under the License.
 #define JAXLIB_HIPSOLVER_KERNELS_H_
 
 #include "absl/status/statusor.h"
-#include "rocm/include/hip/hip_runtime_api.h"
-#include "rocm/include/hipsolver.h"
-#include "rocm/include/hipblas.h"
 #include "jaxlib/handle_pool.h"
+#include "rocm/include/hip/hip_runtime_api.h"
+#include "rocm/include/hipblas.h"
+#include "rocm/include/hipsolver.h"
 #include "tensorflow/compiler/xla/service/custom_call_status.h"
 
 namespace jax {
@@ -28,8 +28,8 @@ namespace jax {
 using SolverHandlePool = HandlePool<hipsolverHandle_t, hipStream_t>;
 
 template <>
-absl::StatusOr<SolverHandlePool::Handle> SolverHandlePool::Borrow(
-    hipStream_t stream);
+absl::StatusOr<SolverHandlePool::Handle>
+SolverHandlePool::Borrow(hipStream_t stream);
 
 // Set of types known to Hipsolver.
 enum class HipsolverType {
