@@ -1,4 +1,4 @@
-# Copyright 2019 Google LLC
+# Copyright 2021 Google LLC
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 """
-cusparse wrappers for performing sparse matrix computations in JAX
+hipsparse wrappers for performing sparse matrix computations in JAX on ROCM
 """
 
 import numpy as np
@@ -20,15 +20,15 @@ import numpy as np
 from jax._src.lib import xla_client
 
 try:
-  from . import _cusparse
+  from . import _hipsparse
 except ImportError:
-  _cusparse = None
+  _hipsparse = None
 else:
-  for _name, _value in _cusparse.registrations().items():
-    xla_client.register_custom_call_target(_name, _value, platform="CUDA")
+  for _name, _value in _hipsparse.registrations().items():
+    xla_client.register_custom_call_target(_name, _value, platform="ROCM")
 
 
-is_supported : bool = _cusparse and _cusparse.cusparse_supported
+is_supported : bool = _hipsparse and _hipsparse.hipsparse_supported
 
 
 _ops = xla_client.ops
@@ -41,12 +41,12 @@ def csr_todense(c, data, indices, indptr, *, shape):
   rows, cols = shape
   nnz = c.get_shape(data).dimensions()[0]
 
-  buffer_size, opaque = _cusparse.build_csr_todense_descriptor(
+  buffer_size, opaque = _hipsparse.build_csr_todense_descriptor(
       data_dtype, index_dtype, rows, cols, nnz)
 
   out = xla_client.ops.CustomCallWithLayout(
       c,
-      b"cusparse_csr_todense",
+      b"hipsparse_csr_todense",
       operands=(data, indices, indptr),
       operand_shapes_with_layout=(
           # All are 1D, so no layout necessary
@@ -71,12 +71,12 @@ def csr_fromdense(c, mat, *, nnz, index_dtype):
   shape = c.get_shape(mat).dimensions()
   rows, cols = shape
 
-  buffer_size, opaque = _cusparse.build_csr_fromdense_descriptor(
+  buffer_size, opaque = _hipsparse.build_csr_fromdense_descriptor(
       data_dtype, index_dtype, rows, cols, nnz)
 
   out = xla_client.ops.CustomCallWithLayout(
       c,
-      b"cusparse_csr_fromdense",
+      b"hipsparse_csr_fromdense",
       operands=(mat,),
       operand_shapes_with_layout=(
           _Shape.array_shape(data_dtype, shape, (1, 0)),
@@ -106,14 +106,14 @@ def csr_matvec(c, data, indices, indptr, x, *, shape, transpose=False, compute_d
   if compute_dtype is None:
     compute_dtype = dtype
 
-  buffer_size, opaque = _cusparse.build_csr_matvec_descriptor(
+  buffer_size, opaque = _hipsparse.build_csr_matvec_descriptor(
       dtype, x_dtype, compute_dtype, index_dtype,
       rows, cols, nnz, transpose)
   out_size = cols if transpose else rows
 
   out = xla_client.ops.CustomCallWithLayout(
       c,
-      b"cusparse_csr_matvec",
+      b"hipsparse_csr_matvec",
       operands=(data, indices, indptr, x),
       operand_shapes_with_layout=(
           # All are 1D, so no layout necessary
@@ -145,14 +145,14 @@ def csr_matmat(c, data, indices, indptr, B, *, shape, transpose=False, compute_d
   if compute_dtype is None:
     compute_dtype = dtype
 
-  buffer_size, opaque = _cusparse.build_csr_matmat_descriptor(
+  buffer_size, opaque = _hipsparse.build_csr_matmat_descriptor(
       dtype, B_dtype, compute_dtype, index_dtype,
       rows, cols, Ccols, nnz, transpose)
   out_size = cols if transpose else rows
 
   out = xla_client.ops.CustomCallWithLayout(
       c,
-      b"cusparse_csr_matmat",
+      b"hipsparse_csr_matmat",
       operands=(data, indices, indptr, B),
       operand_shapes_with_layout=(
           c.get_shape(data),
@@ -177,12 +177,12 @@ def coo_todense(c, data, row, col, *, shape):
   rows, cols = shape
   nnz = c.get_shape(data).dimensions()[0]
 
-  buffer_size, opaque = _cusparse.build_coo_todense_descriptor(
+  buffer_size, opaque = _hipsparse.build_coo_todense_descriptor(
       data_dtype, index_dtype, rows, cols, nnz)
 
   out = xla_client.ops.CustomCallWithLayout(
       c,
-      b"cusparse_coo_todense",
+      b"hipsparse_coo_todense",
       operands=(data, row, col),
       operand_shapes_with_layout=(
           # All are 1D, so no layout necessary
@@ -207,12 +207,12 @@ def coo_fromdense(c, mat, *, nnz, index_dtype):
   shape = c.get_shape(mat).dimensions()
   rows, cols = shape
 
-  buffer_size, opaque = _cusparse.build_coo_fromdense_descriptor(
+  buffer_size, opaque = _hipsparse.build_coo_fromdense_descriptor(
       data_dtype, index_dtype, rows, cols, nnz)
 
   out = xla_client.ops.CustomCallWithLayout(
       c,
-      b"cusparse_coo_fromdense",
+      b"hipsparse_coo_fromdense",
       operands=(mat,),
       operand_shapes_with_layout=(
           _Shape.array_shape(data_dtype, shape, (1, 0)),
@@ -241,14 +241,14 @@ def coo_matvec(c, data, row, col, x, *, shape, transpose=False, compute_dtype=No
   if compute_dtype is None:
     compute_dtype = dtype
 
-  buffer_size, opaque = _cusparse.build_coo_matvec_descriptor(
+  buffer_size, opaque = _hipsparse.build_coo_matvec_descriptor(
       dtype, x_dtype, compute_dtype, index_dtype,
       rows, cols, nnz, transpose)
   out_size = cols if transpose else rows
 
   out = xla_client.ops.CustomCallWithLayout(
       c,
-      b"cusparse_coo_matvec",
+      b"hipsparse_coo_matvec",
       operands=(data, row, col, x),
       operand_shapes_with_layout=(
           # All are 1D, so no layout necessary
@@ -280,14 +280,14 @@ def coo_matmat(c, data, row, col, B, *, shape, transpose=False, compute_dtype=No
   if compute_dtype is None:
     compute_dtype = dtype
 
-  buffer_size, opaque = _cusparse.build_coo_matmat_descriptor(
+  buffer_size, opaque = _hipsparse.build_coo_matmat_descriptor(
       dtype, B_dtype, compute_dtype, index_dtype,
       rows, cols, Ccols, nnz, transpose)
   out_size = cols if transpose else rows
 
   out = xla_client.ops.CustomCallWithLayout(
       c,
-      b"cusparse_coo_matmat",
+      b"hipsparse_coo_matmat",
       operands=(data, row, col, B),
       operand_shapes_with_layout=(
           c.get_shape(data),
@@ -306,22 +306,22 @@ def coo_matmat(c, data, row, col, B, *, shape, transpose=False, compute_dtype=No
 
 
 def gtsv2(c, dl, d, du, B, *, m, n, ldb, t):
-  """Calls `cusparse<t>gtsv2(dl, d, du, B, m, n, ldb)`."""
+  """Calls `hipsparse<t>gtsv2(dl, d, du, B, m, n, ldb)`."""
   f32 = (t == np.float32)
   dl_shape, d_shape, du_shape, B_shape = map(c.get_shape, (dl, d, du, B))
   if f32:
-    buffer_size = _cusparse.gtsv2_f32_buffer_size(m, n, ldb)
+    buffer_size = _hipsparse.gtsv2_f32_buffer_size(m, n, ldb)
   else:
-    buffer_size = _cusparse.gtsv2_f64_buffer_size(m, n, ldb)
+    buffer_size = _hipsparse.gtsv2_f64_buffer_size(m, n, ldb)
   out = xla_client.ops.CustomCallWithLayout(
       c,
-      b"cusparse_gtsv2_" + (b"f32" if f32 else b"f64"),
+      b"hipsparse_gtsv2_" + (b"f32" if f32 else b"f64"),
       operands=(dl, d, du, B),
       operand_shapes_with_layout=(dl_shape, d_shape, du_shape, B_shape),
       shape_with_layout=_Shape.tuple_shape(
           (_Shape.array_shape(np.dtype(t), (ldb, n), (1, 0)),
            _Shape.array_shape(np.dtype(np.uint8), (buffer_size,), (0,)))),
-      opaque=_cusparse.build_gtsv2_descriptor(m, n, ldb),
+      opaque=_hipsparse.build_gtsv2_descriptor(m, n, ldb),
       has_side_effect=False,
       api_version=xla_client.ops.CustomCallApiVersion
       .API_VERSION_STATUS_RETURNING)
