@@ -43,7 +43,7 @@ enum class HipsolverType {
 
 struct PotrfDescriptor {
   HipsolverType type;
-  hipblasFillMode_t uplo;
+  hipsolverFillMode_t uplo;
   std::int64_t batch, n;
   int lwork;
 };
@@ -54,7 +54,7 @@ void Potrf(hipStream_t stream, void** buffers, const char* opaque,
 
 struct GetrfDescriptor {
   HipsolverType type;
-  int batch, m, n;
+  int batch, m, n, lwork;
 };
 
 void Getrf(hipStream_t stream, void** buffers, const char* opaque,
@@ -84,7 +84,7 @@ void Orgqr(hipStream_t stream, void** buffers, const char* opaque,
 
 struct SyevdDescriptor {
   HipsolverType type;
-  hipblasFillMode_t uplo;
+  hipsolverFillMode_t uplo;
   int batch, n;
   int lwork;
 };

@@ -31,6 +31,9 @@ limitations under the License.
 #include "tensorflow/compiler/xla/service/custom_call_status.h"
 
 namespace jax {
+//typedef hipblasComplex hipComplex;
+//typedef hipblasDoubleComplex hipDoubleComplex;
+
 using BlasHandlePool = HandlePool<hipblasHandle_t, hipStream_t>;
 
 template <>
@@ -106,7 +109,7 @@ static absl::Status TrsmBatched_(hipStream_t stream, void** buffers,
       const float alpha = 1.0f;
       JAX_RETURN_IF_ERROR(JAX_AS_STATUS(hipblasStrsmBatched(
           handle.get(), d.side, d.uplo, d.trans, d.diag, d.m, d.n, &alpha,
-          const_cast<const float**>(a_batch_ptrs), lda, b_batch_ptrs, ldb,
+          const_cast<float**>(a_batch_ptrs), lda, b_batch_ptrs, ldb,
           d.batch)));
       break;
     }
@@ -116,29 +119,29 @@ static absl::Status TrsmBatched_(hipStream_t stream, void** buffers,
       const double alpha = 1.0;
       JAX_RETURN_IF_ERROR(JAX_AS_STATUS(hipblasDtrsmBatched(
           handle.get(), d.side, d.uplo, d.trans, d.diag, d.m, d.n, &alpha,
-          const_cast<const double**>(a_batch_ptrs), lda, b_batch_ptrs, ldb,
+          const_cast<double**>(a_batch_ptrs), lda, b_batch_ptrs, ldb,
           d.batch)));
       break;
     }
     case HipblasType::C64: {
-      hipComplex** a_batch_ptrs = static_cast<hipComplex**>(buffers[3]);
-      hipComplex** b_batch_ptrs = static_cast<hipComplex**>(buffers[4]);
-      const hipComplex alpha = make_hipComplex(1.0f, 0.0f);
+      hipblasComplex** a_batch_ptrs = static_cast<hipblasComplex**>(buffers[3]);
+      hipblasComplex** b_batch_ptrs = static_cast<hipblasComplex**>(buffers[4]);
+      const hipblasComplex alpha = hipblasComplex(1.0f, 0.0f);
       JAX_RETURN_IF_ERROR(JAX_AS_STATUS(hipblasCtrsmBatched(
           handle.get(), d.side, d.uplo, d.trans, d.diag, d.m, d.n, &alpha,
-          const_cast<const hipComplex**>(a_batch_ptrs), lda, b_batch_ptrs, ldb,
+          const_cast<hipblasComplex**>(a_batch_ptrs), lda, b_batch_ptrs, ldb,
           d.batch)));
       break;
     }
     case HipblasType::C128: {
-      hipDoubleComplex** a_batch_ptrs =
-          static_cast<hipDoubleComplex**>(buffers[3]);
-      hipDoubleComplex** b_batch_ptrs =
-          static_cast<hipDoubleComplex**>(buffers[4]);
-      const hipDoubleComplex alpha = make_hipDoubleComplex(1.0f, 0.0f);
+      hipblasDoubleComplex** a_batch_ptrs =
+          static_cast<hipblasDoubleComplex**>(buffers[3]);
+      hipblasDoubleComplex** b_batch_ptrs =
+          static_cast<hipblasDoubleComplex**>(buffers[4]);
+      const hipblasDoubleComplex alpha = hipblasDoubleComplex(1.0f, 0.0f);
       JAX_RETURN_IF_ERROR(JAX_AS_STATUS(hipblasZtrsmBatched(
           handle.get(), d.side, d.uplo, d.trans, d.diag, d.m, d.n, &alpha,
-          const_cast<const hipDoubleComplex**>(a_batch_ptrs), lda, b_batch_ptrs,
+          const_cast<hipblasDoubleComplex**>(a_batch_ptrs), lda, b_batch_ptrs,
           ldb, d.batch)));
       break;
     }
@@ -194,14 +197,14 @@ static absl::Status GetrfBatched_(hipStream_t stream, void** buffers,
       break;
     }
     case HipblasType::C64: {
-      hipComplex** batch_ptrs = static_cast<hipComplex**>(buffers[4]);
+      hipblasComplex** batch_ptrs = static_cast<hipblasComplex**>(buffers[4]);
       JAX_RETURN_IF_ERROR(JAX_AS_STATUS(hipblasCgetrfBatched(
           handle.get(), d.n, batch_ptrs, d.n, ipiv, info, d.batch)));
       break;
     }
     case HipblasType::C128: {
-      hipDoubleComplex** batch_ptrs =
-          static_cast<hipDoubleComplex**>(buffers[4]);
+      hipblasDoubleComplex** batch_ptrs =
+          static_cast<hipblasDoubleComplex**>(buffers[4]);
       JAX_RETURN_IF_ERROR(JAX_AS_STATUS(hipblasZgetrfBatched(
           handle.get(), d.n, batch_ptrs, d.n, ipiv, info, d.batch)));
       break;

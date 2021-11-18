@@ -21,7 +21,7 @@ import warnings
 from typing import Optional
 
 __all__ = [
-  'cuda_linalg', 'cuda_prng', 'cusolver', 'rocsolver', 'jaxlib', 'lapack',
+  'cuda_linalg', 'cuda_prng', 'cusolver', 'hip_linalg','hip_prng', 'hipsolver','jaxlib', 'lapack',
   'pocketfft', 'pytree', 'tpu_driver_client', 'version', 'xla_client',
   'xla_extension',
 ]
@@ -86,14 +86,24 @@ except ImportError:
   cusolver = None
 
 try:
+  import jaxlib.hipsolver as hipsolver  # pytype: disable=import-error
+except ImportError:
+  hipsolver = None
+
+try:
   import jaxlib.cusparse as cusparse  # pytype: disable=import-error
 except ImportError:
   cusparse = None
 
 try:
-  import jaxlib.rocsolver as rocsolver  # pytype: disable=import-error
+  import jaxlib.hipsparse as hipsparse  # pytype: disable=import-error
 except ImportError:
-  rocsolver = None
+  hipsparse = None
+
+# try:
+#   import jaxlib.rocsolver as rocsolver  # pytype: disable=import-error
+# except ImportError:
+#   rocsolver = None
 
 try:
   import jaxlib.cuda_prng as cuda_prng  # pytype: disable=import-error
@@ -101,9 +111,19 @@ except ImportError:
   cuda_prng = None
 
 try:
+  import jaxlib.hip_prng as hip_prng  # pytype: disable=import-error
+except ImportError:
+  hip_prng = None
+
+try:
   import jaxlib.cuda_linalg as cuda_linalg  # pytype: disable=import-error
 except ImportError:
   cuda_linalg = None
+
+try:
+  import jaxlib.hip_linalg as hip_linalg  # pytype: disable=import-error
+except ImportError:
+  hip_linalg = None
 
 # Jaxlib code is split between the Jax and the Tensorflow repositories.
 # Only for the internal usage of the JAX developers, we expose a version
@@ -122,6 +142,8 @@ try:
 except:
   tpu_driver_client = None  # type: ignore
 
+
+# TODO(reza): WTHIT?
 cuda_path: Optional[str]
 cuda_path = os.path.join(os.path.dirname(jaxlib.__file__), "cuda")
 if not os.path.isdir(cuda_path):

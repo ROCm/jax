@@ -26,7 +26,7 @@ absl::Status HipLuPivotsToPermutation_(hipStream_t stream, void** buffers,
                                        const char* opaque,
                                        std::size_t opaque_len) {
   auto s =
-      UnpackDescriptor<HipLuPivotsToPermutationDescriptor>(opaque, opaque_len);
+      UnpackDescriptor<LuPivotsToPermutationDescriptor>(opaque, opaque_len);
   JAX_RETURN_IF_ERROR(s.status());
   LaunchLuPivotsToPermutationKernel(stream, buffers, **s);
   JAX_RETURN_IF_ERROR(JAX_AS_STATUS(hipGetLastError()));

@@ -62,8 +62,8 @@ std::pair<int, py::bytes> BuildPotrfDescriptor(const py::dtype& dtype,
   auto& handle = *h;
   int lwork;
   std::int64_t workspace_size;
-  hipblasFillMode_t uplo =
-      lower ? HIPBLAS_FILL_MODE_LOWER : HIPBLAS_FILL_MODE_UPPER;
+  hipsolverFillMode_t uplo =
+      lower ? HIPSOLVER_FILL_MODE_LOWER : HIPSOLVER_FILL_MODE_UPPER;
   if (b == 1) {
     switch (type) {
       case HipsolverType::F32:
@@ -96,8 +96,39 @@ std::pair<int, py::bytes> BuildPotrfDescriptor(const py::dtype& dtype,
         break;
     }
   } else {
-    // We use the workspace buffer for our own scratch space.
-    workspace_size = sizeof(void*) * b;
+    // TODO(rocm): when cuda and hip had same API for batched potrf, remove this
+    // batched potrf has different API compared to CUDA. In hip we still need to create the workspace and additional space to copy the batch array pointers 
+    switch (type) {
+      case HipsolverType::F32:
+        JAX_THROW_IF_ERROR(
+            JAX_AS_STATUS(hipsolverSpotrfBatched_bufferSize(handle.get(), uplo, n,
+                                                     /*A=*/nullptr,
+                                                     /*lda=*/n, &lwork, b)));
+        workspace_size = (lwork * sizeof(float)) + (b * sizeof(float*));
+        break;
+      case HipsolverType::F64:
+        JAX_THROW_IF_ERROR(
+            JAX_AS_STATUS(hipsolverDpotrfBatched_bufferSize(handle.get(), uplo, n,
+                                                     /*A=*/nullptr,
+                                                     /*lda=*/n, &lwork, b)));
+        workspace_size = (lwork * sizeof(double)) + (b * sizeof(double*));
+        break;
+      case HipsolverType::C64:
+        JAX_THROW_IF_ERROR(
+            JAX_AS_STATUS(hipsolverCpotrfBatched_bufferSize(handle.get(), uplo, n,
+                                                     /*A=*/nullptr,
+                                                     /*lda=*/n, &lwork, b)));
+        workspace_size = (lwork * sizeof(hipComplex)) + (b * sizeof(hipComplex*));
+        break;
+      case HipsolverType::C128:
+        JAX_THROW_IF_ERROR(
+            JAX_AS_STATUS(hipsolverZpotrfBatched_bufferSize(handle.get(), uplo, n,
+                                                     /*A=*/nullptr,
+                                                     /*lda=*/n, &lwork, b)));
+        workspace_size = (lwork * sizeof(hipDoubleComplex)) + (b * sizeof(hipDoubleComplex*));
+        break;
+    }
+
   }
   return {workspace_size,
           PackDescriptor(PotrfDescriptor{type, uplo, b, n, lwork})};
@@ -139,7 +170,7 @@ std::pair<int, py::bytes> BuildGetrfDescriptor(const py::dtype& dtype, int b,
                                                    /*lda=*/m, &lwork)));
       break;
   }
-  return {lwork, PackDescriptor(GetrfDescriptor{type, b, m, n})};
+  return {lwork, PackDescriptor(GetrfDescriptor{type, b, m, n, lwork})};
 }
 
 // geqrf: QR decomposition
@@ -235,8 +266,8 @@ std::pair<int, py::bytes> BuildSyevdDescriptor(const py::dtype& dtype,
   auto& handle = *h;
   int lwork;
   hipsolverEigMode_t jobz = HIPSOLVER_EIG_MODE_VECTOR;
-  hipblasFillMode_t uplo =
-      lower ? HIPBLAS_FILL_MODE_LOWER : HIPBLAS_FILL_MODE_UPPER;
+  hipsolverFillMode_t uplo =
+      lower ? HIPSOLVER_FILL_MODE_LOWER : HIPSOLVER_FILL_MODE_UPPER;
   switch (type) {
     case HipsolverType::F32:
       JAX_THROW_IF_ERROR(JAX_AS_STATUS(
@@ -254,7 +285,7 @@ std::pair<int, py::bytes> BuildSyevdDescriptor(const py::dtype& dtype,
                                      /*lda=*/n, /*W=*/nullptr, &lwork)));
       break;
     case HipsolverType::C128:
-      JAX_THROW_IF_ERROR(JAX_AS_STATUS(hipsolverDnZheevd_bufferSize(
+      JAX_THROW_IF_ERROR(JAX_AS_STATUS(hipsolverZheevd_bufferSize(
           handle.get(), jobz, uplo, n, /*A=*/nullptr, /*lda=*/n, /*W=*/nullptr,
           &lwork)));
       break;
@@ -273,24 +304,6 @@ std::pair<int, py::bytes> BuildGesvdDescriptor(const py::dtype& dtype, int b,
   JAX_THROW_IF_ERROR(h.status());
   auto& handle = *h;
   int lwork;
-  switch (type) {
-    case HipsolverType::F32:
-      JAX_THROW_IF_ERROR(JAX_AS_STATUS(
-          hipsolverSgesvd_bufferSize(handle.get(), m, n, &lwork)));
-      break;
-    case HipsolverType::F64:
-      JAX_THROW_IF_ERROR(JAX_AS_STATUS(
-          hipsolverDgesvd_bufferSize(handle.get(), m, n, &lwork)));
-      break;
-    case HipsolverType::C64:
-      JAX_THROW_IF_ERROR(JAX_AS_STATUS(
-          hipsolverCgesvd_bufferSize(handle.get(), m, n, &lwork)));
-      break;
-    case HipsolverType::C128:
-      JAX_THROW_IF_ERROR(JAX_AS_STATUS(
-          hipsolverZgesvd_bufferSize(handle.get(), m, n, &lwork)));
-      break;
-  }
   signed char jobu, jobvt;
   if (compute_uv) {
     if (full_matrices) {
@@ -300,6 +313,24 @@ std::pair<int, py::bytes> BuildGesvdDescriptor(const py::dtype& dtype, int b,
     }
   } else {
     jobu = jobvt = 'N';
+  }
+  switch (type) {
+    case HipsolverType::F32:
+      JAX_THROW_IF_ERROR(JAX_AS_STATUS(
+          hipsolverSgesvd_bufferSize(handle.get(), jobu, jobvt, m, n, &lwork)));
+      break;
+    case HipsolverType::F64:
+      JAX_THROW_IF_ERROR(JAX_AS_STATUS(
+          hipsolverDgesvd_bufferSize(handle.get(), jobu, jobvt, m, n, &lwork)));
+      break;
+    case HipsolverType::C64:
+      JAX_THROW_IF_ERROR(JAX_AS_STATUS(
+          hipsolverCgesvd_bufferSize(handle.get(), jobu, jobvt, m, n, &lwork)));
+      break;
+    case HipsolverType::C128:
+      JAX_THROW_IF_ERROR(JAX_AS_STATUS(
+          hipsolverZgesvd_bufferSize(handle.get(), jobu, jobvt, m, n, &lwork)));
+      break;
   }
   return {lwork,
           PackDescriptor(GesvdDescriptor{type, b, m, n, lwork, jobu, jobvt})};

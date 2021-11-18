@@ -51,7 +51,7 @@ SparseHandlePool::Borrow(hipStream_t stream) {
   return Handle(pool, handle, stream);
 }
 
-HipConst HipdaZero(hipDataType type) {
+HipConst HipZero(hipDataType type) {
   HipConst c;
   std::memset(&c, 0, sizeof(c));
   return c;
@@ -184,7 +184,7 @@ static absl::Status CsrMatvec_(hipStream_t stream, void** buffers,
   // Note that, contrary to cusparse docs, alpha and beta must be host pointers
   // or else the operation will segfault.
   HipConst alpha = HipOne(d.y.type);
-  HipConst beta = HipdaZero(d.y.type);
+  HipConst beta = HipZero(d.y.type);
 
   hipsparseSpMatDescr_t mat_a = 0;
   hipsparseDnVecDescr_t vec_x = 0;
@@ -241,8 +241,8 @@ static absl::Status CsrMatmat_(hipStream_t stream, void** buffers,
   // are sufficient for basic matvec operations.
   // Note that, contrary to cusparse docs, alpha and beta must be host pointers
   // or else the operation will segfault.
-  HipConst alpha = HipdaOne(d.C.type);
-  HipConst beta = HipdaZero(d.C.type);
+  HipConst alpha = HipOne(d.C.type);
+  HipConst beta = HipZero(d.C.type);
 
   hipsparseSpMatDescr_t mat_a = 0;
   hipsparseDnMatDescr_t mat_b = 0;
@@ -250,7 +250,7 @@ static absl::Status CsrMatmat_(hipStream_t stream, void** buffers,
 
   JAX_RETURN_IF_ERROR(JAX_AS_STATUS(hipsparseCreateCsr(
       &mat_a, d.A.rows, d.A.cols, d.A.nnz, csr_row_offsets, csr_col_ind,
-      csr_values, d.A.index_type, d.A.index_type, CUSPARSE_INDEX_BASE_ZERO,
+      csr_values, d.A.index_type, d.A.index_type, HIPSPARSE_INDEX_BASE_ZERO,
       d.A.value_type)));
   JAX_RETURN_IF_ERROR(JAX_AS_STATUS(hipsparseCreateDnMat(
       &mat_b, d.B.rows, d.B.cols,
@@ -383,8 +383,8 @@ static absl::Status CooMatvec_(hipStream_t stream, void** buffers,
   // are sufficient for basic matvec operations.
   // Note that, contrary to cusparse docs, alpha and beta must be host pointers
   // or else the operation will segfault.
-  HipConst alpha = HipdaOne(d.y.type);
-  HipConst beta = HipdaZero(d.y.type);
+  HipConst alpha = HipOne(d.y.type);
+  HipConst beta = HipZero(d.y.type);
 
   hipsparseSpMatDescr_t mat_a = 0;
   hipsparseDnVecDescr_t vec_x = 0;

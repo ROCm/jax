@@ -121,31 +121,35 @@ static absl::Status Potrf_(hipStream_t stream, void** buffers,
     JAX_RETURN_IF_ERROR(buffer_ptrs_host.status());
     // Make sure that accesses to buffer_ptrs_host complete before we delete it.
     // TODO(phawkins): avoid synchronization here.
-    JAX_RETURN_IF_ERROR(JAX_AS_STATUS(hipdaStreamSynchronize(stream)));
+    JAX_RETURN_IF_ERROR(JAX_AS_STATUS(hipStreamSynchronize(stream)));
     switch (d.type) {
       case HipsolverType::F32: {
         JAX_RETURN_IF_ERROR(JAX_AS_STATUS(hipsolverSpotrfBatched(
             handle.get(), d.uplo, d.n, static_cast<float**>(workspace), d.n,
-
+            static_cast<float*>(workspace + (d.batch * sizeof(float*))), d.lwork,
             info, d.batch)));
         break;
       }
       case HipsolverType::F64: {
         JAX_RETURN_IF_ERROR(JAX_AS_STATUS(hipsolverDpotrfBatched(
             handle.get(), d.uplo, d.n, static_cast<double**>(workspace), d.n,
+            static_cast<double*>(workspace + (d.batch * sizeof(double*))), d.lwork,
             info, d.batch)));
         break;
       }
       case HipsolverType::C64: {
         JAX_RETURN_IF_ERROR(JAX_AS_STATUS(hipsolverCpotrfBatched(
-            handle.get(), d.uplo, d.n, static_cast<hipComplex**>(workspace),
-            d.n, info, d.batch)));
+            handle.get(), d.uplo, d.n, static_cast<hipComplex**>(workspace), d.n,
+            static_cast<hipComplex*>(workspace + (d.batch * sizeof(hipComplex*))),d.lwork,
+            info, d.batch)));
         break;
       }
       case HipsolverType::C128: {
+        hipDoubleComplex* a = static_cast<hipDoubleComplex*>(buffers[1]);
         JAX_RETURN_IF_ERROR(JAX_AS_STATUS(hipsolverZpotrfBatched(
-            handle.get(), d.uplo, d.n,
-            static_cast<hipDoubleComplex**>(workspace), d.n, info, d.batch)));
+            handle.get(), d.uplo, d.n, static_cast<hipDoubleComplex**>(workspace), d.n,
+            static_cast<hipDoubleComplex*>(workspace + (d.batch * sizeof(hipDoubleComplex*))), d.lwork,
+            info, d.batch)));
         break;
       }
     }
@@ -189,7 +193,7 @@ static absl::Status Getrf_(hipStream_t stream, void** buffers,
       for (int i = 0; i < d.batch; ++i) {
         JAX_RETURN_IF_ERROR(JAX_AS_STATUS(
             hipsolverSgetrf(handle.get(), d.m, d.n, a, d.m,
-                            static_cast<float*>(workspace), ipiv, info)));
+                            static_cast<float*>(workspace), d.lwork, ipiv, info)));
         a += d.m * d.n;
         ipiv += std::min(d.m, d.n);
         ++info;
@@ -201,7 +205,7 @@ static absl::Status Getrf_(hipStream_t stream, void** buffers,
       for (int i = 0; i < d.batch; ++i) {
         JAX_RETURN_IF_ERROR(JAX_AS_STATUS(
             hipsolverDgetrf(handle.get(), d.m, d.n, a, d.m,
-                            static_cast<double*>(workspace), ipiv, info)));
+                            static_cast<double*>(workspace), d.lwork, ipiv, info)));
         a += d.m * d.n;
         ipiv += std::min(d.m, d.n);
         ++info;
@@ -213,7 +217,7 @@ static absl::Status Getrf_(hipStream_t stream, void** buffers,
       for (int i = 0; i < d.batch; ++i) {
         JAX_RETURN_IF_ERROR(JAX_AS_STATUS(
             hipsolverCgetrf(handle.get(), d.m, d.n, a, d.m,
-                            static_cast<hipComplex*>(workspace), ipiv, info)));
+                            static_cast<hipComplex*>(workspace), d.lwork, ipiv, info)));
         a += d.m * d.n;
         ipiv += std::min(d.m, d.n);
         ++info;
@@ -225,7 +229,7 @@ static absl::Status Getrf_(hipStream_t stream, void** buffers,
       for (int i = 0; i < d.batch; ++i) {
         JAX_RETURN_IF_ERROR(JAX_AS_STATUS(hipsolverZgetrf(
             handle.get(), d.m, d.n, a, d.m,
-            static_cast<hipDoubleComplex*>(workspace), ipiv, info)));
+            static_cast<hipDoubleComplex*>(workspace), d.lwork, ipiv, info)));
         a += d.m * d.n;
         ipiv += std::min(d.m, d.n);
         ++info;
@@ -544,7 +548,7 @@ static absl::Status Gesvd_(hipStream_t stream, void** buffers,
       double* u = static_cast<double*>(buffers[3]);
       double* vt = static_cast<double*>(buffers[4]);
       for (int i = 0; i < d.batch; ++i) {
-        JAX_RETURN_IF_ERROR(JAX_AS_STATUS(hipsolverDnDgesvd(
+        JAX_RETURN_IF_ERROR(JAX_AS_STATUS(hipsolverDgesvd(
             handle.get(), d.jobu, d.jobvt, d.m, d.n, a, d.m, s, u, d.m, vt, d.n,
             static_cast<double*>(work), d.lwork,
             /*rwork=*/nullptr, info)));
@@ -579,7 +583,7 @@ static absl::Status Gesvd_(hipStream_t stream, void** buffers,
       hipDoubleComplex* u = static_cast<hipDoubleComplex*>(buffers[3]);
       hipDoubleComplex* vt = static_cast<hipDoubleComplex*>(buffers[4]);
       for (int i = 0; i < d.batch; ++i) {
-        JAX_RETURN_IF_ERROR(JAX_AS_STATUS(hipsolverDnZgesvd(
+        JAX_RETURN_IF_ERROR(JAX_AS_STATUS(hipsolverZgesvd(
             handle.get(), d.jobu, d.jobvt, d.m, d.n, a, d.m, s, u, d.m, vt, d.n,
             static_cast<hipDoubleComplex*>(work), d.lwork,
             /*rwork=*/nullptr, info)));
