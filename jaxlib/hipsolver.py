@@ -311,7 +311,8 @@ def gesvd(c, a, full_matrices=True, compute_uv=True):
   singular_vals_dtype = np.dtype(_real_type(dtype))
 
   # TODO(rocm): rocm does not support jacobian method.
-  if m < n or (m < 32 and n < 32):
+  # for cuda, jax uses jacobian method for small size matrixes
+  if m < n:
     lwork, opaque = _hipsolver.build_gesvd_descriptor(np.dtype(dtype), b, n, m,
                                                       compute_uv,
                                                       full_matrices)
