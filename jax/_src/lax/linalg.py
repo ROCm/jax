@@ -384,7 +384,7 @@ if hipsolver is not None:
   xla.register_translation(
     cholesky_p,
     partial(_cholesky_cpu_gpu_translation_rule, hipsolver.potrf),
-    platform='ROCM')
+    platform='gpu')
 
 # Asymmetric eigendecomposition
 
@@ -586,7 +586,7 @@ if cusolver is not None:
 if hipsolver is not None:
   xla.register_translation(
     eigh_p, partial(_eigh_cpu_gpu_translation_rule, hipsolver.syevd),
-    platform='ROCM')
+    platform='gpu')
 
 
 triangular_solve_dtype_rule = partial(
@@ -777,7 +777,7 @@ if hipsolver is not None:
   xla.register_translation(
       triangular_solve_p,
       partial(_triangular_solve_gpu_translation_rule, hipsolver.trsm),
-      platform='ROCM')
+      platform='gpu')
 
 # Support operation for LU decomposition: Transformation of the pivots returned
 # by LU decomposition into permutations.
@@ -880,7 +880,7 @@ if cuda_linalg:
 if hip_linalg:
   xla.register_translation(lu_pivots_to_permutation_p,
                            _lu_pivots_to_permutation_gpu,
-                           platform='ROCM')
+                           platform='gpu')
 # LU decomposition
 
 # Computes a pivoted LU decomposition such that
@@ -1079,7 +1079,7 @@ if cusolver is not None:
 if hipsolver is not None:
   xla.register_translation(
       lu_p, partial(_lu_cpu_gpu_translation_rule, hipsolver.getrf),
-      platform='ROCM')
+      platform='gpu')
 
 xla.register_translation(lu_p, _lu_tpu_translation_rule, platform='tpu')
 
@@ -1253,7 +1253,7 @@ if hipsolver is not None:
   xla.register_translation(
       qr_p,
       partial(_qr_cpu_gpu_translation_rule, hipsolver.geqrf, hipsolver.orgqr),
-      platform='ROCM')
+      platform='gpu')
 
 # Singular value decomposition
 
@@ -1425,7 +1425,7 @@ if cusolver is not None:
 if hipsolver is not None:
   xla.register_translation(
     svd_p, partial(_svd_cpu_gpu_translation_rule, hipsolver.gesvd),
-    platform='ROCM')
+    platform='gpu')
 
 def _tridiagonal_solve_gpu_translation_rule(ctx, avals_in, avals_out, dl, d, du,
                                             b, *, m, n, ldb, t):
@@ -1447,7 +1447,7 @@ if cusparse is not None and hasattr(cusparse, "gtsv2"):
 if hipsparse is not None and hasattr(hipsparse, "gtsv2"):
   xla.register_translation(tridiagonal_solve_p,
                            _tridiagonal_solve_gpu_translation_rule,
-                           platform='ROCM')
+                           platform='gpu')
 
 def _tridiagonal_solve_jax(dl, d, du, b, **kw):
   """Pure JAX implementation of `tridiagonal_solve`."""

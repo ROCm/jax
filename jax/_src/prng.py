@@ -405,7 +405,7 @@ if cuda_prng:
                            platform='gpu')
 if hip_prng:
   xla.register_translation(threefry2x32_p, _threefry2x32_gpu_translation_rule,
-                           platform='ROCM')
+                           platform='gpu')
 
 @partial(jit, inline=True)
 def threefry_2x32(keypair, count):
