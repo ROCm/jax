@@ -57,7 +57,7 @@ HipConst HipZero(hipDataType type) {
   return c;
 }
 
-HipConst hipOne(hipDataType type) {
+HipConst HipOne(hipDataType type) {
   HipConst c;
   std::memset(&c, 0, sizeof(c));
   // TODO(rocm): add more data type if new rocm support
