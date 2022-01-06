@@ -23,7 +23,7 @@ from jaxlib import xla_client
 try:
   from . import _hip_prng
   for _name, _value in _hip_prng.registrations().items():
-    xla_client.register_custom_call_target(_name, _value, platform="HIP")
+    xla_client.register_custom_call_target(_name, _value, platform="ROCM")
 except ImportError:
   pass
 

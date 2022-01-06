@@ -33,7 +33,7 @@ absl::Status HipThreeFry2x32_(hipStream_t stream, void** buffers,
 
 }  // namespace
 
-void CudaThreeFry2x32(hipStream_t stream, void** buffers, const char* opaque,
+void HipThreeFry2x32(hipStream_t stream, void** buffers, const char* opaque,
                       size_t opaque_len, XlaCustomCallStatus* status) {
   auto s = HipThreeFry2x32_(stream, buffers, opaque, opaque_len);
   if (!s.ok()) {
