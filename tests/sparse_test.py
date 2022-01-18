@@ -31,6 +31,7 @@ from jax.experimental import sparse
 from jax.experimental.sparse.bcoo import BCOOInfo
 from jax import lax
 from jax._src.lib import cusparse
+from jax._src.lib import hipsparse
 from jax._src.lib import xla_bridge
 from jax import jit
 from jax import tree_util
@@ -420,15 +421,21 @@ class cuSparseTest(jtu.JaxTestCase):
   @unittest.skipIf(jtu.device_under_test() != "gpu", "test requires GPU")
   def test_gpu_translation_rule(self):
     version = xla_bridge.get_backend().platform_version
-    cuda_version = None if version == "<unknown>" else int(version.split()[-1])
-    if cuda_version is None or cuda_version < 11000:
-      self.assertFalse(cusparse and cusparse.is_supported)
-      self.assertNotIn(sparse.csr_todense_p,
-                       xla._backend_specific_translations["gpu"])
+    if version.split()[0] != "rocm":
+      cuda_version = None if version == "<unknown>" else int(
+          version.split()[-1])
+      if cuda_version is None or cuda_version < 11000:
+        self.assertFalse(cusparse and cusparse.is_supported)
+        self.assertNotIn(sparse.csr_todense_p,
+                         xla._backend_specific_translations["gpu"])
+      else:
+        self.assertTrue(cusparse and cusparse.is_supported)
+        self.assertIn(sparse.csr_todense_p,
+                      xla._backend_specific_translations["gpu"])
     else:
-      self.assertTrue(cusparse and cusparse.is_supported)
+      self.assertTrue(hipsparse and hipsparse.is_supported)
       self.assertIn(sparse.csr_todense_p,
-                    xla._backend_specific_translations["gpu"])
+                    xla._backend_specific_translations["ROCM"])
 
   @parameterized.named_parameters(jtu.cases_from_list(
       {"testcase_name": "_{}_{}".format(
