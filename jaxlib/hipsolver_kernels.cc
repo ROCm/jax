@@ -268,6 +268,10 @@ static absl::Status Geqrf_(hipStream_t stream, void** buffers,
   }
 
   int* info = static_cast<int*>(buffers[3]);
+  // TODO(rocm): workaround for unset devinfo. See SWDEV-317485
+  JAX_RETURN_IF_ERROR(
+      JAX_AS_STATUS(hipMemsetAsync(info, 0, sizeof(int) * d.batch, stream)));
+
   void* workspace = buffers[4];
   switch (d.type) {
     case HipsolverType::F32: {
@@ -354,6 +358,10 @@ static absl::Status Orgqr_(hipStream_t stream, void** buffers,
   }
 
   int* info = static_cast<int*>(buffers[3]);
+  // TODO(rocm): workaround for unset devinfo. See SWDEV-317485
+  JAX_RETURN_IF_ERROR(
+      JAX_AS_STATUS(hipMemsetAsync(info, 0, sizeof(int) * d.batch, stream)));
+
   void* workspace = buffers[4];
   switch (d.type) {
     case HipsolverType::F32: {
