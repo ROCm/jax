@@ -113,7 +113,6 @@ class FftTest(jtu.JaxTestCase):
       for s in _get_fftn_test_s(shape, axes)
       for norm in FFT_NORMS
       ))
-  @jtu.skip_on_devices("rocm")
   def testFftn(self, inverse, real, shape, dtype, axes, s, norm):
     rng = jtu.rand_default(self.rng())
     args_maker = lambda: (rng(shape, dtype),)
@@ -132,7 +131,6 @@ class FftTest(jtu.JaxTestCase):
       tol = 0.15
       jtu.check_grads(jnp_fn, args_maker(), order=2, atol=tol, rtol=tol)
 
-  @jtu.skip_on_devices("rocm")
   def testIrfftTranspose(self):
     # regression test for https://github.com/google/jax/issues/6223
     def build_matrix(linear_func, size):
@@ -192,7 +190,6 @@ class FftTest(jtu.JaxTestCase):
       for shape in [(10,)]
       for n in [None, 1, 7, 13, 20]
       for axis in [-1, 0]))
-  @jtu.skip_on_devices("rocm")
   def testFft(self, inverse, real, hermitian, shape, dtype, n, axis):
     rng = jtu.rand_default(self.rng())
     args_maker = lambda: (rng(shape, dtype),)
