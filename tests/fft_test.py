@@ -254,7 +254,6 @@ class FftTest(jtu.JaxTestCase):
       for axes in [(-2, -1), (0, 1), (1, 3), (-1, 2)]
       for norm in FFT_NORMS
       ))
-  @jtu.skip_on_devices("rocm")
   def testFft2(self, inverse, real, shape, dtype, axes, norm):
     rng = jtu.rand_default(self.rng())
     args_maker = lambda: (rng(shape, dtype),)
