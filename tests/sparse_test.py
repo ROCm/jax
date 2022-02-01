@@ -435,7 +435,7 @@ class cuSparseTest(jtu.JaxTestCase):
     else:
       self.assertTrue(hipsparse and hipsparse.is_supported)
       self.assertIn(sparse.csr_todense_p,
-                    xla._backend_specific_translations["ROCM"])
+                    xla._backend_specific_translations["gpu"])
 
   @parameterized.named_parameters(jtu.cases_from_list(
       {"testcase_name": "_{}_{}".format(
