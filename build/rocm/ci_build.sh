@@ -14,6 +14,7 @@ set -eux
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/build_common.sh"
+CONTAINER_TYPE="rocm"
 
 DOCKERFILE_PATH="${SCRIPT_DIR}/Dockerfile.rocm"
 DOCKER_CONTEXT_PATH="${SCRIPT_DIR}"
@@ -74,7 +75,7 @@ fi
 # Run the command inside the container.
 echo "Running '${COMMAND[*]}' inside ${DOCKER_IMG_NAME}..."
 
-docker run --rm --name ${DOCKER_IMG_NAME} --pid=host \
+docker run --name ${DOCKER_IMG_NAME} --pid=host \
   -v ${WORKSPACE}:/workspace \
   -w /workspace \
   ${ROCM_EXTRA_PARAMS} \
