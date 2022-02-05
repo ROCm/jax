@@ -75,7 +75,7 @@ fi
 # Run the command inside the container.
 echo "Running '${COMMAND[*]}' inside ${DOCKER_IMG_NAME}..."
 
-docker run --name ${DOCKER_IMG_NAME} --pid=host \
+docker run --rm  --name ${DOCKER_IMG_NAME} --pid=host \
   -v ${WORKSPACE}:/workspace \
   -w /workspace \
   ${ROCM_EXTRA_PARAMS} \
