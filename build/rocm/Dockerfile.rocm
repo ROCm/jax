@@ -33,6 +33,7 @@ RUN apt-get update --allow-insecure-repositories && DEBIAN_FRONTEND=noninteracti
   virtualenv \
   python3-pip \
   wget && \
+  pciutils && \
   apt-get clean && \
   rm -rf /var/lib/apt/lists/*
 
@@ -86,5 +87,5 @@ RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.6 1 
 
 RUN pip3 install --upgrade setuptools pip
   
-RUN pip3 install numpy==1.19.5 scipy wheel six setuptools
+RUN pip3 install numpy==1.19.5 scipy wheel six setuptools pytest-rerunfailures
   
