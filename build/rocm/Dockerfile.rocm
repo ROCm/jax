@@ -32,8 +32,8 @@ RUN apt-get update --allow-insecure-repositories && DEBIAN_FRONTEND=noninteracti
   libnuma-dev \
   virtualenv \
   python3-pip \
+  pciutils \
   wget && \
-  pciutils && \
   apt-get clean && \
   rm -rf /var/lib/apt/lists/*
 
