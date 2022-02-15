@@ -95,6 +95,7 @@ class LaxBackedScipySignalTests(jtu.JaxTestCase):
       for axis in [0, -1]
       for type in ['constant', 'linear']
       for bp in [0, [0, 2]]))
+  @jtu.skip_on_devices("rocm")  # will be fixed in rocm-5.1
   def testDetrend(self, shape, dtype, axis, type, bp):
     rng = jtu.rand_default(self.rng())
     args_maker = lambda: [rng(shape, dtype)]
