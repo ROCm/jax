@@ -83,6 +83,14 @@ def partition_list(bs: Sequence[bool], l: Sequence[T]) -> Tuple[List[T], List[T]
     lists[b].append(x)
   return lists
 
+def merge_lists(bs: Sequence[bool], l0: Sequence[T], l1: Sequence[T]) -> List[T]:
+  assert sum(bs) == len(l1) and len(bs) - sum(bs) == len(l0)
+  i0, i1 = iter(l0), iter(l1)
+  out = [next(i1) if b else next(i0) for b in bs]
+  sentinel = object()
+  assert next(i0, sentinel) is next(i1, sentinel) is sentinel
+  return out
+
 def split_dict(dct, names):
   dct = dict(dct)
   lst = [dct.pop(name) for name in names]
@@ -269,7 +277,21 @@ def get_module_functions(module):
 def wrap_name(name, transform_name):
   return transform_name + '(' + name + ')'
 
-def extend_name_stack(stack, name=''):
+def new_name_stack(name: str = ''):
+  if config.jax_experimental_name_stack:
+    from jax._src import source_info_util
+    name_stack = source_info_util.NameStack()
+    if name:
+      name_stack = name_stack.extend(name)
+    return name_stack
+  return name + '/'
+
+def extend_name_stack(stack, name: str):
+  if config.jax_experimental_name_stack:
+    from jax._src import source_info_util
+    assert isinstance(stack, source_info_util.NameStack), stack
+    return stack.extend(name)
+  assert isinstance(stack, str)
   return stack + name + '/'
 
 def canonicalize_axis(axis, num_dims) -> int:

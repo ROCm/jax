@@ -26,15 +26,21 @@ jax.scipy.linalg
    cholesky
    det
    eigh
+   eigh_tridiagonal
    expm
    expm_frechet
    inv
    lu
    lu_factor
    lu_solve
+   polar
+   polar_unitary
    qr
+   schur
+   sqrtm
    solve
    solve_triangular
+   sqrtm
    svd
    tril
    triu
@@ -72,6 +78,9 @@ jax.scipy.signal
    convolve2d
    correlate
    correlate2d
+   csd
+   stft
+   welch
 
 jax.scipy.sparse.linalg
 -----------------------

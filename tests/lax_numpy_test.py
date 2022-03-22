@@ -38,14 +38,16 @@ import jax
 import jax.ops
 from jax import lax
 from jax import numpy as jnp
-from jax._src import test_util as jtu
-from jax._src import device_array
-from jax._src import dtypes
 from jax import tree_util
 from jax.test_util import check_grads
-from jax._src.util import prod, safe_zip
-from jax._src.numpy.util import _parse_numpydoc, ParsedDoc, _wraps
+
+from jax._src import device_array
+from jax._src import dtypes
+from jax._src import test_util as jtu
+from jax._src.lax import lax as lax_internal
 from jax._src.numpy.lax_numpy import _promote_dtypes, _promote_dtypes_inexact
+from jax._src.numpy.util import _parse_numpydoc, ParsedDoc, _wraps
+from jax._src.util import prod, safe_zip
 
 from jax.config import config
 config.parse_flags_with_absl()
@@ -492,13 +494,12 @@ def _dtypes_are_compatible_for_bitwise_ops(args):
       or (width(x) == 32 and width(y) == 64 and is_signed(y)))
 
 def _shapes_are_broadcast_compatible(shapes):
-  accumulator = np.zeros([])
-  for shape in shapes:
-    try:
-      accumulator = accumulator + np.zeros(shape)
-    except ValueError:
-      return False
-  return True
+  try:
+    lax.broadcast_shapes(*(() if s in scalar_shapes else s for s in shapes))
+  except ValueError:
+    return False
+  else:
+    return True
 
 def _shapes_are_equal_length(shapes):
   return all(len(shape) == len(shapes[0]) for shape in shapes[1:])
@@ -519,7 +520,6 @@ def _promote_like_jnp(fun, inexact=False):
   return wrapper
 
 
-@jtu.with_config(jax_numpy_rank_promotion="raise")
 class LaxBackedNumpyTests(jtu.JaxTestCase):
   """Tests for LAX-backed Numpy implementation."""
 
@@ -540,15 +540,19 @@ class LaxBackedNumpyTests(jtu.JaxTestCase):
         func()
 
   @parameterized.named_parameters(jtu.cases_from_list(
-      {"testcase_name": "_{}".format(dtype), "dtype": dtype}
-      for dtype in float_dtypes))
-  def testLoad(self, dtype):
+      {"testcase_name": "_{}_allow_picke={}".format(dtype, allow_pickle),
+       "dtype": dtype, "allow_pickle": allow_pickle}
+      for dtype in float_dtypes + [object]
+      for allow_pickle in [True, False]))
+  def testLoad(self, dtype, allow_pickle):
+    if dtype == object and not allow_pickle:
+      self.skipTest("dtype=object requires allow_pickle=True")
     rng = jtu.rand_default(self.rng())
     arr = rng((10), dtype)
     with io.BytesIO() as f:
       jnp.save(f, arr)
       f.seek(0)
-      arr_out = jnp.load(f)
+      arr_out = jnp.load(f, allow_pickle=allow_pickle)
     self.assertArraysEqual(arr, arr_out)
 
   @parameterized.named_parameters(itertools.chain.from_iterable(
@@ -1510,6 +1514,7 @@ class LaxBackedNumpyTests(jtu.JaxTestCase):
       for full in [False, True]
       for w in [False, True]
       for cov in [False, True, "unscaled"]))
+  @jtu.skip_on_devices("rocm")  # will be fixed in ROCm-5.1
   def testPolyfit(self, shape, dtype, deg, rcond, full, w, cov):
     rng = jtu.rand_default(self.rng())
     tol_spec = {np.float32: 1e-3, np.float64: 1e-13, np.complex64: 1e-5}
@@ -3281,7 +3286,8 @@ class LaxBackedNumpyTests(jtu.JaxTestCase):
     if numpy_version < (1, 19) and out_shape == ():
       raise SkipTest("Numpy < 1.19 treats out_shape=() like out_shape=None")
     rng = jtu.rand_default(self.rng())
-    x = lax._convert_element_type(rng(shape, in_dtype), weak_type=weak_type)
+    x = lax_internal._convert_element_type(rng(shape, in_dtype),
+                                           weak_type=weak_type)
     fun = lambda x: getattr(jnp, func)(x, *args, dtype=out_dtype, shape=out_shape)
     expected_weak_type = weak_type and (out_dtype is None)
     self.assertEqual(dtypes.is_weakly_typed(fun(x)), expected_weak_type)
@@ -3313,7 +3319,8 @@ class LaxBackedNumpyTests(jtu.JaxTestCase):
       for slc in [slice(None), slice(0), slice(3), 0, ...]))
   def testSliceWeakTypes(self, shape, dtype, weak_type, slc):
     rng = jtu.rand_default(self.rng())
-    x = lax._convert_element_type(rng(shape, dtype), weak_type=weak_type)
+    x = lax_internal._convert_element_type(rng(shape, dtype),
+                                           weak_type=weak_type)
     op = lambda x: x[slc]
     self.assertEqual(op(x).aval.weak_type, weak_type)
     self.assertEqual(jax.jit(op)(x).aval.weak_type, weak_type)
@@ -3594,6 +3601,24 @@ class LaxBackedNumpyTests(jtu.JaxTestCase):
     self._CompileAndCheck(jnp_fun, args_maker)
     self._CheckAgainstNumpy(np_fun, jnp_fun, args_maker)
 
+  def testExpandDimsRepeatedAxisError(self):
+    x = jnp.ones((2, 3))
+    self.assertRaisesRegex(
+        ValueError, 'repeated axis.*',
+        lambda: jnp.expand_dims(x, [1, 1]))
+    self.assertRaisesRegex(
+        ValueError, 'repeated axis.*',
+        lambda: jnp.expand_dims(x, [3, -1]))
+
+    # ensure this is numpy's behavior too, so that we remain consistent
+    x = np.ones((2, 3))
+    self.assertRaisesRegex(
+        ValueError, 'repeated axis.*',
+        lambda: np.expand_dims(x, [1, 1]))
+    self.assertRaisesRegex(
+        ValueError, 'repeated axis.*',
+        lambda: np.expand_dims(x, [3, -1]))
+
   @parameterized.named_parameters(jtu.cases_from_list(
       {"testcase_name": "_inshape={}_axes=({},{})".format(
           jtu.format_shape_dtype_string(arg_shape, dtype), ax1, ax2),
@@ -3741,15 +3766,18 @@ class LaxBackedNumpyTests(jtu.JaxTestCase):
     _check([0.0, np.float16(1)], np.float16, False)
 
   @parameterized.named_parameters(jtu.cases_from_list(
-      {"testcase_name": f"_dtype={np.dtype(dtype)}", "dtype": dtype}
-      for dtype in all_dtypes))
-  def testArrayCopy(self, dtype):
+      {"testcase_name": f"_dtype={np.dtype(dtype)}_func={func}",
+       "dtype": dtype, "func": func}
+      for dtype in all_dtypes
+      for func in ["array", "copy"]))
+  def testArrayCopy(self, dtype, func):
     x = jnp.ones(10, dtype=dtype)
+    copy_func = getattr(jnp, func)
 
     x_view = jnp.asarray(x)
     x_view_jit = jax.jit(jnp.asarray)(x)
-    x_copy = jnp.array(x)
-    x_copy_jit = jax.jit(jnp.array)(x)
+    x_copy = copy_func(x)
+    x_copy_jit = jax.jit(copy_func)(x)
 
     _ptr = lambda x: x.device_buffer.unsafe_buffer_pointer()
 
@@ -3852,6 +3880,12 @@ class LaxBackedNumpyTests(jtu.JaxTestCase):
     a = arraylike()
     ans = jnp.array(a)
     self.assertEqual(ans, 3.)
+
+  def testJaxArrayOps(self):
+    class arraylike:
+      def __jax_array__(self):
+        return jnp.array(3.)
+    self.assertArraysEqual(arraylike() * jnp.arange(10), jnp.array(3.) * jnp.arange(10))
 
   def testMemoryView(self):
     self.assertAllClose(
@@ -4165,6 +4199,20 @@ class LaxBackedNumpyTests(jtu.JaxTestCase):
     rng = jtu.rand_default(self.rng())
     np_op = lambda x: np.asarray(x).nbytes
     jnp_op = lambda x: jnp.asarray(x).nbytes
+    args_maker = lambda: [rng(shape, dtype)]
+    self._CheckAgainstNumpy(np_op, jnp_op, args_maker)
+    self._CompileAndCheck(jnp_op, args_maker)
+
+  @parameterized.named_parameters(jtu.cases_from_list(
+      {"testcase_name": "_{}".format(
+          jtu.format_shape_dtype_string(shape, dtype)),
+      "shape": shape, "dtype": dtype}
+      for shape in array_shapes
+      for dtype in all_dtypes))
+  def testItemsize(self, shape, dtype):
+    rng = jtu.rand_default(self.rng())
+    np_op = lambda x: np.asarray(x).itemsize
+    jnp_op = lambda x: jnp.asarray(x).itemsize
     args_maker = lambda: [rng(shape, dtype)]
     self._CheckAgainstNumpy(np_op, jnp_op, args_maker)
     self._CompileAndCheck(jnp_op, args_maker)
@@ -5915,7 +5963,7 @@ GRAD_SPECIAL_VALUE_TEST_RECORDS = [
     GradSpecialValuesTestSpec(jnp.sinc, [0.], 1),
 ]
 
-@jtu.with_config(jax_numpy_rank_promotion="raise")
+
 class NumpyGradTests(jtu.JaxTestCase):
 
   @parameterized.named_parameters(itertools.chain.from_iterable(
@@ -6020,7 +6068,7 @@ class NumpyGradTests(jtu.JaxTestCase):
       tol = 3e-2
     check_grads(jnp.logaddexp2, args, 1, ["fwd", "rev"], tol, tol)
 
-@jtu.with_config(jax_numpy_rank_promotion="raise")
+
 class NumpySignaturesTest(jtu.JaxTestCase):
 
   def testWrappedSignaturesMatch(self):
@@ -6035,6 +6083,7 @@ class NumpySignaturesTest(jtu.JaxTestCase):
       'asarray': ['like'],
       'broadcast_to': ['subok', 'array'],
       'clip': ['kwargs'],
+      'copy': ['subok'],
       'corrcoef': ['ddof', 'bias', 'dtype'],
       'cov': ['dtype'],
       'empty_like': ['subok', 'order'],
@@ -6136,7 +6185,6 @@ def _dtypes_for_ufunc(name: str) -> Iterator[Tuple[str, ...]]:
       yield arg_dtypes
 
 
-@jtu.with_config(jax_numpy_rank_promotion="raise")
 class NumpyUfuncTests(jtu.JaxTestCase):
 
   @parameterized.named_parameters(
@@ -6168,7 +6216,7 @@ class NumpyUfuncTests(jtu.JaxTestCase):
     # that jnp returns float32. e.g. np.cos(np.uint8(0))
     self._CheckAgainstNumpy(np_op, jnp_op, args_maker, check_dtypes=False, tol=1E-2)
 
-@jtu.with_config(jax_numpy_rank_promotion="raise")
+
 class NumpyDocTests(jtu.JaxTestCase):
 
   def test_lax_numpy_docstrings(self):

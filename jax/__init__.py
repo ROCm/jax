@@ -49,7 +49,11 @@ from jax._src.config import (
   default_matmul_precision as default_matmul_precision,
   default_prng_impl as default_prng_impl,
   numpy_rank_promotion as numpy_rank_promotion,
-  jax2tf_associative_scan_reductions as jax2tf_associative_scan_reductions
+  jax2tf_associative_scan_reductions as jax2tf_associative_scan_reductions,
+  transfer_guard as transfer_guard,
+  transfer_guard_host_to_device as transfer_guard_host_to_device,
+  transfer_guard_device_to_device as transfer_guard_device_to_device,
+  transfer_guard_device_to_host as transfer_guard_device_to_host,
 )
 from .core import eval_context as ensure_compile_time_eval
 from jax._src.api import (
@@ -58,7 +62,6 @@ from jax._src.api import (
   checkpoint as checkpoint,
   checkpoint_policies as checkpoint_policies,
   closure_convert as closure_convert,
-  Compiled as Compiled,
   curry,  # TODO(phawkins): update users to avoid this.
   custom_ivjp as custom_ivjp,
   custom_gradient as custom_gradient,
@@ -88,7 +91,6 @@ from jax._src.api import (
   jvp as jvp,
   local_device_count as local_device_count,
   local_devices as local_devices,
-  Lowered as Lowered,
   linearize as linearize,
   linear_transpose as linear_transpose,
   make_jaxpr as make_jaxpr,
@@ -135,6 +137,7 @@ from jax import numpy as numpy
 from jax import ops as ops
 from jax import profiler as profiler
 from jax import random as random
+from jax import stages as stages
 from jax import tree_util as tree_util
 from jax import util as util
 

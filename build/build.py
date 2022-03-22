@@ -375,13 +375,15 @@ def main():
       "--cudnn_version",
       default=None,
       help="CUDNN version, e.g., 8")
+  # Caution: if changing the default list of CUDA capabilities, you should also
+  # update the list in .bazelrc, which is used for wheel builds.
   parser.add_argument(
       "--cuda_compute_capabilities",
       default="3.5,5.2,6.0,7.0,8.0",
       help="A comma-separated list of CUDA compute capabilities to support.")
   parser.add_argument(
       "--rocm_amdgpu_targets",
-      default="gfx900,gfx906,gfx90",
+      default="gfx900,gfx906,gfx908,gfx90a,gfx1030",
       help="A comma-separated list of ROCm amdgpu targets to support.")
   parser.add_argument(
       "--rocm_path",
@@ -508,7 +510,8 @@ def main():
     config_args += ["--config=tpu"]
   if args.enable_rocm:
     config_args += ["--config=rocm"]
-    config_args += ["--config=nonccl"]
+    if not args.enable_nccl:
+      config_args += ["--config=nonccl"]
 
   command = ([bazel_path] + args.bazel_startup_options +
     ["run", "--verbose_failures=true"] + config_args +

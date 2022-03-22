@@ -56,7 +56,6 @@ PRNG_IMPLS = [('threefry2x32', prng.threefry_prng_impl),
               ('unsafe_rbg', prng.unsafe_rbg_prng_impl)]
 
 
-@jtu.with_config(jax_numpy_rank_promotion="raise")
 class PrngTest(jtu.JaxTestCase):
 
   def testThreefry2x32(self):
@@ -315,7 +314,6 @@ class PrngTest(jtu.JaxTestCase):
                            lambda: keys[0, 1, None, 2])
 
 
-@jtu.with_config(jax_numpy_rank_promotion="raise")
 class LaxRandomTest(jtu.JaxTestCase):
 
   def _CheckCollisions(self, samples, nbits):
@@ -650,6 +648,19 @@ class LaxRandomTest(jtu.JaxTestCase):
     for samples in [uncompiled_samples, compiled_samples]:
       self._CheckKolmogorovSmirnovCDF(samples, scipy.stats.beta(a, b).cdf)
 
+  def testBetaSmallParameters(self, dtype=np.float32):
+    # Regression test for beta version of https://github.com/google/jax/issues/9896
+    key = self.seed_prng(0)
+    a, b = 0.0001, 0.0002
+    samples = random.beta(key, a, b, shape=(100,), dtype=dtype)
+
+    # With such small parameters, all samples should be exactly zero or one.
+    zeros = samples[samples < 0.5]
+    self.assertAllClose(zeros, jnp.zeros_like(zeros))
+
+    ones = samples[samples >= 0.5]
+    self.assertAllClose(ones, jnp.ones_like(ones))
+
   @parameterized.named_parameters(jtu.cases_from_list(
       {"testcase_name": "_dtype={}".format(np.dtype(dtype).name), "dtype": dtype}
       for dtype in float_dtypes))
@@ -686,6 +697,21 @@ class LaxRandomTest(jtu.JaxTestCase):
       for i, a in enumerate(alpha):
         self._CheckKolmogorovSmirnovCDF(samples[..., i], scipy.stats.beta(a, alpha_sum - a).cdf)
 
+  def testDirichletSmallAlpha(self, dtype=np.float32):
+    # Regression test for https://github.com/google/jax/issues/9896
+    key = self.seed_prng(0)
+    alpha = 0.0001 * jnp.ones(3)
+    samples = random.dirichlet(key, alpha, shape=(100,), dtype=dtype)
+
+    # Check that results lie on the simplex.
+    self.assertAllClose(samples.sum(1), jnp.ones(samples.shape[0]),
+                        check_dtypes=False, rtol=1E-5)
+
+    # Check that results contain 1 in one of the dimensions:
+    # this is highly likely to be true when alpha is small.
+    self.assertAllClose(samples.max(1), jnp.ones(samples.shape[0]),
+                        check_dtypes=False, rtol=1E-5)
+
   @parameterized.named_parameters(jtu.cases_from_list(
       {"testcase_name": "_dtype={}".format(np.dtype(dtype).name), "dtype": dtype}
       for dtype in float_dtypes))
@@ -701,12 +727,30 @@ class LaxRandomTest(jtu.JaxTestCase):
       self._CheckKolmogorovSmirnovCDF(samples, scipy.stats.expon().cdf)
 
   @parameterized.named_parameters(jtu.cases_from_list(
-      {"testcase_name": "_a={}_dtype={}".format(a, np.dtype(dtype).name),
-       "a": a, "dtype": dtype}
+      {"testcase_name": "_a={}_dtype={}_prng={}".format(a, np.dtype(dtype).name,
+                                                        prng_name),
+       "a": a, "dtype": dtype, "prng_impl": prng_impl}
+      for prng_name, prng_impl in PRNG_IMPLS
       for a in [0.1, 1., 10.]
       for dtype in jtu.dtypes.floating))
-  def testGamma(self, a, dtype):
-    key = self.seed_prng(0)
+  def testGammaVsLogGamma(self, prng_impl, a, dtype):
+    key = prng.seed_with_impl(prng_impl, 0)
+    rand_gamma = lambda key, a: random.gamma(key, a, (10000,), dtype)
+    rand_loggamma = lambda key, a: random.loggamma(key, a, (10000,), dtype)
+    crand_loggamma = jax.jit(rand_loggamma)
+
+    self.assertAllClose(rand_gamma(key, a), jnp.exp(rand_loggamma(key, a)))
+    self.assertAllClose(rand_gamma(key, a), jnp.exp(crand_loggamma(key, a)))
+
+  @parameterized.named_parameters(jtu.cases_from_list(
+      {"testcase_name": "_a={}_dtype={}_prng={}".format(a, np.dtype(dtype).name,
+                                                        prng_name),
+       "a": a, "dtype": dtype, "prng_impl": prng_impl}
+      for prng_name, prng_impl in PRNG_IMPLS
+      for a in [0.1, 1., 10.]
+      for dtype in jtu.dtypes.floating))
+  def testGamma(self, prng_impl, a, dtype):
+    key = prng.seed_with_impl(prng_impl, 0)
     rand = lambda key, a: random.gamma(key, a, (10000,), dtype)
     crand = jax.jit(rand)
 
@@ -722,13 +766,22 @@ class LaxRandomTest(jtu.JaxTestCase):
     assert x.shape == (3, 2)
 
   @parameterized.named_parameters(jtu.cases_from_list(
-      {"testcase_name": "_a={}".format(alpha), "alpha": alpha}
+      {"testcase_name": "_a={}_prng={}_logspace={}".format(alpha, prng_name, log_space),
+       "alpha": alpha, "log_space": log_space, "prng_impl": prng_impl}
+      for prng_name, prng_impl in PRNG_IMPLS
+      for log_space in [True, False]
       for alpha in [1e-4, 1e-3, 1e-2, 1e-1, 1e0, 1e1, 1e2, 1e3, 1e4]))
-  def testGammaGrad(self, alpha):
-    rng = self.seed_prng(0)
+  def testGammaGrad(self, log_space, prng_impl, alpha):
+    rng = prng.seed_with_impl(prng_impl, 0)
     alphas = np.full((100,), alpha)
     z = random.gamma(rng, alphas)
-    actual_grad = jax.grad(lambda x: random.gamma(rng, x).sum())(alphas)
+    if log_space:
+      actual_grad = jax.grad(lambda x: lax.exp(random.loggamma(rng, x)).sum())(alphas)
+      # TODO(jakevdp): this NaN correction is required because we generate negative infinities
+      # in the log-space computation; see related TODO in the source of random._gamma_one().
+      actual_grad = jnp.where(jnp.isnan(actual_grad), 0.0, actual_grad)
+    else:
+      actual_grad = jax.grad(lambda x: random.gamma(rng, x).sum())(alphas)
 
     eps = 0.01 * alpha / (1.0 + np.sqrt(alpha))
     cdf_dot = (scipy.stats.gamma.cdf(z, alpha + eps)
@@ -737,8 +790,9 @@ class LaxRandomTest(jtu.JaxTestCase):
       pdf = scipy.stats.gamma.pdf(z, alpha)
     expected_grad = -cdf_dot / pdf
 
+    rtol = 2e-2 if jtu.device_under_test() == "tpu" else 7e-4
     self.assertAllClose(actual_grad, expected_grad, check_dtypes=True,
-                        rtol=2e-2 if jtu.device_under_test() == "tpu" else 7e-4)
+                        rtol=rtol)
 
   def testGammaGradType(self):
     # Regression test for https://github.com/google/jax/issues/2130
@@ -792,6 +846,12 @@ class LaxRandomTest(jtu.JaxTestCase):
     lam = jnp.concatenate([jnp.zeros(10), 20 * jnp.ones(10)])
     samples = random.poisson(key, lam, shape=(2, 20))
     self.assertArraysEqual(samples[:, :10], jnp.zeros_like(samples[:, :10]))
+
+  def testPoissonCornerCases(self):
+    key = self.seed_prng(0)
+    lam = jnp.array([-1, 0, jnp.nan])
+    samples = random.poisson(key, lam, shape=(3,))
+    self.assertArraysEqual(samples, jnp.array([-1, 0, -1]))
 
   @parameterized.named_parameters(jtu.cases_from_list(
       {"testcase_name": "_dtype={}".format(np.dtype(dtype).name), "dtype": dtype}
@@ -881,6 +941,7 @@ class LaxRandomTest(jtu.JaxTestCase):
       for dim in [1, 3, 5]
       for dtype in float_dtypes
       for method in ['svd', 'eigh', 'cholesky']))
+  @jtu.skip_on_devices("rocm")  # will be fixed in ROCm-5.1
   def testMultivariateNormal(self, dim, dtype, method):
     r = self.rng()
     mean = r.randn(dim)
@@ -918,6 +979,7 @@ class LaxRandomTest(jtu.JaxTestCase):
       for cov_batch_size in [(), (3,), (2, 3)]
       for shape in [(), (1,), (5,)]
       for method in ['cholesky', 'svd', 'eigh']))
+  @jtu.skip_on_devices("rocm")  # will be solved in rocm-5.1
   def testMultivariateNormalShapes(self, dim, mean_batch_size, cov_batch_size,
                                    shape, method):
     r = self.rng()
@@ -1226,7 +1288,6 @@ double_threefry_prng_impl = prng.PRNGImpl(
 
 @skipIf(not config.jax_enable_custom_prng,
         'custom PRNG tests require config.jax_enable_custom_prng')
-@jtu.with_config(jax_numpy_rank_promotion="raise")
 class LaxRandomWithCustomPRNGTest(LaxRandomTest):
   def seed_prng(self, seed):
     return prng.seed_with_impl(double_threefry_prng_impl, seed)
@@ -1255,7 +1316,6 @@ class LaxRandomWithCustomPRNGTest(LaxRandomTest):
 
 @skipIf(not config.jax_enable_custom_prng,
         'custom PRNG tests require config.jax_enable_custom_prng')
-@jtu.with_config(jax_numpy_rank_promotion="raise")
 class LaxRandomWithRBGPRNGTest(LaxRandomTest):
   def seed_prng(self, seed):
     return random.rbg_key(seed)
@@ -1321,48 +1381,87 @@ class LaxRandomWithUnsafeRBGPRNGTest(LaxRandomWithRBGPRNGTest):
   def seed_prng(self, seed):
     return prng.seed_with_impl(prng.unsafe_rbg_prng_impl, seed)
 
+def like(keys):
+  return jnp.ones(keys.shape)
+
 @skipIf(not config.jax_enable_custom_prng,
         'custom PRNG tests require config.jax_enable_custom_prng')
 class JnpWithPRNGKeyArrayTest(jtu.JaxTestCase):
   def test_reshape(self):
     key = random.PRNGKey(123)
     keys = random.split(key, 4)
-    keys = jnp.reshape(keys, (2, 2))
-    self.assertEqual(keys.shape, (2, 2))
+    out = jnp.reshape(keys,       (2, 2))
+    ref = jnp.reshape(like(keys), (2, 2))
+    self.assertEqual(out.shape, ref.shape)
+    self.assertEqual(out.shape, (2, 2))
 
   def test_tile(self):
     key = random.PRNGKey(123)
-    keys = jnp.tile(key, 3)
-    self.assertEqual(keys.shape, (3,))
+    out = jnp.tile(key,       3)
+    ref = jnp.tile(like(key), 3)
+    self.assertEqual(out.shape, ref.shape)
+    self.assertEqual(out.shape, (3,))
 
   def test_concatenate(self):
     key = random.PRNGKey(123)
     keys = random.split(key, 2)
-    keys = jnp.concatenate([keys, keys, keys], axis=0)
-    self.assertEqual(keys.shape, (3, 2))
+    out = jnp.concatenate([keys, keys, keys], axis=0)
+    ref = jnp.concatenate([like(keys)] * 3, axis=0)
+    self.assertEqual(out.shape, ref.shape)
+    self.assertEqual(out.shape, (6,))
 
   def test_broadcast_to(self):
     key = random.PRNGKey(123)
-    keys = jnp.broadcast_to(key, (3,))
-    self.assertEqual(keys.shape, (3,))
+    out = jnp.broadcast_to(key,       (3,))
+    ref = jnp.broadcast_to(like(key), (3,))
+    self.assertEqual(out.shape, ref.shape)
+    self.assertEqual(out.shape, (3,))
+
+  def test_expand_dims(self):
+    key = random.PRNGKey(123)
+    keys = random.split(key, 6)
+    keys = jnp.reshape(keys, (2, 3))
+    out = jnp.expand_dims(keys,       1)
+    ref = jnp.expand_dims(like(keys), 1)
+    self.assertEqual(out.shape, ref.shape)
+    self.assertEqual(out.shape, (2, 1, 3))
 
   def test_broadcast_arrays(self):
     key = random.PRNGKey(123)
     keys = jax.random.split(key, 3)
-    key, _ = jnp.broadcast_arrays(key, keys)
-    self.assertEqual(key.shape, (3,))
+    out, _ = jnp.broadcast_arrays(key,       keys)
+    ref, _ = jnp.broadcast_arrays(like(key), like(keys))
+    self.assertEqual(out.shape, ref.shape)
+    self.assertEqual(out.shape, (3,))
 
   def test_append(self):
     key = random.PRNGKey(123)
-    keys = jnp.append(key, key)
-    self.assertEqual(keys.shape, (2, 1))
+    out = jnp.append(key,       key)
+    ref = jnp.append(like(key), like(key))
+    self.assertEqual(out.shape, ref.shape)
+    self.assertEqual(out.shape, (2,))
+    out_ = jnp.append(out,       out)
+    ref_ = jnp.append(like(out), like(out))
+    self.assertEqual(out_.shape, ref_.shape)
+    self.assertEqual(out_.shape, (4,))
 
   def test_ravel(self):
     key = random.PRNGKey(123)
     keys = jax.random.split(key, 4)
     keys = jnp.reshape(keys, (2, 2))
-    keys = jnp.ravel(keys)
-    self.assertEqual(keys.shape, (4,))
+    out = jnp.ravel(keys)
+    ref = jnp.ravel(like(keys))
+    self.assertEqual(out.shape, ref.shape)
+    self.assertEqual(out.shape, (4,))
+
+  def test_stack(self):
+    key = random.PRNGKey(123)
+    keys = jax.random.split(key, 2)
+    out = jnp.stack([keys, keys, keys], axis=0)
+    ref = jnp.stack([like(keys)] * 3, axis=0)
+    self.assertEqual(out.shape, ref.shape)
+    self.assertEqual(out.shape, (3, 2))
+
 
 def _sampler_unimplemented_with_custom_prng(*args, **kwargs):
   raise SkipTest('sampler only implemented for default RNG')

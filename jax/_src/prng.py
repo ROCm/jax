@@ -28,13 +28,14 @@ from jax.dtypes import float0
 from jax.interpreters import batching
 from jax.interpreters import xla
 from jax._src.api import jit, vmap
+from jax._src.lax import lax as lax_internal
+from jax._src.lib import prng_apis
 from jax._src.lib import xla_client
-from jax._src.lib import cuda_prng
 from jax._src.numpy.lax_numpy import (
     _canonicalize_tuple_index, _eliminate_deprecated_list_indexing,
     _expand_bool_indices, _register_stackable)
 import jax._src.pretty_printer as pp
-from jax._src.util import prod
+from jax._src.util import canonicalize_axis, prod
 
 
 UINT_DTYPES = {
@@ -74,14 +75,21 @@ class PRNGImpl(NamedTuple):
 
 # -- PRNG key arrays --
 
-def _is_prng_key_data(impl, keys: jnp.ndarray) -> bool:
+def _check_prng_key_data(impl, key_data: jnp.ndarray):
   ndim = len(impl.key_shape)
-  try:
-    return (keys.ndim >= 1 and
-            keys.shape[-ndim:] == impl.key_shape and
-            (keys.dtype == np.uint32 or keys.dtype == float0))
-  except AttributeError:
-    return False
+  if not all(hasattr(key_data, attr) for attr in ['ndim', 'shape', 'dtype']):
+    raise TypeError("JAX encountered invalid PRNG key data: expected key_data "
+                    f"to have ndim, shape, and dtype attributes. Got {key_data}")
+  if key_data.ndim < 1:
+    raise TypeError("JAX encountered invalid PRNG key data: expected "
+                    f"key_data.ndim >= 1; got ndim={key_data.ndim}")
+  if key_data.shape[-ndim:] != impl.key_shape:
+    raise TypeError("JAX encountered invalid PRNG key data: expected key_data.shape to "
+                    f"end with {impl.key_shape}; got shape={key_data.shape} for impl={impl}")
+  if key_data.dtype not in [np.uint32, float0]:
+    raise TypeError("JAX encountered invalid PRNG key data: expected key_data.dtype = uint32; "
+                    f"got dtype={key_data.dtype}")
+
 
 @tree_util.register_pytree_node_class
 class PRNGKeyArray:
@@ -104,10 +112,8 @@ class PRNGKeyArray:
   def __init__(self, impl, key_data: jnp.ndarray):
     # key_data might be a placeholder python `object` or `bool`
     # instead of a jnp.ndarray due to tree_unflatten
-    if (type(key_data) not in [object, bool] and
-        not _is_prng_key_data(impl, key_data)):
-      raise TypeError(
-          f'Invalid PRNG key data {key_data} for PRNG implementation {impl}')
+    if type(key_data) not in [object, bool]:
+      _check_prng_key_data(impl, key_data)
     self.impl = impl
     self._keys = key_data
 
@@ -154,6 +160,10 @@ class PRNGKeyArray:
     base_ndim = len(self.impl.key_shape)
     return self._keys.shape[:-base_ndim]
 
+  @property
+  def ndim(self):
+    return len(self.shape)
+
   def _is_scalar(self):
     base_ndim = len(self.impl.key_shape)
     return self._keys.ndim == base_ndim
@@ -191,13 +201,19 @@ class PRNGKeyArray:
     return PRNGKeyArray(self.impl, reshaped_keys)
 
   def concatenate(self, key_arrs, axis):
-    axis = axis % len(self.shape)
+    axis = canonicalize_axis(axis, self.ndim)
     arrs = [self._keys, *[k._keys for k in key_arrs]]
-    return PRNGKeyArray(self.impl, jnp.stack(arrs, axis))
+    return PRNGKeyArray(self.impl, jnp.concatenate(arrs, axis))
 
   def broadcast_to(self, shape):
-    new_shape = tuple(shape)+(self._keys.shape[-1],)
+    new_shape = (*shape, *self.impl.key_shape)
     return PRNGKeyArray(self.impl, jnp.broadcast_to(self._keys, new_shape))
+
+  def expand_dims(self, dimensions: Sequence[int]):
+    # follows lax.expand_dims, not jnp.expand_dims, so dimensions is a sequence
+    ndim_out = self.ndim + len(set(dimensions))
+    dimensions = [canonicalize_axis(d, ndim_out) for d in dimensions]
+    return PRNGKeyArray(self.impl, lax.expand_dims(self._keys, dimensions))
 
   def __repr__(self):
     arr_shape = self._shape
@@ -248,7 +264,8 @@ def threefry_seed(seed: int) -> jnp.ndarray:
     raise TypeError(f"PRNG key seed must be an integer; got {seed!r}")
 
   convert = lambda k: lax.reshape(lax.convert_element_type(k, np.uint32), [1])
-  k1 = convert(lax.shift_right_logical(seed_arr, lax._const(seed_arr, 32)))
+  k1 = convert(
+      lax.shift_right_logical(seed_arr, lax_internal._const(seed_arr, 32)))
   k2 = convert(jnp.bitwise_and(seed_arr, np.uint32(0xFFFFFFFF)))
   return lax.concatenate([k1, k2], 0)
 
@@ -279,7 +296,7 @@ def _threefry2x32_abstract_eval(*args):
     raise TypeError("Arguments to threefry2x32 must have uint32 type, got {}"
                     .format(args))
   if all(isinstance(arg, core.ShapedArray) for arg in args):
-    shape = lax._broadcasting_shape_rule(*args)
+    shape = lax_internal._broadcasting_shape_rule(*args)
     named_shape = core.join_named_shapes(*(a.named_shape for a in args))
     aval = core.ShapedArray(shape, jnp.dtype(jnp.uint32), named_shape=named_shape)
   else:
@@ -374,9 +391,10 @@ def _threefry2x32_gpu_translation_rule(ctx, avals_in, avals_out, k1, k2, x1,
   def _broadcast(x, aval):
     return xla_client.ops.BroadcastInDim(
         x, aval_out.shape, tuple(range(rank - len(aval.shape), rank)))
+
   return xla.xla_destructure(
       ctx.builder,
-      cuda_prng.threefry2x32(
+      prng_apis.threefry2x32(
           ctx.builder, (_broadcast(k1, k1_aval), _broadcast(k2, k2_aval)),
           (_broadcast(x1, x1_aval), _broadcast(x2, x2_aval))))
 
@@ -392,10 +410,8 @@ xla.register_translation(threefry2x32_p, xla.lower_fun(
 xla.register_translation(threefry2x32_p, xla.lower_fun(
     partial(_threefry2x32_lowering, use_rolled_loops=True),
     multiple_results=True, new_style=True), platform='cpu')
-if cuda_prng:
-  xla.register_translation(threefry2x32_p, _threefry2x32_gpu_translation_rule,
-                           platform='gpu')
-
+xla.register_translation(threefry2x32_p, _threefry2x32_gpu_translation_rule,
+                         platform='gpu')
 
 @partial(jit, inline=True)
 def threefry_2x32(keypair, count):

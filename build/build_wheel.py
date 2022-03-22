@@ -96,6 +96,10 @@ _XLA_EXTENSION_STUBS = [
     "pmap_lib.pyi",
     "profiler.pyi",
     "pytree.pyi",
+    "transfer_guard_lib.pyi",
+]
+_OPTIONAL_XLA_EXTENSION_STUBS = [
+    "transfer_guard_lib.pyi",  # Will be required on xla_extension_version >= 58.
 ]
 
 
@@ -107,8 +111,12 @@ def patch_copy_xla_extension_stubs(dst_dir):
   xla_extension_dir = os.path.join(dst_dir, "xla_extension")
   os.makedirs(xla_extension_dir)
   for stub_name in _XLA_EXTENSION_STUBS:
-    with open(r.Rlocation(
-        "org_tensorflow/tensorflow/compiler/xla/python/xla_extension/" + stub_name)) as f:
+    stub_path = r.Rlocation(
+        "org_tensorflow/tensorflow/compiler/xla/python/xla_extension/" + stub_name)
+    stub_path = str(stub_path)  # Make pytype accept os.path.exists(stub_path).
+    if stub_name in _OPTIONAL_XLA_EXTENSION_STUBS and not os.path.exists(stub_path):
+      continue
+    with open(stub_path) as f:
       src = f.read()
     src = src.replace(
         "from tensorflow.compiler.xla.python import xla_extension",
@@ -189,11 +197,21 @@ def prepare_wheel(sources_path):
     copy_to_jaxlib(r.Rlocation("__main__/jaxlib/_cublas.so"))
     copy_to_jaxlib(r.Rlocation("__main__/jaxlib/_cuda_linalg.so"))
     copy_to_jaxlib(r.Rlocation("__main__/jaxlib/_cuda_prng.so"))
+  if r.Rlocation("__main__/jaxlib/_hipsolver.so") is not None:
+    copy_to_jaxlib(r.Rlocation("__main__/jaxlib/_hipsolver.so"))
+    copy_to_jaxlib(r.Rlocation("__main__/jaxlib/_hipblas.so"))
+    copy_to_jaxlib(r.Rlocation("__main__/jaxlib/_hip_linalg.so"))
+    copy_to_jaxlib(r.Rlocation("__main__/jaxlib/_hip_prng.so"))
   if r.Rlocation("__main__/jaxlib/_cusolver.pyd") is not None:
     copy_to_jaxlib(r.Rlocation("__main__/jaxlib/_cusolver.pyd"))
     copy_to_jaxlib(r.Rlocation("__main__/jaxlib/_cublas.pyd"))
     copy_to_jaxlib(r.Rlocation("__main__/jaxlib/_cuda_linalg.pyd"))
     copy_to_jaxlib(r.Rlocation("__main__/jaxlib/_cuda_prng.pyd"))
+  if r.Rlocation("__main__/jaxlib/_hipsolver.pyd") is not None:
+    copy_to_jaxlib(r.Rlocation("__main__/jaxlib/_hipsolver.pyd"))
+    copy_to_jaxlib(r.Rlocation("__main__/jaxlib/_hipblas.pyd"))
+    copy_to_jaxlib(r.Rlocation("__main__/jaxlib/_hip_linalg.pyd"))
+    copy_to_jaxlib(r.Rlocation("__main__/jaxlib/_hip_prng.pyd"))
   if r.Rlocation("__main__/jaxlib/cusolver.py") is not None:
     libdevice_dir = os.path.join(jaxlib_dir, "cuda", "nvvm", "libdevice")
     os.makedirs(libdevice_dir)
@@ -202,12 +220,16 @@ def prepare_wheel(sources_path):
     copy_to_jaxlib(r.Rlocation("__main__/jaxlib/cusolver.py"))
     copy_to_jaxlib(r.Rlocation("__main__/jaxlib/cuda_linalg.py"))
     copy_to_jaxlib(r.Rlocation("__main__/jaxlib/cuda_prng.py"))
-  if r.Rlocation("__main__/jaxlib/rocblas_kernels.so") is not None:
-    copy_to_jaxlib(r.Rlocation("__main__/jaxlib/rocblas_kernels.so"))
-    copy_to_jaxlib(r.Rlocation("__main__/jaxlib/rocsolver.py"))
+  if r.Rlocation("__main__/jaxlib/hipsolver.py") is not None:
+    copy_to_jaxlib(r.Rlocation("__main__/jaxlib/hipsolver.py"))
+    copy_to_jaxlib(r.Rlocation("__main__/jaxlib/hip_linalg.py"))
+    copy_to_jaxlib(r.Rlocation("__main__/jaxlib/hip_prng.py"))
   if r.Rlocation("__main__/jaxlib/_cusparse.so") is not None:
     copy_to_jaxlib(r.Rlocation("__main__/jaxlib/_cusparse.so"))
     copy_to_jaxlib(r.Rlocation("__main__/jaxlib/cusparse.py"))
+  if r.Rlocation("__main__/jaxlib/_hipsparse.so") is not None:
+    copy_to_jaxlib(r.Rlocation("__main__/jaxlib/_hipsparse.so"))
+    copy_to_jaxlib(r.Rlocation("__main__/jaxlib/hipsparse.py"))
   copy_to_jaxlib(r.Rlocation("__main__/jaxlib/version.py"))
 
   mlir_dir = os.path.join(jaxlib_dir, "mlir")
@@ -222,12 +244,14 @@ def prepare_wheel(sources_path):
   copy_to_jaxlib(r.Rlocation("__main__/jaxlib/mlir/dialects/_chlo_ops_gen.py"), dst_dir=mlir_dialects_dir)
   copy_to_jaxlib(r.Rlocation("__main__/jaxlib/mlir/dialects/_mhlo_ops_gen.py"), dst_dir=mlir_dialects_dir)
   copy_to_jaxlib(r.Rlocation("__main__/jaxlib/mlir/dialects/_ods_common.py"), dst_dir=mlir_dialects_dir)
-  copy_to_jaxlib(r.Rlocation("__main__/jaxlib/mlir/dialects/_std_ops_ext.py"), dst_dir=mlir_dialects_dir)
-  copy_to_jaxlib(r.Rlocation("__main__/jaxlib/mlir/dialects/_std_ops_gen.py"), dst_dir=mlir_dialects_dir)
+  copy_to_jaxlib(r.Rlocation("__main__/jaxlib/mlir/dialects/_func_ops_ext.py"), dst_dir=mlir_dialects_dir)
+  copy_to_jaxlib(r.Rlocation("__main__/jaxlib/mlir/dialects/_func_ops_gen.py"), dst_dir=mlir_dialects_dir)
   copy_to_jaxlib(r.Rlocation("__main__/jaxlib/mlir/dialects/builtin.py"), dst_dir=mlir_dialects_dir)
   copy_to_jaxlib(r.Rlocation("__main__/jaxlib/mlir/dialects/chlo.py"), dst_dir=mlir_dialects_dir)
   copy_to_jaxlib(r.Rlocation("__main__/jaxlib/mlir/dialects/mhlo.py"), dst_dir=mlir_dialects_dir)
-  copy_to_jaxlib(r.Rlocation("__main__/jaxlib/mlir/dialects/std.py"), dst_dir=mlir_dialects_dir)
+  copy_to_jaxlib(
+      r.Rlocation("__main__/jaxlib/mlir/dialects/func.py"),
+      dst_dir=mlir_dialects_dir)
 
   if _is_windows():
     copy_to_jaxlib(r.Rlocation("__main__/jaxlib/mlir/_mlir_libs/_mlir.pyd"), dst_dir=mlir_libs_dir)

@@ -14,7 +14,6 @@
 
 import re
 import traceback
-import unittest
 
 from absl.testing import absltest
 from absl.testing import parameterized
@@ -70,6 +69,7 @@ def check_filtered_stack_trace(test, etype, f, frame_patterns=(),
       test.assertRegex(frame_fmt, full_pat)
 
 
+@jtu.with_config(jax_traceback_filtering='auto')  # JaxTestCase defaults to off.
 @parameterized.named_parameters(
   {"testcase_name": f"_{f}", "filter_mode": f}
   for f in ("tracebackhide", "remove_frames"))
@@ -349,8 +349,6 @@ class FilteredTracebackTest(jtu.JaxTestCase):
     self.assertIsInstance(e.__cause__, traceback_util.UnfilteredStackTrace)
     self.assertIsInstance(e.__cause__.__cause__, ValueError)
 
-  @unittest.skipIf(jax._src.lib.xla_extension_version < 54,
-                   'requires jaxlib >= 0.1.76')
   def test_null_traceback(self, filter_mode):
     class TestA: pass
     def f(a): return a + 1
@@ -363,6 +361,7 @@ class FilteredTracebackTest(jtu.JaxTestCase):
         ('err', 'return jit(f)(a)')], filter_mode=filter_mode)
 
 
+@jtu.with_config(jax_traceback_filtering='auto')  # JaxTestCase defaults to off.
 class UserContextTracebackTest(jtu.JaxTestCase):
 
   def test_grad_norm(self):

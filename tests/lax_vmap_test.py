@@ -24,9 +24,12 @@ from absl.testing import parameterized
 import numpy as np
 
 import jax
+import jax.numpy as jnp
 from jax import dtypes
 from jax import lax
+
 from jax._src import test_util as jtu
+from jax._src.lax import windowed_reductions as lax_windowed_reductions
 from jax._src.lib import xla_client
 from jax._src.util import safe_map, safe_zip
 
@@ -610,8 +613,8 @@ class LaxVmapTest(jtu.JaxTestCase):
     def fun(operand, tangents):
       pads = lax.padtype_to_pads(operand.shape, dims, strides, padding)
       ones = (1,) * len(operand.shape)
-      return lax._select_and_gather_add(operand, tangents, lax.ge_p, dims,
-                                        strides, pads, ones, ones)
+      return lax_windowed_reductions._select_and_gather_add(
+          operand, tangents, lax.ge_p, dims, strides, pads, ones, ones)
 
     for shape, dims, strides in all_configs:
       for bdims in all_bdims(shape, shape):
@@ -633,12 +636,12 @@ class LaxVmapTest(jtu.JaxTestCase):
     pads = lax.padtype_to_pads(shape, dims, strides, padding)
 
     def fun(operand, cotangents):
-      return lax._select_and_scatter_add(operand, cotangents, lax.ge_p, dims,
-                                         strides, pads)
+      return lax_windowed_reductions._select_and_scatter_add(
+          operand, cotangents, lax.ge_p, dims, strides, pads)
     ones = (1,) * len(shape)
     cotangent_shape = jax.eval_shape(
-      lambda x: lax._select_and_gather_add(x, x, lax.ge_p, dims, strides,
-                                           pads, ones, ones),
+      lambda x: lax_windowed_reductions._select_and_gather_add(
+          x, x, lax.ge_p, dims, strides, pads, ones, ones),
       np.ones(shape, dtype)).shape
 
     for bdims in all_bdims(cotangent_shape, shape):
@@ -723,6 +726,15 @@ class LaxVmapTest(jtu.JaxTestCase):
     out_shape = lax.broadcast_shapes(shape1, shape2)
     self.assertTrue(all(type(s) is int for s in out_shape))
 
+  def testBroadcastShapesFaultyInputs(self):
+    err_shape1, err_shape2 = (-1,), "hello"
+    # negative inputs should fail while informing about illegal negative indices...
+    with self.assertRaisesRegex(TypeError, "Only non-negative indices are allowed.*"):
+      lax.broadcast_shapes(err_shape1)
+    # ... while non-integers should error earlier, in the canonicalize_shape machinery.
+    with self.assertRaisesRegex(TypeError, "Shapes must be 1D sequences.*"):
+      lax.broadcast_shapes(err_shape2)  # pytype: disable=wrong-arg-types
+
   @parameterized.named_parameters(jtu.cases_from_list(
       {"testcase_name": "_shape={}_k={}_bdims={}".format(
           jtu.format_shape_dtype_string(shape, dtype), k, bdims),
@@ -778,6 +790,37 @@ class LaxVmapTest(jtu.JaxTestCase):
   # TODO DynamicUpdateSlice
   # TODO Collapse
   # TODO Scatter
+
+  # TODO(b/183233858): variadic reduce-window is not implemented on XLA:GPU
+  @jtu.skip_on_devices("gpu")
+  def test_variadic_reduce_window(self):
+    # https://github.com/google/jax/discussions/9818 and
+    # https://github.com/google/jax/issues/9837
+    def normpool(x):
+      norms = jnp.linalg.norm(x, axis=-1)
+      idxs = jnp.arange(x.shape[0])
+
+      def g(a, b):
+        an, ai = a
+        bn, bi = b
+        which = an >= bn
+        return (jnp.where(which, an, bn), jnp.where(which, ai, bi))
+
+      _, idxs = lax.reduce_window((norms, idxs), (-np.inf, -1), g,
+                        window_dimensions=(2,), window_strides=(2,),
+                        padding=((0, 0),))
+      return x[idxs]
+
+
+    inpt = jnp.array([
+      [1.0, 0.0, 1.0],
+      [2.0, 2.0, 0.0],
+      [3.0, 0.0, 1.0],
+      [0.0, 1.0, 1.0],
+    ])
+    output = jax.vmap(normpool)(inpt[None, ...])  # doesn't crash
+    expected = jnp.array([[[2.0, 2.0, 0.0], [3.0, 0.0, 1.0]]])
+    self.assertAllClose(output, expected, check_dtypes=False)
 
 
 if __name__ == '__main__':

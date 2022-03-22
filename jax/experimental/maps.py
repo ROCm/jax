@@ -16,7 +16,7 @@ import threading
 import contextlib
 import numpy as np
 import itertools as it
-from collections import OrderedDict, abc, namedtuple
+from collections import OrderedDict, abc
 from typing import (Callable, Iterable, Tuple, Optional, Dict, Any, Set,
                     NamedTuple, Union, Sequence)
 from warnings import warn
@@ -26,17 +26,20 @@ from enum import Enum
 from jax import numpy as jnp
 from jax import core
 from jax import linear_util as lu
-from jax._src.api import Lowered, _check_callable, _check_arg
+from jax import stages
+from jax._src.api import _check_callable, _check_arg
 from jax._src import dispatch
 from jax.tree_util import (tree_flatten, tree_unflatten, all_leaves, tree_map,
-                           tree_leaves)
+                           tree_leaves, treedef_tuple)
 from jax._src.tree_util import _replace_nones
 from jax._src.api_util import (flatten_fun_nokwargs, flatten_axes,
                                _ensure_index_tuple, donation_vector,
                                shaped_abstractify)
 from jax._src import source_info_util
+from jax._src import traceback_util
 from jax._src.config import config
 from jax.errors import JAXTypeError
+from jax.experimental.global_device_array import GlobalDeviceArray, _get_array_mapping
 from jax.interpreters import mlir
 from jax.interpreters import partial_eval as pe
 from jax.interpreters import pxla
@@ -49,6 +52,9 @@ from jax._src.util import (safe_map, safe_zip, HashableFunction,
                            as_hashable_function, unzip2, distributed_debug_log,
                            tuple_insert, moveaxis, split_list, wrap_name)
 from jax import lax
+
+source_info_util.register_exclusion(__file__)
+traceback_util.register_exclusion(__file__)
 
 map, unsafe_map = safe_map, map
 zip = safe_zip
@@ -105,64 +111,9 @@ class FrozenDict(abc.Mapping):
 AxisName = core.AxisName
 ResourceAxisName = AxisName  # Different name just for documentation purposes
 Mesh = pxla.Mesh
-
-class _Loop(NamedTuple):
-  name: ResourceAxisName
-  length: int
-
-class ResourceEnv(NamedTuple):
-  physical_mesh: Mesh
-  loops: Tuple[_Loop, ...]
-
-  def with_mesh(self, mesh: Mesh):
-    overlap = set(mesh.axis_names) & (self.resource_axes - set(self.physical_mesh.axis_names))
-    if overlap:
-      raise ValueError(f"Cannot update the mesh of the current resource "
-                       f"environment. The new mesh shadows already defined axes "
-                       f"{show_axes(overlap)}")
-    return self._replace(physical_mesh=mesh)
-
-  def with_extra_loop(self, loop: _Loop):
-    if loop.name in self.resource_axes:
-      raise ValueError(f"Cannot extend the resource environment with loop named "
-                       f"`{loop.name}`. An axis of this name is already defined!")
-    return self._replace(loops=self.loops + (loop,))
-
-  @property
-  def physical_resource_axes(self) -> Set[ResourceAxisName]:
-    return set(self.physical_mesh.axis_names)
-
-  @property
-  def loop_resource_axes(self) -> Set[ResourceAxisName]:
-    return set(loop.name for loop in self.loops)
-
-  @property
-  def resource_axes(self) -> Set[ResourceAxisName]:
-    return self.physical_resource_axes | self.loop_resource_axes
-
-  @property
-  def shape(self):
-    shape = self.physical_mesh.shape
-    shape.update(self.loops)
-    return shape
-
-  @property
-  def local_shape(self):
-    shape = self.physical_mesh.local_mesh.shape
-    shape.update(self.loops)
-    return shape
-
-  def __repr__(self):
-    return f"ResourceEnv({self.physical_mesh!r}, {self.loops!r})"
-
-EMPTY_ENV = ResourceEnv(Mesh(np.empty((), dtype=object), ()), ())
-
-class _ThreadResourcesLocalState(threading.local):
-
-  def __init__(self):
-    self.env = EMPTY_ENV
-
-thread_resources = _ThreadResourcesLocalState()
+ResourceEnv = pxla.ResourceEnv
+EMPTY_ENV = pxla.EMPTY_ENV
+thread_resources = pxla.thread_resources
 
 
 class SerialLoop:
@@ -232,7 +183,7 @@ def serial_loop(name: ResourceAxisName, length: int):
         axis_resources={'i': 'l'})(x)
   """
   old_env: ResourceEnv = getattr(thread_resources, "env", EMPTY_ENV)
-  thread_resources.env = old_env.with_extra_loop(_Loop(name, length))
+  thread_resources.env = old_env.with_extra_loop(pxla._Loop(name, length))
   try:
     yield
   finally:
@@ -268,6 +219,8 @@ def mesh(devices: np.ndarray, axis_names: Sequence[ResourceAxisName]):
         out_axes=['left', 'right', ...],
         axis_resources={'left': 'x', 'right': 'y'})(x, x.T)
   """
+  warn("`maps.mesh` context manager is deprecated. Please use `maps.Mesh`.",
+       FutureWarning)
   old_env: ResourceEnv = getattr(thread_resources, "env", EMPTY_ENV)
   thread_resources.env = old_env.with_mesh(Mesh(np.asarray(devices, dtype=object), axis_names))
   try:
@@ -375,7 +328,7 @@ def xmap(fun: Callable,
          axis_sizes: Dict[AxisName, int] = {},
          axis_resources: Dict[AxisName, ResourceSet] = {},
          donate_argnums: Union[int, Sequence[int]] = (),
-         backend: Optional[str] = None):
+         backend: Optional[str] = None) -> stages.Wrapped:
   """Assign a positional signature to a program that uses named array axes.
 
   .. warning::
@@ -629,8 +582,15 @@ def xmap(fun: Callable,
       lambda: tuple(_flatten_axes("xmap out_axes", out_tree(), out_axes, tupled_args=False)),
       closure=(out_axes_entries, out_axes_treedef))
 
+    in_positional_semantics = tuple(
+        _PositionalSemantics.GLOBAL
+        if isinstance(a, GlobalDeviceArray) else _positional_semantics.val
+        for a in args_flat)
+    out_positional_semantics = _positional_semantics.val
+
     axis_resource_count = _get_axis_resource_count(
-        _positional_semantics.val, frozen_axis_resources, resource_env)
+        frozen_axis_resources, resource_env, in_positional_semantics)
+
     for axis, size in axis_sizes.items():
       resources = axis_resource_count[axis]
       if size % resources.nglobal != 0:
@@ -638,8 +598,9 @@ def xmap(fun: Callable,
         raise ValueError(f"{global_size} of axis {axis} ({size}) is not divisible "
                          f"by the total number of resources assigned to this axis "
                          f"({frozen_axis_resources[axis]}, {resources.nglobal} in total)")
-    frozen_global_axis_sizes = _get_axis_sizes(args_flat, in_axes_flat,
-                                               axis_sizes, axis_resource_count)
+    frozen_global_axis_sizes = _get_axis_sizes(
+        args_flat, in_axes_flat, axis_sizes, axis_resource_count,
+        in_positional_semantics)
 
     missing_sizes = defined_names - set(frozen_global_axis_sizes.keys())
     if missing_sizes:
@@ -654,6 +615,11 @@ def xmap(fun: Callable,
           raise ValueError(f"xmap argument has an in_axes specification of {spec.user_repr}, "
                            f"which asserts that it should be of rank {spec.expected_rank}, "
                            f"but the argument has rank {arg.ndim} (and shape {arg.shape})")
+
+    _check_gda_xmap_partitioning(frozen_axis_resources, resource_env,
+                                 frozen_global_axis_sizes, in_axes_flat,
+                                 in_positional_semantics, args_flat)
+
     params = dict(
       name=getattr(fun, '__name__', '<unnamed function>'),
       in_axes=tuple(in_axes_flat),
@@ -665,7 +631,8 @@ def xmap(fun: Callable,
       backend=backend,
       spmd_in_axes=None,
       spmd_out_axes_thunk=None,
-      positional_semantics=_positional_semantics.val)
+      in_positional_semantics=in_positional_semantics,
+      out_positional_semantics=out_positional_semantics)
     return fun_flat, args_flat, params, in_tree, out_tree
 
   def verify_outputs(out_flat, out_tree, params):
@@ -677,17 +644,20 @@ def xmap(fun: Callable,
                            f"but the output has rank {out.ndim} (and shape {out.shape})")
     return tree_unflatten(out_tree(), out_flat)
 
+  def decorate_serial(f):
+    for loop_params in reversed(anon_serial_loops):
+      f = serial_loop(*loop_params)(f)
+    return f
+
+  @wraps(fun)
+  @decorate_serial
   def fun_mapped(*args):
     tree_map(_check_arg, args)
     fun_flat, args_flat, params, _, out_tree = infer_params(*args)
     out_flat = xmap_p.bind(fun_flat, *args_flat, **params)
     return verify_outputs(out_flat, out_tree, params)
 
-  def decorate_serial(f):
-    for loop_params in reversed(anon_serial_loops):
-      f = serial_loop(*loop_params)(f)
-    return f
-
+  @decorate_serial
   def lower(*args):
     fun_flat, args_flat, params, in_tree, out_tree = infer_params(*args)
     avals_flat = [shaped_abstractify(arg) for arg in args_flat]
@@ -695,23 +665,27 @@ def xmap(fun: Callable,
         fun_flat, params['name'], params['in_axes'], params['out_axes_thunk'],
         params['donated_invars'], params['global_axis_sizes'], params['axis_resources'],
         params['resource_env'], params['backend'], params['spmd_in_axes'],
-        params['spmd_out_axes_thunk'], params['positional_semantics'], *avals_flat)
-    return Lowered(
-        computation, in_tree, out_tree(), donate_argnums, no_kwargs=True)
+        params['spmd_out_axes_thunk'], params['in_positional_semantics'],
+        params['out_positional_semantics'], *avals_flat)
 
-  fun_mapped = wraps(fun)(decorate_serial(fun_mapped))
-  fun_mapped.lower = decorate_serial(lower)
+    in_tree = treedef_tuple([in_tree, tree_flatten({})[1]])
+    in_avals = in_tree.unflatten(avals_flat)
+    return stages.Lowered.from_flat_info(
+        computation, in_tree, in_avals, donate_argnums, out_tree(),
+        no_kwargs=True)
 
+  fun_mapped.lower = lower
   return fun_mapped
 
 def xmap_impl(fun: lu.WrappedFun, *args, name, in_axes, out_axes_thunk, donated_invars,
               global_axis_sizes, axis_resources, resource_env, backend,
-              spmd_in_axes, spmd_out_axes_thunk, positional_semantics):
+              spmd_in_axes, spmd_out_axes_thunk, in_positional_semantics,
+              out_positional_semantics):
   in_avals = [core.raise_to_shaped(core.get_aval(arg)) for arg in args]
   xmap_callable = make_xmap_callable(
       fun, name, in_axes, out_axes_thunk, donated_invars, global_axis_sizes,
       axis_resources, resource_env, backend,
-      spmd_in_axes, spmd_out_axes_thunk, positional_semantics,
+      spmd_in_axes, spmd_out_axes_thunk, in_positional_semantics, out_positional_semantics,
       *in_avals).compile().unsafe_call
   distributed_debug_log(("Running xmapped function", name),
                         ("python function", fun.f),
@@ -724,10 +698,11 @@ def make_xmap_callable(fun: lu.WrappedFun,
                        name,
                        in_axes, out_axes_thunk, donated_invars,
                        global_axis_sizes, axis_resources, resource_env, backend,
-                       spmd_in_axes, spmd_out_axes_thunk, positional_semantics,
-                       *in_avals):
-  assert positional_semantics == _PositionalSemantics.LOCAL
-  plan = EvaluationPlan.from_axis_resources(axis_resources, resource_env, global_axis_sizes)
+                       spmd_in_axes, spmd_out_axes_thunk, in_positional_semantics,
+                       out_positional_semantics, *in_avals):
+  assert out_positional_semantics == _PositionalSemantics.LOCAL
+  plan = EvaluationPlan.from_axis_resources(
+      axis_resources, resource_env, global_axis_sizes, in_positional_semantics)
 
   # TODO: Making axis substitution final style would allow us to avoid
   #       tracing to jaxpr here
@@ -762,17 +737,23 @@ def make_xmap_callable(fun: lu.WrappedFun,
     assert spmd_in_axes is None and spmd_out_axes_thunk is None  # No outer xmaps, so should be None
     mesh_in_axes, mesh_out_axes = plan.to_mesh_axes(in_axes, out_axes)
     mesh = resource_env.physical_mesh
-    global_in_avals = [mesh.local_to_global(ax, av)
-                       for ax, av in safe_zip(mesh_in_axes, in_avals)]
+    global_in_avals = [
+        av if ips == _PositionalSemantics.GLOBAL else mesh._local_to_global(ax, av)
+        for ax, av, ips in safe_zip(mesh_in_axes, in_avals, in_positional_semantics)
+    ]
+    in_is_global = [ips == _PositionalSemantics.GLOBAL or not ia
+                    for ips, ia in safe_zip(in_positional_semantics, mesh_in_axes)]
+    tiling_method: pxla.TilingMethod
     if config.experimental_xmap_spmd_lowering_manual:
-      tiling_method = pxla.TilingMethod.MANUAL
+      manual_mesh_axes = frozenset(it.chain.from_iterable(plan.physical_axis_resources.values()))
+      tiling_method = pxla.TileManual(manual_mesh_axes)
     else:
-      tiling_method = pxla.TilingMethod.VECTORIZE
+      tiling_method = pxla.TileVectorize()
     return pxla.lower_mesh_computation(
-        f, name, mesh,
+        f, 'xmap', name, mesh,
         mesh_in_axes, mesh_out_axes, donated_invars,
         use_spmd_lowering, global_in_avals,
-        tiling_method=tiling_method, in_is_gda=[False] * len(global_in_avals))
+        tiling_method=tiling_method, in_is_global=in_is_global)
   else:
     return dispatch.lower_xla_callable(
         f, None, backend, name, donated_invars, *((a, None) for a in in_avals))
@@ -803,10 +784,12 @@ class EvaluationPlan(NamedTuple):
   def from_axis_resources(cls,
                           axis_resources: Dict[AxisName, Tuple[ResourceAxisName, ...]],
                           resource_env: ResourceEnv,
-                          global_axis_sizes: Dict[AxisName, int]):
+                          global_axis_sizes: Dict[AxisName, int],
+                          in_positional_semantics: Sequence[bool]):
     physical_axis_resources, loop_axis_resources = _unzip_axis_resources(
             axis_resources, resource_env)
-    axis_resource_count = _get_axis_resource_count(None, axis_resources, resource_env)
+    axis_resource_count = _get_axis_resource_count(
+        axis_resources, resource_env, in_positional_semantics)
     axis_subst_dict = dict(axis_resources)
     axis_vmap_size: Dict[AxisName, Optional[int]] = {}
     for naxis, raxes in sorted(axis_resources.items(), key=lambda x: str(x[0])):
@@ -869,14 +852,16 @@ class EvaluationPlan(NamedTuple):
               for sresult, spec in zip(stacked_results, loop_out_axes)]
     return lu.wrap_init(looped_f)
 
-  def to_mesh_axes(self, in_axes, out_axes):
+  def to_mesh_axes(self, in_axes, out_axes=None):
     """
     Convert in/out_axes parameters ranging over logical dimensions to
     in/out_axes that range over the mesh dimensions.
     """
-    return (_to_resource_axes(in_axes, self.physical_axis_resources),
-            _to_resource_axes(out_axes, self.physical_axis_resources))
-
+    if out_axes is None:
+      return _to_resource_axes(in_axes, self.physical_axis_resources)
+    else:
+      return (_to_resource_axes(in_axes, self.physical_axis_resources),
+              _to_resource_axes(out_axes, self.physical_axis_resources))
 
 # -------- xmap primitive and its transforms --------
 
@@ -937,7 +922,7 @@ def _xmap_transpose(params, call_jaxpr, args, cts_in, cts_in_avals, reduce_axes)
   all_args, in_tree_def = tree_flatten(((), args, cts_in))  # empty consts
   fun = lu.hashable_partial(
       lu.wrap_init(ad.backward_pass),
-      call_jaxpr, reduce_axes + tuple(params['global_axis_sizes'].keys()))
+      call_jaxpr, reduce_axes + tuple(params['global_axis_sizes'].keys()), False)
   fun, nz_arg_cts = ad.nonzero_outputs(fun)
   fun, out_tree = flatten_fun_nokwargs(fun, in_tree_def)
   # Preserve axis for primal arguments, skip tangents (represented as undefined primals).
@@ -961,9 +946,12 @@ def _xmap_transpose(params, call_jaxpr, args, cts_in, cts_in_avals, reduce_axes)
   arg_cts = tree_unflatten(out_tree(), out_flat)
 
   axis_resource_count = _get_axis_resource_count(
-      params['positional_semantics'], params['axis_resources'], params['resource_env'])
-  local_axis_sizes = {axis: axis_resource_count[axis].to_local(global_size)
-                      for axis, global_size in params['global_axis_sizes'].items()}
+      params['axis_resources'], params['resource_env'],
+      params['in_positional_semantics'])
+  local_axis_sizes = {
+      axis: axis_resource_count[axis].to_local(params['out_positional_semantics'], global_size)
+      for axis, global_size in params['global_axis_sizes'].items()
+  }
   def unmap_zero(zero, axes):
     return ad.Zero(_insert_aval_axes(zero.aval, axes, local_axis_sizes))
   return tuple(unmap_zero(arg_ct, in_axis) if type(arg_ct) is ad.Zero else arg_ct
@@ -974,11 +962,14 @@ ad.primitive_transposes[xmap_p] = _xmap_transpose
 def _typecheck_xmap(
     *in_avals, call_jaxpr, name, in_axes, out_axes, donated_invars,
     global_axis_sizes, axis_resources, resource_env, backend,
-    spmd_in_axes, spmd_out_axes, positional_semantics):
+    spmd_in_axes, spmd_out_axes, in_positional_semantics,
+    out_positional_semantics):
   axis_resource_count = _get_axis_resource_count(
-      positional_semantics, axis_resources, resource_env)
-  local_axis_sizes = {axis: axis_resource_count[axis].to_local(global_size)
-                      for axis, global_size in global_axis_sizes.items()}
+      axis_resources, resource_env, in_positional_semantics)
+  local_axis_sizes = {
+      axis: axis_resource_count[axis].to_local(out_positional_semantics, global_size)
+      for axis, global_size in global_axis_sizes.items()
+  }
   binder_in_avals = [_insert_aval_axes(v.aval, a_in_axes, local_axis_sizes)
                      for v, a_in_axes in zip(call_jaxpr.invars, in_axes)]
   for binder_in_aval, in_aval in zip(binder_in_avals, in_avals):
@@ -998,8 +989,6 @@ def _typecheck_xmap(
   return out_avals
 core.custom_typechecks[xmap_p] = _typecheck_xmap
 
-def show_axes(axes):
-  return ", ".join(sorted([f"`{a}`" for a in axes]))
 
 def _resource_typing_xmap(avals,
                           params,
@@ -1014,7 +1003,7 @@ def _resource_typing_xmap(avals,
     raise JAXTypeError(
         f"Detected disallowed xmap axis name shadowing at "
         f"{source_info_util.summarize(source_info)} "
-        f"(shadowed axes: {show_axes(overlap)})")
+        f"(shadowed axes: {pxla.show_axes(overlap)})")
 
   if resource_env.physical_mesh != params['resource_env'].physical_mesh:
     raise RuntimeError("Changing the physical mesh is not allowed inside xmap.")
@@ -1042,9 +1031,9 @@ def _resource_typing_xmap(avals,
         raise JAXTypeError(
             f"One of xmapped function ({params['name']}) outputs is broadcast "
             f"along axis `{baxis}` which is assigned to resources "
-            f"{show_axes(baxis_resources)}, but the output is already "
-            f"partitioned along {show_axes(overlap)}, because its "
-            f"named shape contains {show_axes(partitioning_axes)}")
+            f"{pxla.show_axes(baxis_resources)}, but the output is already "
+            f"partitioned along {pxla.show_axes(overlap)}, because its "
+            f"named shape contains {pxla.show_axes(partitioning_axes)}")
 pxla.custom_resource_typing_rules[xmap_p] = _resource_typing_xmap
 
 
@@ -1067,9 +1056,12 @@ def _dynamic_jaxpr_process_xmap(self, primitive, f, tracers, params):
   else:
     spmd_out_axes = None
   axis_resource_count = _get_axis_resource_count(
-      params['positional_semantics'], params['axis_resources'], params['resource_env'])
-  local_axis_sizes = {axis: axis_resource_count[axis].to_local(global_size)
-                      for axis, global_size in global_axis_sizes.items()}
+      params['axis_resources'], params['resource_env'],
+      params['in_positional_semantics'])
+  local_axis_sizes = {
+      axis: axis_resource_count[axis].to_local(params['out_positional_semantics'], global_size)
+      for axis, global_size in global_axis_sizes.items()
+  }
   out_avals = [_insert_aval_axes(a, a_out_axes, local_axis_sizes)
                for a, a_out_axes in zip(mapped_out_avals, out_axes)]
   _check_out_avals_vs_out_axes(out_avals, out_axes, params['global_axis_sizes'])
@@ -1098,8 +1090,49 @@ def _dynamic_jaxpr_process_xmap(self, primitive, f, tracers, params):
   self.frame.eqns.append(eqn)
   return out_tracers
 pe.DynamicJaxprTrace.process_xmap = _dynamic_jaxpr_process_xmap  # type: ignore
+
+def _xmap_partial_eval_custom_params_updater(
+    unks_in: Sequence[bool],
+    kept_outs_known: Sequence[bool], kept_outs_staged: Sequence[bool],
+    num_res: int, params_known: dict, params_staged: dict
+  ) -> Tuple[dict, dict]:
+  assert params_known['spmd_in_axes'] is None and params_known['spmd_out_axes'] is None
+  assert params_staged['spmd_in_axes'] is None and params_staged['spmd_out_axes'] is None
+
+  # pruned inputs to jaxpr_known according to unks_in
+  donated_invars_known, _ = pe.partition_list(unks_in, params_known['donated_invars'])
+  in_axes_known, _ = pe.partition_list(unks_in, params_known['in_axes'])
+  if num_res == 0:
+    residual_axes = []
+  else:
+    residual_axes = [
+      AxisNamePos(zip(sort_named_shape, range(len(sort_named_shape))),
+                  user_repr=f'<internal: {sort_named_shape}>')
+      for named_shape in (v.aval.named_shape for v in params_known['call_jaxpr'].outvars[:-num_res])
+      # We sort here to make the iteration order deterministic
+      for sort_named_shape in [sorted(named_shape, key=str)]
+    ]
+  _, out_axes_known = pe.partition_list(kept_outs_known, params_known['out_axes'])
+  new_params_known = dict(params_known,
+                          in_axes=tuple(in_axes_known),
+                          out_axes=(*out_axes_known, *residual_axes),
+                          donated_invars=tuple(donated_invars_known))
+  assert len(new_params_known['in_axes']) == len(params_known['call_jaxpr'].invars)
+  assert len(new_params_known['out_axes']) == len(params_known['call_jaxpr'].outvars)
+
+  # added num_res new inputs to jaxpr_staged
+  donated_invars_staged = (*(False for _ in range(num_res)), *params_staged['donated_invars'])
+  _, out_axes_staged = pe.partition_list(kept_outs_staged, params_staged['out_axes'])
+  new_params_staged = dict(params_staged,
+                           in_axes=(*residual_axes, *params_staged['in_axes']),
+                           out_axes=tuple(out_axes_staged),
+                           donated_invars=donated_invars_staged)
+  assert len(new_params_staged['in_axes']) == len(params_staged['call_jaxpr'].invars)
+  assert len(new_params_staged['out_axes']) == len(params_staged['call_jaxpr'].outvars)
+  return new_params_known, new_params_staged
 pe.partial_eval_jaxpr_custom_rules[xmap_p] = \
-    partial(pe.partial_eval_jaxpr_custom_rule_not_implemented, 'xmap')
+    partial(pe.call_partial_eval_custom_rule, 'call_jaxpr',
+            _xmap_partial_eval_custom_params_updater)
 
 
 @lu.transformation_with_aux
@@ -1155,13 +1188,17 @@ def _jaxpr_trace_process_xmap(self, primitive, f: lu.WrappedFun, tracers, params
       assert not any(const_units)
       num_consts = len(const_units)
       out_axes_no_units = [a for a, u in zip(out_axes, axes_units) if not u]
-      const_axes = [
-          AxisNamePos(zip(sort_named_shape, range(len(sort_named_shape))),
-                      user_repr=f'<internal: {sort_named_shape}>')
-          for named_shape in out_named_shapes()[-num_consts:]
-          # We sort here to make the iteration order deterministic
-          for sort_named_shape in [sorted(named_shape, key=str)]
-      ]
+      const_axes: Sequence[AxisNamePos]
+      if num_consts == 0:
+        const_axes = ()
+      else:
+        const_axes = [
+            AxisNamePos(zip(sort_named_shape, range(len(sort_named_shape))),
+                        user_repr=f'<internal: {sort_named_shape}>')
+            for named_shape in out_named_shapes()[-num_consts:]
+            # We sort here to make the iteration order deterministic
+            for sort_named_shape in [sorted(named_shape, key=str)]
+        ]
       if not const_axes_s:  # NOTE: This can be called multiple times
         const_axes_s.store(const_axes)
       assert const_axes_s.val == const_axes
@@ -1181,9 +1218,12 @@ def _jaxpr_trace_process_xmap(self, primitive, f: lu.WrappedFun, tracers, params
   out_axes = params['out_axes_thunk']()
   const_axes = const_axes_s.val
   axis_resource_count = _get_axis_resource_count(
-      params['positional_semantics'], params['axis_resources'], params['resource_env'])
-  local_axis_sizes = {axis: axis_resource_count[axis].to_local(global_size)
-                      for axis, global_size in global_axis_sizes.items()}
+      params['axis_resources'], params['resource_env'],
+      params['in_positional_semantics'])
+  local_axis_sizes = {
+      axis: axis_resource_count[axis].to_local(params['out_positional_semantics'], global_size)
+      for axis, global_size in global_axis_sizes.items()
+  }
   out_pvals = [pval if pval.is_known() else
                PartialVal.unknown(_insert_aval_axes(pval[0], axes, local_axis_sizes))
                for pval, axes in zip(out_pvals, out_axes)]
@@ -1327,13 +1367,16 @@ pxla.SPMDBatchTrace.process_xmap = partialmethod(_batch_trace_process_xmap, True
 
 # -------- nested xmap handling --------
 
-def _xmap_lowering_rule(*args, **kwargs):
-  if config.experimental_xmap_spmd_lowering_manual:
-    return _xmap_lowering_rule_spmd_manual(*args, **kwargs)
-  elif config.experimental_xmap_spmd_lowering:
-    return _xmap_lowering_rule_spmd(*args, **kwargs)
+def _xmap_lowering_rule(ctx, *args, **kwargs):
+  if isinstance(ctx.module_context.axis_context, mlir.SPMDAxisContext):
+    if config.experimental_xmap_spmd_lowering_manual:
+      return _xmap_lowering_rule_spmd_manual(ctx, *args, **kwargs)
+    else:
+      return _xmap_lowering_rule_spmd(ctx, *args, **kwargs)
+  elif isinstance(ctx.module_context.axis_context, mlir.ReplicaAxisContext):
+    return _xmap_lowering_rule_replica(ctx, *args, **kwargs)
   else:
-    return _xmap_lowering_rule_replica(*args, **kwargs)
+    raise AssertionError("Unrecognized axis context type!")
 mlir.register_lowering(xmap_p, _xmap_lowering_rule)
 
 def _xmap_lowering_rule_replica(ctx, *in_nodes,
@@ -1341,20 +1384,24 @@ def _xmap_lowering_rule_replica(ctx, *in_nodes,
                                 in_axes, out_axes, donated_invars,
                                 global_axis_sizes,
                                 spmd_in_axes, spmd_out_axes,
-                                positional_semantics,
+                                in_positional_semantics, out_positional_semantics,
                                 axis_resources, resource_env, backend):
   xla.check_backend_matches(backend, ctx.module_context.platform)
   # The only way for any of those two assertions to be violated is when xmap
   # is using the SPMD lowering, but then this rule shouldn't even trigger.
-  assert positional_semantics == _PositionalSemantics.LOCAL
+  assert out_positional_semantics == _PositionalSemantics.LOCAL
   assert spmd_in_axes is None and spmd_out_axes is None
-  plan = EvaluationPlan.from_axis_resources(axis_resources, resource_env, global_axis_sizes)
+  plan = EvaluationPlan.from_axis_resources(
+      axis_resources, resource_env, global_axis_sizes, in_positional_semantics)
 
-  axis_resource_count = _get_axis_resource_count(positional_semantics, axis_resources, resource_env)
+  axis_resource_count = _get_axis_resource_count(
+      axis_resources, resource_env, in_positional_semantics)
   if any(resource_count.distributed for resource_count in axis_resource_count.values()):
     raise NotImplementedError
-  local_axis_sizes = {axis: axis_resource_count[axis].to_local(global_size)
-                      for axis, global_size in global_axis_sizes.items()}
+  local_axis_sizes = {
+      axis: axis_resource_count[axis].to_local(out_positional_semantics, global_size)
+      for axis, global_size in global_axis_sizes.items()
+  }
 
   local_mesh = resource_env.physical_mesh.local_mesh
   local_mesh_shape = local_mesh.shape
@@ -1419,10 +1466,12 @@ def _xmap_lowering_rule_replica(ctx, *in_nodes,
 def _xmap_lowering_rule_spmd(ctx, *global_in_nodes,
                              call_jaxpr, name, in_axes, out_axes,
                              donated_invars, global_axis_sizes, spmd_in_axes,
-                             spmd_out_axes, positional_semantics,
-                             axis_resources, resource_env, backend):
+                             spmd_out_axes, in_positional_semantics,
+                             out_positional_semantics, axis_resources,
+                             resource_env, backend):
   xla.check_backend_matches(backend, ctx.module_context.platform)
-  plan = EvaluationPlan.from_axis_resources(axis_resources, resource_env, global_axis_sizes)
+  plan = EvaluationPlan.from_axis_resources(
+      axis_resources, resource_env, global_axis_sizes, in_positional_semantics)
 
   resource_call_jaxpr = plan.subst_axes_with_resources(call_jaxpr)
   f = lu.wrap_init(core.jaxpr_as_fun(core.ClosedJaxpr(resource_call_jaxpr, ())))
@@ -1476,12 +1525,15 @@ def _xmap_lowering_rule_spmd(ctx, *global_in_nodes,
 def _xmap_lowering_rule_spmd_manual(ctx, *global_in_nodes,
                                     call_jaxpr, name, in_axes, out_axes,
                                     donated_invars, global_axis_sizes, spmd_in_axes,
-                                    spmd_out_axes, positional_semantics,
-                                    axis_resources, resource_env, backend):
+                                    spmd_out_axes, in_positional_semantics,
+                                    out_positional_semantics, axis_resources,
+                                    resource_env, backend):
   assert spmd_in_axes is None and spmd_out_axes is None
   # This first part (up to vtile_manual) is shared with non-MANUAL SPMD rule.
   xla.check_backend_matches(backend, ctx.module_context.platform)
-  plan = EvaluationPlan.from_axis_resources(axis_resources, resource_env, global_axis_sizes)
+  plan = EvaluationPlan.from_axis_resources(
+      axis_resources, resource_env, global_axis_sizes, in_positional_semantics)
+  manual_mesh_axes = frozenset(it.chain.from_iterable(plan.physical_axis_resources.values()))
 
   resource_call_jaxpr = plan.subst_axes_with_resources(call_jaxpr)
   f = lu.wrap_init(core.jaxpr_as_fun(core.ClosedJaxpr(resource_call_jaxpr, ())))
@@ -1491,7 +1543,7 @@ def _xmap_lowering_rule_spmd_manual(ctx, *global_in_nodes,
   # NOTE: Sharding constraints are handled entirely by vtile_manual!
   mesh_in_axes, mesh_out_axes = plan.to_mesh_axes(in_axes, out_axes)
   mesh = resource_env.physical_mesh
-  f = pxla.vtile_manual(f, mesh, mesh_in_axes, mesh_out_axes)
+  f = pxla.vtile_manual(f, tuple(manual_mesh_axes), mesh, mesh_in_axes, mesh_out_axes)
 
   # NOTE: We don't extend the resource env with the mesh shape, because those
   #       resources are already in scope! It's the outermost xmap that introduces
@@ -1502,9 +1554,11 @@ def _xmap_lowering_rule_spmd_manual(ctx, *global_in_nodes,
 
   # We in-line here rather than generating a Call HLO as in the xla_call
   # translation rule just because the extra tuple stuff is a pain.
+  assert isinstance(ctx.module_context.axis_context, mlir.SPMDAxisContext)
   sub_ctx = ctx.module_context.replace(
       name_stack=xla.extend_name_stack(ctx.module_context.name_stack,
-                                       xla.wrap_name(name, 'xmap')))
+                                       xla.wrap_name(name, 'xmap')),
+      axis_context=ctx.module_context.axis_context.extend_manual(manual_mesh_axes))
   global_out_nodes = mlir.jaxpr_subcomp(sub_ctx, vectorized_jaxpr, (),
                                         *([n] for n in global_in_nodes))
 
@@ -1525,20 +1579,24 @@ def _xmap_translation_rule_replica(ctx, avals_in, avals_out, *in_nodes,
                                    in_axes, out_axes, donated_invars,
                                    global_axis_sizes,
                                    spmd_in_axes, spmd_out_axes,
-                                   positional_semantics,
+                                   in_positional_semantics, out_positional_semantics,
                                    axis_resources, resource_env, backend):
   xla.check_backend_matches(backend, ctx.platform)
   # The only way for any of those two assertions to be violated is when xmap
   # is using the SPMD lowering, but then this rule shouldn't even trigger.
-  assert positional_semantics == _PositionalSemantics.LOCAL
+  assert out_positional_semantics == _PositionalSemantics.LOCAL
   assert spmd_in_axes is None and spmd_out_axes is None
-  plan = EvaluationPlan.from_axis_resources(axis_resources, resource_env, global_axis_sizes)
+  plan = EvaluationPlan.from_axis_resources(
+      axis_resources, resource_env, global_axis_sizes, in_positional_semantics)
 
-  axis_resource_count = _get_axis_resource_count(positional_semantics, axis_resources, resource_env)
+  axis_resource_count = _get_axis_resource_count(
+      axis_resources, resource_env, in_positional_semantics)
   if any(resource_count.distributed for resource_count in axis_resource_count.values()):
     raise NotImplementedError
-  local_axis_sizes = {axis: axis_resource_count[axis].to_local(global_size)
-                      for axis, global_size in global_axis_sizes.items()}
+  local_axis_sizes = {
+      axis: axis_resource_count[axis].to_local(out_positional_semantics, global_size)
+      for axis, global_size in global_axis_sizes.items()
+  }
 
   local_mesh = resource_env.physical_mesh.local_mesh
   local_mesh_shape = local_mesh.shape
@@ -1652,10 +1710,11 @@ def _xmap_translation_rule_spmd(ctx, avals_in, avals_out, *global_in_nodes,
                                 in_axes, out_axes, donated_invars,
                                 global_axis_sizes,
                                 spmd_in_axes, spmd_out_axes,
-                                positional_semantics,
+                                in_positional_semantics, out_positional_semantics,
                                 axis_resources, resource_env, backend):
   xla.check_backend_matches(backend, ctx.platform)
-  plan = EvaluationPlan.from_axis_resources(axis_resources, resource_env, global_axis_sizes)
+  plan = EvaluationPlan.from_axis_resources(
+      axis_resources, resource_env, global_axis_sizes, in_positional_semantics)
 
   resource_call_jaxpr = plan.subst_axes_with_resources(call_jaxpr)
   f = lu.wrap_init(core.jaxpr_as_fun(core.ClosedJaxpr(resource_call_jaxpr, ())))
@@ -1746,69 +1805,97 @@ def _insert_aval_axes(aval, axes: AxisNamePos, local_axis_sizes):
   return aval.update(shape=tuple(shape), named_shape=named_shape)
 
 
-class ResourceCount(namedtuple('ResourceCount', ['semantics', 'nglobal', 'nlocal'])):
-  def to_local(self, global_size):
-    if self.semantics == _PositionalSemantics.GLOBAL:
+class ResourceCount(NamedTuple):
+  nglobal: int
+  nlocal: Optional[int]
+  distributed: bool
+
+  def to_local(self, semantics, global_size):
+    if semantics == _PositionalSemantics.GLOBAL:
       return global_size
-    elif self.semantics == _PositionalSemantics.LOCAL:
+    elif semantics == _PositionalSemantics.LOCAL:
+      assert self.nlocal is not None
       assert global_size % self.nglobal == 0, "Please report this issue!"
       return (global_size // self.nglobal) * self.nlocal
     else:
-      raise AssertionError("Unhandled case {_positional_semantics}")
+      raise AssertionError(f"Unhandled case {_positional_semantics}")
 
-  def to_global(self, local_size):
-    if self.semantics == _PositionalSemantics.GLOBAL:
+  def to_global(self, semantics, local_size):
+    if semantics == _PositionalSemantics.GLOBAL:
       return local_size
-    elif self.semantics == _PositionalSemantics.LOCAL:
+    elif semantics == _PositionalSemantics.LOCAL:
+      assert self.nlocal is not None
       assert local_size % self.nlocal == 0, "Please report this issue!"
       return (local_size // self.nlocal) * self.nglobal
     else:
       raise AssertionError(f"Unhandled case {_positional_semantics}")
 
-  @property
-  def distributed(self):
-    return self.nglobal != self.nlocal
 
-
-def _get_axis_resource_count(semantics, axis_resources, resource_env) -> Dict[ResourceAxisName, ResourceCount]:
+def _get_axis_resource_count(
+    axis_resources, resource_env,
+    in_positional_semantics) -> Dict[ResourceAxisName, ResourceCount]:
   global_res_shape = resource_env.shape
-  local_res_shape = resource_env.local_shape
-  return {axis: ResourceCount(semantics,
-                              int(np.prod(map(global_res_shape.get, resources), dtype=np.int64)),
-                              int(np.prod(map(local_res_shape.get, resources), dtype=np.int64)))
-          for axis, resources in axis_resources.items()}
+  if all(ips == _PositionalSemantics.GLOBAL for ips in in_positional_semantics):
+    local_res_shape = None
+  else:
+    local_res_shape = resource_env.local_shape
+
+  distributed = (False if resource_env.physical_mesh.empty else
+                 resource_env.physical_mesh.size != len(resource_env.physical_mesh.local_devices))
+  resource_count_map = {}
+  for axis, resources in axis_resources.items():
+    if local_res_shape is None:
+      nlocal = None
+    else:
+      nlocal = int(np.prod(map(local_res_shape.get, resources), dtype=np.int64))
+    resource_count_map[axis] = ResourceCount(
+        int(np.prod(map(global_res_shape.get, resources), dtype=np.int64)),
+        nlocal, distributed)
+  return resource_count_map
 
 
 def _get_axis_sizes(args_flat: Iterable[Any],
                     in_axes_flat: Iterable[AxisNamePos],
                     global_axis_sizes: Dict[AxisName, int],
-                    axis_resource_count: Dict[AxisName, ResourceCount]):
+                    axis_resource_count: Dict[AxisName, ResourceCount],
+                    in_positional_semantics: Sequence[bool]):
   global_axis_sizes = dict(global_axis_sizes)
-  for arg, in_axes in zip(args_flat, in_axes_flat):
+  for arg, in_axes, ips in zip(args_flat, in_axes_flat, in_positional_semantics):
     for name, dim in in_axes.items():
       resources = axis_resource_count[name]
       local_ = "local " if resources.distributed else ""
       try:
-        local_dim_size = arg.shape[dim]
+        dim_size = arg.shape[dim]
       except IndexError:
         # TODO(apaszke): Handle negative indices. Check for overlap too!
         raise ValueError(f"One of xmap arguments has an in_axes specification of "
                          f"{in_axes.user_repr}, which implies that it has at least "
                          f"{max(in_axes.values()) + 1} dimensions, but the argument "
                          f"has rank {arg.ndim}")
-      if local_dim_size % resources.nlocal != 0:
-        raise ValueError(f"One of xmap arguments has an in_axes specification of "
-                         f"{in_axes.user_repr}, which implies that its size in dimension "
-                         f"{dim} ({local_dim_size}) should be divisible by the number of "
-                         f"{local_}resources assigned to axis {name} ({resources.nlocal})")
-      global_dim_size = resources.to_global(local_dim_size)
-      if name in global_axis_sizes:
-        expected_local_dim_size = resources.to_local(global_axis_sizes[name])
-        if local_dim_size != expected_local_dim_size:
-          raise ValueError(f"The {local_}size of axis {name} was previously inferred to be "
-                           f"{expected_local_dim_size}, but found an argument of shape {arg.shape} "
-                           f"with in_axes specification {in_axes.user_repr}. Shape mismatch "
-                           f"occurs in dimension {dim}: {local_dim_size} != {expected_local_dim_size}")
+      if ips == _PositionalSemantics.LOCAL:
+        local_dim_size = dim_size
+        if local_dim_size % resources.nlocal != 0:
+          raise ValueError(f"One of xmap arguments has an in_axes specification of "
+                           f"{in_axes.user_repr}, which implies that its size in dimension "
+                           f"{dim} ({local_dim_size}) should be divisible by the number of "
+                           f"{local_}resources assigned to axis {name} ({resources.nlocal})")
+        global_dim_size = resources.to_global(ips, local_dim_size)
+        if name in global_axis_sizes:
+          expected_local_dim_size = resources.to_local(ips, global_axis_sizes[name])
+          if local_dim_size != expected_local_dim_size:
+            raise ValueError(f"The {local_}size of axis {name} was previously inferred to be "
+                             f"{expected_local_dim_size}, but found an argument of shape {arg.shape} "
+                             f"with in_axes specification {in_axes.user_repr}. Shape mismatch "
+                             f"occurs in dimension {dim}: {local_dim_size} != {expected_local_dim_size}")
+      elif ips == _PositionalSemantics.GLOBAL:
+        global_dim_size = dim_size
+        if name in global_axis_sizes:
+          expected_global_dim_size = global_axis_sizes[name]
+          if global_dim_size != expected_global_dim_size:
+            raise ValueError(f"The size of axis {name} was previously inferred to be "
+                             f"{expected_global_dim_size}, but found an argument of shape {arg.shape} "
+                             f"with in_axes specification {in_axes.user_repr}. Shape mismatch "
+                             f"occurs in dimension {dim}: {global_dim_size} != {expected_global_dim_size}")
       global_axis_sizes[name] = global_dim_size
   return FrozenDict(global_axis_sizes)
 
@@ -1939,6 +2026,29 @@ def _check_out_avals_vs_out_axes(out_avals: Sequence[core.AbstractValue],
                       f"defined by this xmap call: {', '.join(undeclared_axes_str)}")
 
 
+def _check_gda_xmap_partitioning(axis_resources, resource_env,
+                                 global_axis_sizes, in_axes_flat,
+                                 in_positional_semantics, args_flat):
+  mesh_in_axes = EvaluationPlan.from_axis_resources(
+      axis_resources, resource_env, global_axis_sizes,
+      in_positional_semantics).to_mesh_axes(in_axes_flat)
+  for arg, xmap_array_mapping in safe_zip(args_flat, mesh_in_axes):
+    if isinstance(arg, GlobalDeviceArray):
+      if arg.mesh != resource_env.physical_mesh:
+        raise ValueError("xmap's mesh and GDA's mesh should be equal. Got Xmap "
+                         f"mesh: {resource_env.physical_mesh},\n"
+                         f"GDA mesh: {arg.mesh}")
+
+      gda_array_mapping = _get_array_mapping(arg.mesh_axes)
+      if gda_array_mapping != xmap_array_mapping:
+        raise ValueError(
+            "Got an input GDA to xmap with different partitioning than "
+            "specified in xmap. The partitioning must match. "
+            f"Got GDA spec: {pxla.array_mapping_to_axis_resources(gda_array_mapping)} and "
+            f"xmap spec: {pxla.array_mapping_to_axis_resources(xmap_array_mapping)} "
+            f"for GDA: {arg}")
+
+
 # TODO: We should relax this at least for "constructor primitives"
 #       such as axis_index or zeros.
 def _check_no_loop_collectives(jaxpr, loop_axis_resources):
@@ -2008,7 +2118,7 @@ def soft_pmap(fun: Callable, axis_name: Optional[AxisName] = None, in_axes=0
   @wraps(fun)
   def f_pmapped(*args, **kwargs):
     mesh_devices = np.array(xb.local_devices())
-    with mesh(mesh_devices, ['devices']):
+    with Mesh(mesh_devices, ['devices']):
       return xmap(fun, in_axes=in_axes, out_axes={0: axis_name},
                   axis_resources={axis_name: 'devices'})(*args, **kwargs)
   return f_pmapped

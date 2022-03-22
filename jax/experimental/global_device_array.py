@@ -27,7 +27,7 @@ from jax._src.api import device_put
 from jax.interpreters.sharded_jit import PartitionSpec
 
 Shape = Tuple[int, ...]
-MeshAxes = Sequence[Union[str, Tuple[str], None]]
+MeshAxes = PartitionSpec
 DeviceArray = xc.Buffer
 Device = xc.Device
 ArrayLike = Union[np.ndarray, DeviceArray]
@@ -46,25 +46,25 @@ def _convert_list_args_to_tuple(f):
   return wrapper
 
 
-def _canonicalize_mesh_axes(mesh_axes):
-  if not isinstance(mesh_axes, PartitionSpec):
-    pspec = PartitionSpec(*mesh_axes)
-  else:
-    pspec = mesh_axes
-  return pspec
-
-def _get_indices(global_shape: Shape, global_mesh: pxla.Mesh,
-                 mesh_axes: MeshAxes) -> Tuple[Index, ...]:
+def _get_array_mapping(mesh_axes):
   # Import here to avoid cyclic import error when importing gda in pjit.py.
   from jax.experimental.pjit import get_array_mapping, _prepare_axis_resources
 
-  pspec = _canonicalize_mesh_axes(mesh_axes)
-  parsed_pspec, _, _ = _prepare_axis_resources(pspec, "mesh_axes")
-  array_mapping = get_array_mapping(parsed_pspec)
+  parsed_pspec, _, _ = _prepare_axis_resources(mesh_axes, "GDA mesh_axes")
+  return get_array_mapping(parsed_pspec)
+
+
+def _get_sharding_spec(global_shape, global_mesh, mesh_axes):
+  array_mapping = _get_array_mapping(mesh_axes)
   # The dtype doesn't matter for creating sharding specs.
   aval = core.ShapedArray(global_shape, np.float32)
-  sharding_spec = pxla.mesh_sharding_specs(
-      global_mesh.shape, global_mesh.axis_names)(aval, array_mapping)
+  return pxla.mesh_sharding_specs(global_mesh.shape,
+                                  global_mesh.axis_names)(aval, array_mapping)
+
+
+def _get_indices(global_shape: Shape, global_mesh: pxla.Mesh,
+                 mesh_axes: MeshAxes) -> Tuple[Index, ...]:
+  sharding_spec = _get_sharding_spec(global_shape, global_mesh, mesh_axes)
   indices = pxla.spec_to_indices(global_shape, sharding_spec)
   return indices  # type: ignore
 
@@ -159,6 +159,9 @@ class GlobalDeviceArray:
 
   If you’re not already familiar with JAX’s multi-process programming model,
   please read https://jax.readthedocs.io/en/latest/multi_process.html.
+  You can also read about pjit (https://jax.readthedocs.io/en/latest/jax-101/08-pjit.html)
+  to learn about ``Mesh``, ``PartitionSpec`` and how arrays can be
+  partitioned or replicated.
 
   A GlobalDeviceArray (GDA) can be thought of as a view into a single logical
   array sharded across processes. The logical array is the “global” array, and
@@ -219,42 +222,54 @@ class GlobalDeviceArray:
     is_fully_replicated : True if the full array value is present on all devices
       of the global mesh.
 
-  Example::
+  Example:
 
-    # Logical mesh is (hosts, devices)
-    assert global_mesh.shape == {'x': 4, 'y': 8}
+    >>> from jax.experimental.maps import Mesh
+    >>> from jax.experimental import PartitionSpec as P
+    >>> import numpy as np
+    ...
+    >>> assert jax.device_count() == 8
+    >>> global_mesh = Mesh(np.array(jax.devices()).reshape(4, 2), ('x', 'y'))
+    >>> # Logical mesh is (hosts, devices)
+    >>> assert global_mesh.shape == {'x': 4, 'y': 2}
+    >>> global_input_shape = (8, 2)
+    >>> mesh_axes = P('x', 'y')
+    ...
+    >>> # Dummy example data; in practice we wouldn't necessarily materialize global data
+    >>> # in a single process.
+    >>> global_input_data = np.arange(
+    ...   np.prod(global_input_shape)).reshape(global_input_shape)
+    ...
+    >>> def get_local_data_slice(index):
+    ...  # index will be a tuple of slice objects, e.g. (slice(0, 16), slice(0, 4))
+    ...  # This method will be called per-local device from the GDA constructor.
+    ...  return global_input_data[index]
+    ...
+    >>> gda = GlobalDeviceArray.from_callback(
+    ...        global_input_shape, global_mesh, mesh_axes, get_local_data_slice)
+    >>> print(gda.shape)
+    (8, 2)
+    >>> print(gda.local_shards[0].data)  # Access the data on a single local device
+    [[0]
+     [2]]
+    >>> print(gda.local_shards[0].data.shape)
+    (2, 1)
+    >>> # Numpy-style index into the global array that this data shard corresponds to
+    >>> print(gda.local_shards[0].index)
+    (slice(0, 2, None), slice(0, 1, None))
 
-    global_input_shape = (64, 32)
-    mesh_axes = P('x', 'y')
+  GDAs can also be given as an input to pjit and you can get GDAs as output from pjit::
 
-    # Dummy example data; in practice we wouldn't necessarily materialize global data
-    # in a single process.
-    global_input_data = np.arange(
-        np.prod(global_input_shape)).reshape(global_input_shape)
+    # Allow pjit to output GDAs
+    jax.config.update('jax_parallel_functions_output_gda', True)
 
-    def get_local_data_slice(index):
-      # index will be a tuple of slice objects, e.g. (slice(0, 16), slice(0, 4))
-      # This method will be called per-local device from the GDA constructor.
-      return global_input_data[index]
-
-    gda = GlobalDeviceArray.from_callback(
-            global_input_shape, global_mesh, mesh_axes, get_local_data_slice)
-
-    f = pjit(lambda x: x @ x.T, out_axis_resources = P('y', 'x'))
-
-    with mesh(global_mesh.shape, global_mesh.axis_names):
+    f = pjit(lambda x: x @ x.T, in_axis_resources=P('x', 'y'), out_axis_resources = P('x', 'y'))
+    with global_mesh:
       out = f(gda)
-
-    print(type(out))  # GlobalDeviceArray
-    print(out.shape)  # global shape == (64, 64)
-    print(out.local_shards[0].data)  # Access the data on a single local device,
-                                    # e.g. for checkpointing
-    print(out.local_shards[0].data.shape)  # per-device shape == (8, 16)
-    print(out.local_shards[0].index) # Numpy-style index into the global array that
-                                    # this data shard corresponds to
 
     # `out` can be passed to another pjit call, out.local_shards can be used to
     # export the data to non-jax systems (e.g. for checkpointing or logging), etc.
+
   """
 
   def __init__(self, global_shape: Shape, global_mesh: pxla.Mesh,
@@ -282,10 +297,10 @@ class GlobalDeviceArray:
 
     self._local_shards = self._create_local_shards()
 
-    ss = get_shard_shape(self._global_shape, self._global_mesh, self._mesh_axes)
+    ss = get_shard_shape(self._global_shape, self._global_mesh, self.mesh_axes)
     assert all(db.shape == ss for db in device_buffers), (
         f"Expected shard shape {ss} doesn't match the device buffer "
-        f"shape {device_buffers[0].shape}")
+        f"shape, got: {[db.shape for db in device_buffers]}")
 
     dtype = device_buffers[0].dtype
     assert all(db.dtype == dtype for db in device_buffers), (
@@ -307,8 +322,8 @@ class GlobalDeviceArray:
 
   def __repr__(self):
     return (f'GlobalDeviceArray(shape={self.shape}, dtype={self.dtype}, '
-            f'global_mesh_shape={dict(self._global_mesh.shape)}, '
-            f'mesh_axes={self._mesh_axes})')
+            f'global_mesh_shape={dict(self.mesh.shape)}, '
+            f'mesh_axes={self.mesh_axes})')
 
   @property
   def shape(self) -> Shape:
@@ -323,6 +338,14 @@ class GlobalDeviceArray:
     return prod(self.shape)
 
   @property
+  def mesh(self):
+    return self._global_mesh
+
+  @property
+  def mesh_axes(self) -> MeshAxes:
+    return self._mesh_axes
+
+  @property
   def is_fully_replicated(self) -> bool:
     return self.shape == self.local_data(0).shape
 
@@ -331,34 +354,33 @@ class GlobalDeviceArray:
       global_indices_rid = self._gda_fast_path_args.global_indices_replica_ids
     else:
       global_indices_rid = get_shard_indices_replica_ids(
-        self._global_shape, self._global_mesh, self._mesh_axes)
+        self._global_shape, self._global_mesh, self.mesh_axes)
 
     out = []
     for db in self._device_buffers:
+      if db.aval is None:
+        db.aval = core.ShapedArray(db.shape, db.dtype)
       device = db.device()
       index, rid = global_indices_rid[device]
       out.append(Shard(device, index, rid, db))
     return out
 
-
-  @pxla.maybe_cached_property
+  @property
   def local_shards(self) -> Sequence[Shard]:
-    for s in self._local_shards:
-      # Ignore the type because mypy thinks data is None but local_shards
-      # cannot have data=None which is checked in `_create_local_shards`.
-      if s.data.aval is None:  # type: ignore
-        s.data.aval = core.ShapedArray(s.data.shape, s.data.dtype)  # type: ignore
     return self._local_shards
 
-  @pxla.maybe_cached_property
+  @property
   def global_shards(self) -> Sequence[Shard]:
+    if self.mesh.size == len(self._local_devices):
+      return self.local_shards
+
     # Populating global_shards lazily (i.e. when requested) because populating
     # sthem eagerly leads to a performance regression when training on large
     # models.
     # Also as this a cached property, once calculated, it should be cached. So
     # multiple accesses should be cheap.
     global_indices_rid = get_shard_indices_replica_ids(
-        self._global_shape, self._global_mesh, self._mesh_axes)
+        self._global_shape, self._global_mesh, self.mesh_axes)
     device_to_buffer = dict((db.device(), db) for db in self._device_buffers)
     global_shards = []
     for device, (index, rid) in global_indices_rid.items():
@@ -373,6 +395,11 @@ class GlobalDeviceArray:
   def local_data(self, index) -> DeviceArray:
     return self.local_shards[index].data
 
+  def block_until_ready(self):
+    for s in self.local_shards:
+      s.data.block_until_ready()
+    return self
+
   @classmethod
   def from_callback(cls, global_shape: Shape, global_mesh: pxla.Mesh,
                     mesh_axes: MeshAxes, data_callback: Callable[[Index],
@@ -381,13 +408,23 @@ class GlobalDeviceArray:
 
     ``data_callback`` is used to fetch the data for each local slice of the returned GlobalDeviceArray.
 
-    Example::
+    Example:
 
-      global_input_shape = (8, 2)
-      global_input_data = np.arange(prod(global_input_shape)).reshape(global_input_shape)
-      def cb(index):
-        return global_input_data[index]
-      gda = GlobalDeviceArray.from_callback(global_input_shape, global_mesh, mesh_axes, cb)
+      >>> from jax.experimental.maps import Mesh
+      >>> from jax.experimental import PartitionSpec as P
+      >>> import numpy as np
+      ...
+      >>> global_input_shape = (8, 8)
+      >>> mesh_axes = P('x', 'y')
+      >>> global_mesh = global_mesh = Mesh(np.array(jax.devices()).reshape(2, 4), ('x', 'y'))
+      >>> global_input_data = np.arange(prod(global_input_shape)).reshape(global_input_shape)
+      ...
+      >>> def cb(index):
+      ...  return global_input_data[index]
+      ...
+      >>> gda = GlobalDeviceArray.from_callback(global_input_shape, global_mesh, mesh_axes, cb)
+      >>> gda.local_data(0).shape
+      (4, 2)
 
     Args:
       global_shape : The global shape of the array
@@ -418,15 +455,24 @@ class GlobalDeviceArray:
     Like ``from_callback``, except the callback function is called only once to fetch all data
     local to this process.
 
-    Example::
+    Example:
 
-      global_input_shape = (8, 2)
-      global_input_data = np.arange(
-            prod(global_input_shape)).reshape(global_input_shape)
-      def batched_cb(indices):
-        self.assertEqual(len(indices),len(global_mesh.local_devices))
-        return [global_input_data[index] for index in indices]
-      gda = GlobalDeviceArray.from_batched_callback(global_input_shape, global_mesh, mesh_axes, batched_cb)
+      >>> from jax.experimental.maps import Mesh
+      >>> from jax.experimental import PartitionSpec as P
+      >>> import numpy as np
+      ...
+      >>> global_input_shape = (8, 2)
+      >>> mesh_axes = P('x')
+      >>> global_mesh = global_mesh = Mesh(np.array(jax.devices()).reshape(4, 2), ('x', 'y'))
+      >>> global_input_data = np.arange(prod(global_input_shape)).reshape(global_input_shape)
+      ...
+      >>> def batched_cb(indices):
+      ...   assert len(indices) == len(global_mesh.local_devices)
+      ...   return [global_input_data[index] for index in indices]
+      ...
+      >>> gda = GlobalDeviceArray.from_batched_callback(global_input_shape, global_mesh, mesh_axes, batched_cb)
+      >>> gda.local_data(0).shape
+      (2, 2)
 
     Args:
       global_shape : The global shape of the array
@@ -456,19 +502,29 @@ class GlobalDeviceArray:
 
     Like ``from_batched_callback``, except the callback function is responsible for returning on-device data (e.g. by calling ``jax.device_put``).
 
-    Example::
+    Example:
 
-      global_input_shape = (8, 2)
-      global_input_data = np.arange(prod(global_input_shape), dtype=np.float32).reshape(global_input_shape)
-      def cb(cb_inp):
-        self.assertLen(cb_inp, len(global_mesh.local_devices))
-        dbs = []
-        for inp in cb_inp:
-          index, devices = inp
-          array = global_input_data[index]
-          dbs.extend([jax.device_put(array, device) for device in devices])
-        return dbs
-      gda = GlobalDeviceArray.from_batched_callback_with_devices(global_input_shape, global_mesh, mesh_axes, cb)
+      >>> from jax.experimental.maps import Mesh
+      >>> from jax.experimental import PartitionSpec as P
+      >>> import numpy as np
+      ...
+      >>> global_input_shape = (8, 2)
+      >>> mesh_axes = P(('x', 'y'))
+      >>> global_mesh = global_mesh = Mesh(np.array(jax.devices()).reshape(4, 2), ('x', 'y'))
+      >>> global_input_data = np.arange(prod(global_input_shape)).reshape(global_input_shape)
+      ...
+      >>> def cb(cb_inp):
+      ...  dbs = []
+      ...  for inp in cb_inp:
+      ...    index, devices = inp
+      ...    array = global_input_data[index]
+      ...    dbs.extend([jax.device_put(array, device) for device in devices])
+      ...  return dbs
+      ...
+      >>> gda = GlobalDeviceArray.from_batched_callback_with_devices(
+      ...   global_input_shape, global_mesh, mesh_axes, cb)
+      >>> gda.local_data(0).shape
+      (1, 2)
 
     Args:
       global_shape : The global shape of the array

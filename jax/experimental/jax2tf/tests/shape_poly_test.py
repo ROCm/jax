@@ -30,6 +30,7 @@ from jax import lax
 from jax import linear_util as lu
 import jax.numpy as jnp
 from jax._src import test_util as jtu
+from jax._src.lax import lax as lax_internal
 from jax._src.lax import control_flow as lax_control_flow
 from jax._src import util
 import numpy as np
@@ -1073,6 +1074,27 @@ class DimAsValueTest(tf_test_util.JaxToTfTestCase):
         "Shapes must be 1D sequences of concrete values of integer type"):
       core.dimension_as_value(np.float32(1))
 
+  def test_error_jax_value(self):
+
+    x = np.ones([3, 5], dtype=np.float32)
+
+    with self.assertRaisesRegex(
+        core.InconclusiveDimensionOperation,
+        "Dimension polynomial 'b' used in a context that requires a constant"):
+      self.CheckShapePolymorphism(
+          # Cannot use dimension variable as a JAX value
+          lambda x: jnp.array(x.shape[0]),
+          input_signature=[tf.TensorSpec([None, 5], dtype=x.dtype)],
+          polymorphic_shapes=[("b, _")],
+          expected_output_signature=tf.TensorSpec([]))
+
+    self.CheckShapePolymorphism(
+        # We can convert a dimension variable to a JAX value
+        lambda x: jnp.array(core.dimension_as_value(x.shape[0])),
+        input_signature=[tf.TensorSpec([None, 5], dtype=x.dtype)],
+        polymorphic_shapes=[("b, _")],
+        expected_output_signature=tf.TensorSpec([]))
+
 ###
 ### We define primitive harnesses for which we will test shape-polymorphic
 ### conversion.
@@ -1252,7 +1274,7 @@ _POLY_SHAPE_TEST_HARNESSES = [
                   [RandArg((3, 4, 5), _f32)],
                   poly_axes=[0]),
     _make_harness("delta", "0",
-                  lambda x: lax._delta(_f32, x.shape, axes=(0, 1)),
+                  lambda x: lax_internal._delta(_f32, x.shape, axes=(0, 1)),
                   [RandArg((3, 4), _f32)],
                   poly_axes=[0]),
     _make_harness("dot_general", "",
@@ -1623,6 +1645,14 @@ _POLY_SHAPE_TEST_HARNESSES = [
                   lambda a, i: jnp.take(a, i, axis=1),
                   [RandArg((3, 4, 5), _f32), np.array([1, 2], np.int32)],
                   poly_axes=[0, None], enable_and_diable_xla=True),
+    _make_harness("take_along_axis", "0",
+                  lambda x, y: jnp.take_along_axis(x, y, axis=0),
+                  [RandArg((5, 2), _f32), RandArg((5, 1), _f32)],
+                  poly_axes=[0, 0]),
+    _make_harness("take_along_axis", "1",
+                  lambda x, y: jnp.take_along_axis(x, y, axis=1),
+                  [RandArg((5, 2), _f32), RandArg((5, 1), _f32)],
+                  poly_axes=[0, 0]),
     _make_harness("tile", "0",
                   lambda x: jnp.tile(x, (1, 2)),
                   [RandArg((4, 3), _f32)],
@@ -1681,7 +1711,7 @@ def _add_vmap_primitive_harnesses():
   device = jtu.device_under_test()
 
   for h in all_h:
-    # Drop the the JAX limitations
+    # Drop the JAX limitations
     if not h.filter(device_under_test=device, include_jax_unimpl=False):
       continue
     # And the jax2tf limitations that are known to result in TF error.
@@ -1788,7 +1818,7 @@ class ShapePolyPrimitivesTest(tf_test_util.JaxToTfTestCase):
   # to parameterized below.
   @primitive_harness.parameterized(
       _flatten_harnesses(_POLY_SHAPE_TEST_HARNESSES),
-      #one_containing="reshape_1_poly_axes=[(0, 1)]"
+      #one_containing="take_along_axis_1_poly_axes=[0, 0]"
   )
   def test_prim(self, harness: Harness):
     args = harness.dyn_args_maker(self.rng())

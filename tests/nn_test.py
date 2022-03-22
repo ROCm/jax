@@ -35,7 +35,6 @@ from jax.config import config
 config.parse_flags_with_absl()
 
 
-@jtu.with_config(jax_numpy_rank_promotion="raise")
 class NNFunctionsTest(jtu.JaxTestCase):
   @jtu.skip_on_flag("jax_skip_slow_tests", True)
   def testSoftplusGrad(self):
@@ -82,7 +81,7 @@ class NNFunctionsTest(jtu.JaxTestCase):
     self.assertAllClose(val, 1e4, check_dtypes=False)
 
   def testGluValue(self):
-    val = nn.glu(jnp.array([1.0, 0.0]))
+    val = nn.glu(jnp.array([1.0, 0.0]), axis=0)
     self.assertAllClose(val, jnp.array([0.5]))
 
   @parameterized.parameters(False, True)
@@ -230,7 +229,7 @@ INITIALIZER_RECS = [
     initializer_record("delta_orthogonal", nn.initializers.delta_orthogonal, jtu.dtypes.floating, 4, 4)
 ]
 
-@jtu.with_config(jax_numpy_rank_promotion="raise")
+
 class NNInitializersTest(jtu.JaxTestCase):
   @parameterized.named_parameters(jtu.cases_from_list(
       {"testcase_name":

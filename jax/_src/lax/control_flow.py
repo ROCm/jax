@@ -347,8 +347,9 @@ def _while_loop_translation_rule(ctx, avals_in, avals_out, *args, cond_jaxpr,
   cond_carry = xla.parameter(cond_c, 0, c.get_shape(init_carry))
   cond_carry_elts = [xops.GetTupleElement(cond_carry, i) for i in range(len(args))]
   x, _, z = split_list(cond_carry_elts, [cond_nconsts, body_nconsts])
+  name_stack = extend_name_stack(ctx.name_stack, 'while')
   cond_ctx = ctx.replace(builder=cond_c,
-                         name_stack=extend_name_stack(ctx.name_stack, 'cond'))
+                         name_stack=extend_name_stack(name_stack, 'cond'))
   pred, = xla.jaxpr_subcomp(
       cond_ctx, cond_jaxpr.jaxpr,
       _map(partial(xla.pyval_to_ir_constant, cond_c), cond_jaxpr.consts),
@@ -365,14 +366,14 @@ def _while_loop_translation_rule(ctx, avals_in, avals_out, *args, cond_jaxpr,
   body_carry_elts = [xops.GetTupleElement(body_carry, i) for i in range(len(args))]
   x, y, z = split_list(body_carry_elts, [cond_nconsts, body_nconsts])
   body_ctx = ctx.replace(builder=body_c,
-                         name_stack=extend_name_stack(ctx.name_stack, 'body'))
+                         name_stack=extend_name_stack(name_stack, 'body'))
   new_z = xla.jaxpr_subcomp(
       body_ctx, body_jaxpr.jaxpr,
       _map(partial(xla.pyval_to_ir_constant, body_c), body_jaxpr.consts),
       *(y + z))
   if batched:
     body_pred_ctx = body_ctx.replace(
-        name_stack=extend_name_stack(ctx.name_stack, 'body_pred'))
+        name_stack=extend_name_stack(name_stack, 'body_pred'))
     body_pred, = xla.jaxpr_subcomp(
         body_pred_ctx, cond_jaxpr.jaxpr,
         _map(partial(xla.pyval_to_ir_constant, body_c), cond_jaxpr.consts),
@@ -643,167 +644,75 @@ def _pred_bcast_select_mhlo(
     return mhlo.SelectOp(bcast_pred, x, y).results
 
 
-if jax._src.lib._xla_extension_version < 48:
+def _while_lowering(ctx, *args, cond_jaxpr, body_jaxpr, cond_nconsts,
+                    body_nconsts):
+  pred_aval = cond_jaxpr.out_avals[0]
+  batched = bool(pred_aval.shape)
 
-  def _while_lowering(ctx, *args, cond_jaxpr, body_jaxpr, cond_nconsts,
-                      body_nconsts):
-    pred_aval = cond_jaxpr.out_avals[0]
-    batched = bool(pred_aval.shape)
+  loop_carry_types = _map(mlir.aval_to_ir_types, ctx.avals_in)
+  flat_loop_carry_types = util.flatten(loop_carry_types)
 
-    # Since jaxprs don't have tuples and have multiple return values, but we need
-    # the HLO While loop to take a single tuple input and output a single boolean
-    # (for the cond computation) or a single tuple output (for the body
-    # computation), we build XLA computations that handle the tuple munging before
-    # generating a Call into the computations formed from the jaxprs.
+  flat_args = mlir.flatten_lowering_ir_args(args)
+  while_op = mhlo.WhileOp(flat_loop_carry_types, flat_args)
 
-    loop_carry_types = _map(mlir.aval_to_ir_types, ctx.avals_in)
-    flat_loop_carry_types = util.flatten(loop_carry_types)
-    loop_carry_tuple_type = ir.TupleType.get_tuple(flat_loop_carry_types)
+  # Loop condition
+  cond_block = while_op.regions[0].blocks.append(*flat_loop_carry_types)
+  with ir.InsertionPoint(cond_block):
+    flat_cond_args = [
+        cond_block.arguments[i] for i in range(len(flat_loop_carry_types))
+    ]
+    cond_args = util.unflatten(flat_cond_args, _map(len, loop_carry_types))
+    x, _, z = util.split_list(cond_args, [cond_nconsts, body_nconsts])
+    cond_ctx = ctx.module_context.replace(
+        name_stack=xla.extend_name_stack(ctx.module_context.name_stack,
+                                         'cond'))
+    (pred,), = mlir.jaxpr_subcomp(cond_ctx, cond_jaxpr.jaxpr,
+                                  _map(mlir.ir_constants, cond_jaxpr.consts),
+                                  *(x + z))
+    if batched:
+      pred_ctx = mlir.LoweringRuleContext(
+          module_context=ctx.module_context,
+          primitive=None,
+          avals_in=[pred_aval],
+          avals_out=[pred_aval.update(shape=())])
+      pred, = lax._unary_reduce_lower(
+          mhlo.OrOp,
+          lambda dtype: np.array(False, dtype),
+          pred_ctx,
+          pred,
+          axes=tuple(range(len(pred_aval.shape))))
+    mhlo.ReturnOp([pred])
 
-    flat_args = mlir.flatten_lowering_ir_args(args)
-    init_carry = mhlo.TupleOp(loop_carry_tuple_type, flat_args)
-    while_op = mhlo.WhileOp([loop_carry_tuple_type], [init_carry.result])
-
-    # Loop condition
-    cond_block = while_op.regions[0].blocks.append(loop_carry_tuple_type)
-    with ir.InsertionPoint(cond_block):
-      flat_cond_args = [
-          mhlo.GetTupleElementOp(input_type, cond_block.arguments[0],
-                                 mlir.i32_attr(i)).result
-          for i, input_type in enumerate(flat_loop_carry_types)
-      ]
-      cond_args = util.unflatten(flat_cond_args, _map(len, loop_carry_types))
-      x, _, z = util.split_list(cond_args, [cond_nconsts, body_nconsts])
-      cond_ctx = ctx.module_context.replace(
+  # Loop body
+  body_block = while_op.regions[1].blocks.append(*flat_loop_carry_types)
+  with ir.InsertionPoint(body_block):
+    flat_body_args = [
+        body_block.arguments[i] for i in range(len(flat_loop_carry_types))
+    ]
+    body_args = util.unflatten(flat_body_args, _map(len, loop_carry_types))
+    x, y, z = util.split_list(body_args, [cond_nconsts, body_nconsts])
+    body_ctx = ctx.module_context.replace(
+        name_stack=xla.extend_name_stack(ctx.module_context.name_stack,
+                                         'body'))
+    new_z = mlir.jaxpr_subcomp(body_ctx, body_jaxpr.jaxpr,
+                               _map(mlir.ir_constants, body_jaxpr.consts),
+                               *(y + z))
+    if batched:
+      body_pred_ctx = ctx.module_context.replace(
           name_stack=xla.extend_name_stack(ctx.module_context.name_stack,
-                                           'cond'))
-      (pred,), = mlir.jaxpr_subcomp(cond_ctx, cond_jaxpr.jaxpr,
-                                    _map(mlir.ir_constants, cond_jaxpr.consts),
-                                    *(x + z))
-      if batched:
-        pred_ctx = mlir.LoweringRuleContext(
-            module_context=ctx.module_context,
-            primitive=None,
-            avals_in=[pred_aval],
-            avals_out=[pred_aval.update(shape=())])
-        pred, = lax._unary_reduce_lower(
-            mhlo.OrOp,
-            lambda dtype: np.array(False, dtype),
-            pred_ctx,
-            pred,
-            axes=tuple(range(len(pred_aval.shape))))
-      mhlo.ReturnOp([pred])
+                                           'body_pred'))
+      (body_pred,), = mlir.jaxpr_subcomp(
+          body_pred_ctx, cond_jaxpr.jaxpr,
+          _map(mlir.ir_constants, cond_jaxpr.consts), *(x + z))
+      new_z = _map(
+          partial(_pred_bcast_select_mhlo, pred_aval, body_pred), new_z, z,
+          body_jaxpr.out_avals)
 
-    # Loop body
-    body_block = while_op.regions[1].blocks.append(loop_carry_tuple_type)
-    with ir.InsertionPoint(body_block):
-      flat_body_args = [
-          mhlo.GetTupleElementOp(input_type, body_block.arguments[0],
-                                 mlir.i32_attr(i)).result
-          for i, input_type in enumerate(flat_loop_carry_types)
-      ]
-      body_args = util.unflatten(flat_body_args, _map(len, loop_carry_types))
-      x, y, z = util.split_list(body_args, [cond_nconsts, body_nconsts])
-      body_ctx = ctx.module_context.replace(
-          name_stack=xla.extend_name_stack(ctx.module_context.name_stack,
-                                           'body'))
-      new_z = mlir.jaxpr_subcomp(body_ctx, body_jaxpr.jaxpr,
-                                 _map(mlir.ir_constants, body_jaxpr.consts),
-                                 *(y + z))
-      if batched:
-        body_pred_ctx = ctx.module_context.replace(
-            name_stack=xla.extend_name_stack(ctx.module_context.name_stack,
-                                             'body_pred'))
-        (body_pred,), = mlir.jaxpr_subcomp(
-            body_pred_ctx, cond_jaxpr.jaxpr,
-            _map(mlir.ir_constants, cond_jaxpr.consts), *(x + z))
-        new_z = _map(
-            partial(_pred_bcast_select_mhlo, pred_aval, body_pred), new_z, z,
-            body_jaxpr.out_avals)
+    mhlo.ReturnOp([*util.flatten(x), *util.flatten(y), *util.flatten(new_z)])
 
-      new_carry = mhlo.TupleOp(
-          loop_carry_tuple_type,
-          [*util.flatten(x), *util.flatten(y), *util.flatten(new_z)])
-      mhlo.ReturnOp([new_carry.result])
-
-    outputs = util.unflatten([
-        mhlo.GetTupleElementOp(output_type, while_op.result,
-                               mlir.i32_attr(i)).result
-        for i, output_type in enumerate(flat_loop_carry_types)
-    ], _map(len, loop_carry_types))
-    _, _, z = util.split_list(outputs, [cond_nconsts, body_nconsts])
-    return z
-else:
-
-  def _while_lowering(ctx, *args, cond_jaxpr, body_jaxpr, cond_nconsts,
-                      body_nconsts):
-    pred_aval = cond_jaxpr.out_avals[0]
-    batched = bool(pred_aval.shape)
-
-    loop_carry_types = _map(mlir.aval_to_ir_types, ctx.avals_in)
-    flat_loop_carry_types = util.flatten(loop_carry_types)
-
-    flat_args = mlir.flatten_lowering_ir_args(args)
-    while_op = mhlo.WhileOp(flat_loop_carry_types, flat_args)
-
-    # Loop condition
-    cond_block = while_op.regions[0].blocks.append(*flat_loop_carry_types)
-    with ir.InsertionPoint(cond_block):
-      flat_cond_args = [
-          cond_block.arguments[i] for i in range(len(flat_loop_carry_types))
-      ]
-      cond_args = util.unflatten(flat_cond_args, _map(len, loop_carry_types))
-      x, _, z = util.split_list(cond_args, [cond_nconsts, body_nconsts])
-      cond_ctx = ctx.module_context.replace(
-          name_stack=xla.extend_name_stack(ctx.module_context.name_stack,
-                                           'cond'))
-      (pred,), = mlir.jaxpr_subcomp(cond_ctx, cond_jaxpr.jaxpr,
-                                    _map(mlir.ir_constants, cond_jaxpr.consts),
-                                    *(x + z))
-      if batched:
-        pred_ctx = mlir.LoweringRuleContext(
-            module_context=ctx.module_context,
-            primitive=None,
-            avals_in=[pred_aval],
-            avals_out=[pred_aval.update(shape=())])
-        pred, = lax._unary_reduce_lower(
-            mhlo.OrOp,
-            lambda dtype: np.array(False, dtype),
-            pred_ctx,
-            pred,
-            axes=tuple(range(len(pred_aval.shape))))
-      mhlo.ReturnOp([pred])
-
-    # Loop body
-    body_block = while_op.regions[1].blocks.append(*flat_loop_carry_types)
-    with ir.InsertionPoint(body_block):
-      flat_body_args = [
-          body_block.arguments[i] for i in range(len(flat_loop_carry_types))
-      ]
-      body_args = util.unflatten(flat_body_args, _map(len, loop_carry_types))
-      x, y, z = util.split_list(body_args, [cond_nconsts, body_nconsts])
-      body_ctx = ctx.module_context.replace(
-          name_stack=xla.extend_name_stack(ctx.module_context.name_stack,
-                                           'body'))
-      new_z = mlir.jaxpr_subcomp(body_ctx, body_jaxpr.jaxpr,
-                                 _map(mlir.ir_constants, body_jaxpr.consts),
-                                 *(y + z))
-      if batched:
-        body_pred_ctx = ctx.module_context.replace(
-            name_stack=xla.extend_name_stack(ctx.module_context.name_stack,
-                                             'body_pred'))
-        (body_pred,), = mlir.jaxpr_subcomp(
-            body_pred_ctx, cond_jaxpr.jaxpr,
-            _map(mlir.ir_constants, cond_jaxpr.consts), *(x + z))
-        new_z = _map(
-            partial(_pred_bcast_select_mhlo, pred_aval, body_pred), new_z, z,
-            body_jaxpr.out_avals)
-
-      mhlo.ReturnOp([*util.flatten(x), *util.flatten(y), *util.flatten(new_z)])
-
-    outputs = util.unflatten(while_op.results, _map(len, loop_carry_types))
-    _, _, z = util.split_list(outputs, [cond_nconsts, body_nconsts])
-    return z
+  outputs = util.unflatten(while_op.results, _map(len, loop_carry_types))
+  _, _, z = util.split_list(outputs, [cond_nconsts, body_nconsts])
+  return z
 
 mlir.register_lowering(while_p, _while_lowering)
 
@@ -1201,9 +1110,11 @@ def _cond_partial_eval(trace, *tracers, branches, linear):
 
   linear_2 = (False,) * num_res + linear
   params = dict(branches=branches_2, linear=linear_2)
+  name_stack = source_info_util.current_name_stack()[len(trace.name_stack):]
+  source = source_info_util.current().replace(name_stack=name_stack)
   eqn = pe.new_eqn_recipe(
       [index_tracer] + res_tracers + ops_tracers, out_tracers, cond_p, params,
-      source_info_util.current())
+      source)
   for t in out_tracers: t.recipe = eqn
   return out_tracers
 
@@ -1297,7 +1208,7 @@ def _transpose_cond_jaxpr(jaxpr, num_res, reduce_axes):
     res, cts_out = split_list(args, [num_res])
     primals = res + [ad.UndefinedPrimal(aval) for aval in primal_avals]
     cts_in = ad.backward_pass(
-        jaxpr.jaxpr, reduce_axes, jaxpr.consts, primals, cts_out)
+        jaxpr.jaxpr, reduce_axes, False, jaxpr.consts, primals, cts_out)
     _, cts_in = split_list(cts_in, [num_res])
     return _map(ad.instantiate_zeros_aval, primal_avals, cts_in)
 
@@ -1405,67 +1316,28 @@ core.custom_typechecks[cond_p] = _cond_typecheck
 pe.partial_eval_jaxpr_custom_rules[cond_p] = \
     partial(pe.partial_eval_jaxpr_custom_rule_not_implemented, 'cond')
 
-if jax._src.lib._xla_extension_version < 51:
+def _cond_lowering(ctx, index, *args, branches, linear):
+  del linear  # Unused.
+  output_types = _map(mlir.aval_to_ir_types, ctx.avals_out)
+  flat_output_types = util.flatten(output_types)
 
-  def _cond_lowering(ctx, index, *args, branches, linear):
-    del linear  # Unused.
-    arg_avals = ctx.avals_in[1:]
-    input_types = _map(mlir.aval_to_ir_types, arg_avals)
-    output_types = _map(mlir.aval_to_ir_types, ctx.avals_out)
-    flat_input_types = util.flatten(input_types)
-    flat_output_types = util.flatten(output_types)
-    input_tuple_type = ir.TupleType.get_tuple(flat_input_types)
-    output_tuple_type = ir.TupleType.get_tuple(flat_output_types)
-    op = mhlo.TupleOp(input_tuple_type,
-                      mlir.flatten_lowering_ir_args(args)).result
-    # TODO(phawkins): avoid build_generic when CaseOp is fixed.
-    case_op = mhlo.CaseOp.build_generic([output_tuple_type],
-                                        [index] + [op] * len(branches),
-                                        regions=len(branches))
-    for i, jaxpr in enumerate(branches):
-      branch = case_op.regions[i].blocks.append(input_tuple_type)
-      with ir.InsertionPoint(branch):
-        args = [
-            mhlo.GetTupleElementOp(input_type, branch.arguments[0],
-                                   mlir.i32_attr(i)).result
-            for i, input_type in enumerate(flat_input_types)
-        ]
-        unflattened_args = util.unflatten(args, _map(len, input_types))
-        out_vals = mlir.jaxpr_subcomp(ctx.module_context, jaxpr.jaxpr,
-                                      jaxpr.consts, *unflattened_args)
-        out = mhlo.TupleOp(output_tuple_type, util.flatten(out_vals)).results
-        mhlo.ReturnOp(out)
+  # mhlo.CaseOp takes a single argument 'index' and the corresponding blocks
+  # have no arguments; the computation within the block uses implicit
+  # captures.
 
-    results = [
-        mhlo.GetTupleElementOp(output_type, case_op.result,
-                               mlir.i32_attr(i)).result
-        for i, output_type in enumerate(flat_output_types)
-    ]
-    return util.unflatten(results, _map(len, output_types))
+  # TODO(phawkins): avoid build_generic when CaseOp is fixed.
+  case_op = mhlo.CaseOp.build_generic(
+      flat_output_types, [index], regions=len(branches))
+  for i, jaxpr in enumerate(branches):
+    branch = case_op.regions[i].blocks.append()
+    with ir.InsertionPoint(branch):
+      out_vals = mlir.jaxpr_subcomp(
+          ctx.module_context, jaxpr.jaxpr,
+          _map(mlir.ir_constants, jaxpr.consts),
+          *_map(mlir.wrap_singleton_ir_values, args))
+      mhlo.ReturnOp(util.flatten(out_vals))
 
-else:
-
-  def _cond_lowering(ctx, index, *args, branches, linear):
-    del linear  # Unused.
-    output_types = _map(mlir.aval_to_ir_types, ctx.avals_out)
-    flat_output_types = util.flatten(output_types)
-
-    # mhlo.CaseOp takes a single argument 'index' and the corresponding blocks
-    # have no arguments; the computation within the block uses implicit
-    # captures.
-
-    # TODO(phawkins): avoid build_generic when CaseOp is fixed.
-    case_op = mhlo.CaseOp.build_generic(
-        flat_output_types, [index], regions=len(branches))
-    for i, jaxpr in enumerate(branches):
-      branch = case_op.regions[i].blocks.append()
-      with ir.InsertionPoint(branch):
-        out_vals = mlir.jaxpr_subcomp(
-            ctx.module_context, jaxpr.jaxpr, jaxpr.consts,
-            *_map(mlir.wrap_singleton_ir_values, args))
-        mhlo.ReturnOp(util.flatten(out_vals))
-
-    return util.unflatten(case_op.results, _map(len, output_types))
+  return util.unflatten(case_op.results, _map(len, output_types))
 
 mlir.register_lowering(cond_p, _cond_lowering)
 
@@ -1924,9 +1796,10 @@ def _scan_partial_eval(trace, *tracers, reverse, length, num_consts, num_carry,
                      for uk, t in zip(unknowns[:num_consts], tracers[:num_consts])]
   other_pvals = [pe.PartialVal.unknown(a) for a in jaxpr_1.in_avals[num_consts:]]
   in_pvals_1 = invariant_pvals + other_pvals
-  jaxpr_1_opt, out_pvals_1, consts_1 = pe.trace_to_jaxpr(
-      lu.wrap_init(core.jaxpr_as_fun(jaxpr_1)), in_pvals_1,
-      instantiate=[True] * (num_carry + num_ys) + [False] * num_res)
+  with source_info_util.reset_name_stack():
+    jaxpr_1_opt, out_pvals_1, consts_1 = pe.trace_to_jaxpr(
+        lu.wrap_init(core.jaxpr_as_fun(jaxpr_1)), in_pvals_1,
+        instantiate=[True] * (num_carry + num_ys) + [False] * num_res)
   jaxpr_1_opt = pe.ClosedJaxpr(pe.convert_constvars_jaxpr(jaxpr_1_opt), ())
   num_consts_1 = num_consts + len(consts_1)
   # any now-known residuals are intensive, so we want to revise jaxpr_2 to take
@@ -1990,6 +1863,8 @@ def _scan_partial_eval(trace, *tracers, reverse, length, num_consts, num_carry,
   ext_res_tracers = _map(trace.new_instantiated_const, extensive_residuals)
   out_tracers = [pe.JaxprTracer(trace, pe.PartialVal((pv, const)), None)
                  for pv, const in zip(out_pvs, out_consts)]
+  name_stack = source_info_util.current_name_stack()[len(trace.name_stack):]
+  source = source_info_util.current().replace(name_stack=name_stack)
   linear_2 = ([False] * len(int_res_tracers) +
               [lin or not uk for uk, lin in zip(unknowns, linear)] +
               [False] * len(ext_res_tracers))
@@ -1999,7 +1874,7 @@ def _scan_partial_eval(trace, *tracers, reverse, length, num_consts, num_carry,
                                num_consts=num_consts_2,
                                num_carry=num_carry, linear=tuple(linear_2),
                                unroll=unroll),
-                          source_info_util.current())
+                          source)
   for t in out_tracers: t.recipe = eqn
   return out_tracers
 
@@ -2068,7 +1943,7 @@ def _transpose_scan_jaxpr(num_res1, num_c, num_res2, jaxpr, reduce_axes):
         res1_cbar_bbar_res2, [num_res1, num_c, num_b])
     primals = (res1 + [ad.UndefinedPrimal(aval) for aval in c_avals] +
                [ad.UndefinedPrimal(aval) for aval in a_avals] + res2)
-    cbar_abar = ad.backward_pass(jaxpr.jaxpr, reduce_axes, jaxpr.consts,
+    cbar_abar = ad.backward_pass(jaxpr.jaxpr, reduce_axes, False, jaxpr.consts,
                                  primals, b_bar)
     _, new_c_bar, a_bar, _ = split_list(cbar_abar, [num_res1, num_c, num_a])
     a_bar = _map(ad.instantiate_zeros_aval, a_avals, a_bar)
@@ -3084,6 +2959,12 @@ def _remat_translation_using_while(*args,
   carry_res = while_loop(cond, body, carry_init)
   return carry_res[1]
 
+
+def _remat_translation_using_opt_barrier(*args, jaxpr: core.Jaxpr):
+  args = _optimization_barrier(args)
+  return core.eval_jaxpr(jaxpr, (), *args)
+
+
 def _remat_translation_rule(*args,
                             call_jaxpr: Optional[core.Jaxpr] = None,
                             jaxpr: Optional[core.Jaxpr] = None,
@@ -3104,6 +2985,8 @@ def _remat_translation_rule(*args,
   if differentiated and prevent_cse:
     if platform == "gpu":
       translation_rule = _remat_translation_using_while
+    elif platform == "tpu" and config.jax_remat_opt_barrier:
+      translation_rule = _remat_translation_using_opt_barrier
     else:
       translation_rule = _remat_translation_using_cond
   else:
@@ -3122,4 +3005,39 @@ for platform in ("cpu", "gpu", "tpu"):
     mlir.register_lowering(remat_primitive,
                            mlir.lower_fun(partial(_remat_translation_rule,
                                                    platform=platform),
-                                          multiple_results=True))
+                                          multiple_results=True),
+                           platform=platform)
+
+
+def _optimization_barrier_abstract_eval(*args):
+  return args
+
+
+def _optimization_barrier_translation_rule(ctx, avals_in, avals_out, *args):
+  out = xops.OptimizationBarrier(xops.Tuple(ctx.builder, args))
+  return [xops.GetTupleElement(out, i) for i in range(len(args))]
+
+
+def _optimization_barrier_lowering_rule(ctx, *args):
+  barrier_types = _map(mlir.aval_to_ir_types, ctx.avals_in)
+  flat_barrier_types = util.flatten(barrier_types)
+
+  flat_args = mlir.flatten_lowering_ir_args(args)
+  barrier_op = mhlo.OptimizationBarrierOp(flat_barrier_types, flat_args)
+  return util.unflatten(barrier_op.results, _map(len, barrier_types))
+
+
+def _optimization_barrier(arg):
+  flat_args, treedef = tree_flatten(arg)
+  return tree_unflatten(treedef, optimization_barrier_p.bind(*flat_args))
+
+
+optimization_barrier_p = core.Primitive('optimization_barrier')
+optimization_barrier_p.multiple_results = True
+optimization_barrier_p.def_impl(
+    partial(xla.apply_primitive, optimization_barrier_p))
+optimization_barrier_p.def_abstract_eval(_optimization_barrier_abstract_eval)
+xla.register_translation(optimization_barrier_p,
+                         _optimization_barrier_translation_rule)
+mlir.register_lowering(optimization_barrier_p,
+                       _optimization_barrier_lowering_rule)

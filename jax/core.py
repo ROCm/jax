@@ -77,15 +77,20 @@ class Jaxpr:
     self.eqns = list(eqns)
 
   def __str__(self):
-    return str(pp_jaxpr(self, JaxprPpContext(), custom_pp_eqn_rules=True))
+    return str(pp_jaxpr(self, JaxprPpContext(), JaxprPpSettings()))
   __repr__ = __str__
 
   def pretty_print(self, *, source_info=False, print_shapes=True,
-                   custom_pp_eqn_rules=True, **kw):
-    doc = pp_jaxpr(self, JaxprPpContext(), source_info=source_info,
-                   print_shapes=print_shapes,
-                   custom_pp_eqn_rules=custom_pp_eqn_rules)
+                   custom_pp_eqn_rules=True, name_stack=False, **kw):
+    doc = pp_jaxpr(self, JaxprPpContext(),
+                   JaxprPpSettings(source_info=source_info,
+                                   print_shapes=print_shapes,
+                                   custom_pp_eqn_rules=custom_pp_eqn_rules,
+                                   name_stack=name_stack))
     return doc.format(**kw)
+
+  def _repr_pretty_(self, p, cycle):
+    return p.text(self.pretty_print(use_color=True))
 
 
 def jaxprs_in_params(params) -> Iterator[Jaxpr]:
@@ -138,9 +143,16 @@ class ClosedJaxpr:
   def __str__(self): return str(self.jaxpr)
   def __repr__(self): return repr(self.jaxpr)
 
-  def pretty_print(self, *, source_info=False, print_shapes=True, **kw):
-    return pp_jaxpr(self.jaxpr, JaxprPpContext(), source_info=source_info,
-                    print_shapes=print_shapes).format(**kw)
+  def pretty_print(self, *, source_info=False, print_shapes=True,
+                   name_stack=False, custom_pp_eqn_rules=True, **kw):
+    settings = JaxprPpSettings(source_info=source_info,
+                               print_shapes=print_shapes, name_stack=name_stack,
+                               custom_pp_eqn_rules=custom_pp_eqn_rules)
+    return pp_jaxpr(self.jaxpr, JaxprPpContext(), settings).format(**kw)
+
+
+  def _repr_pretty_(self, p, cycle):
+    return p.text(self.pretty_print(use_color=True))
 
 @curry
 def jaxpr_as_fun(closed_jaxpr: ClosedJaxpr, *args):
@@ -155,8 +167,7 @@ class JaxprEqn(NamedTuple):
   source_info: source_info_util.SourceInfo
 
   def __repr__(self):
-    return str(pp_eqn(self, JaxprPpContext(), custom_pp_eqn_rules=False)
-               ).rstrip()
+    return str(pp_eqn(self, JaxprPpContext(), JaxprPpSettings())).rstrip()
 
 def new_jaxpr_eqn(invars, outvars, primitive, params, source_info=None):
   if primitive.call_primitive:
@@ -256,9 +267,12 @@ Atom = Union[Var, Literal]
 
 class Primitive:
   name: str
-  multiple_results = False  # set for multi-output primitives
-  call_primitive = False    # set for call primitives processed in final style
-  map_primitive = False     # set for map primitives processed in final style
+  # set for multi-output primitives.
+  multiple_results: bool = False
+  # set for call primitives processed in final style.
+  call_primitive: bool = False
+  # set for map primitives processed in final style.
+  map_primitive: bool = False
 
   def __init__(self, name: str):
     self.name = name
@@ -326,7 +340,8 @@ def eval_jaxpr(jaxpr: Jaxpr, consts, *args):
   map(write, jaxpr.invars, args)
   for eqn in jaxpr.eqns:
     subfuns, bind_params = eqn.primitive.get_bind_params(eqn.params)
-    with source_info_util.user_context(eqn.source_info.traceback):
+    name_stack = source_info_util.current_name_stack() + eqn.source_info.name_stack
+    with source_info_util.user_context(eqn.source_info.traceback, name_stack=name_stack):
       ans = eqn.primitive.bind(*subfuns, *map(read, eqn.invars), **bind_params)
     if eqn.primitive.multiple_results:
       map(write, eqn.outvars, ans)
@@ -405,6 +420,11 @@ class Trace:
   def process_custom_jvp_call(self, primitive, fun, jvp, tracers):
     msg = (f"{type(self)} must override process_custom_jvp_call "
            "to handle custom_jvp primitives")
+    raise NotImplementedError(msg)
+
+  def process_custom_transpose(self, prim, call, tracers, **params):
+    msg = (f"{type(self)} must override process_custom_transpose "
+           "to handle custom_transpose_call primitives")
     raise NotImplementedError(msg)
 
   def process_custom_vjp_call(self, primitive, fun, fwd, bwd, tracers, out_trees):
@@ -594,13 +614,18 @@ class EvalTrace(Trace):
     return primitive.impl(f, *tracers, **params)
   process_map = process_call
 
+  def process_custom_transpose(self, primitive, call, tracers, **_):
+    del primitive
+    with new_sublevel():
+      return call.call_wrapped(*tracers)
+
   def process_custom_jvp_call(self, primitive, fun, jvp, tracers):
     del primitive, jvp  # Unused.
     with new_sublevel():
       return fun.call_wrapped(*tracers)
 
-  def process_custom_vjp_call(self, primitive, fun, fwd, bwd, tracers, out_trees):
-    del primitive, fwd, bwd, out_trees  # Unused.
+  def process_custom_vjp_call(self, primitive, fun, fwd, bwd, tracers, **_):
+    del primitive, fwd, bwd  # Unused.
     with new_sublevel():
       return fun.call_wrapped(*tracers)
 
@@ -843,7 +868,8 @@ def ensure_compile_time_eval():
       with jax.ensure_compile_time_eval():
         y = jnp.sin(3.0)
         z = jnp.sin(y)
-      if z > 0:  # the value of z is availble and can be used in control flow
+        z_positive = z > 0
+      if z_positive:  # z_positive is usable in Python control flow
         return jnp.sin(x)
       else:
         return jnp.cos(x)
@@ -1696,7 +1722,7 @@ def call_bind(primitive: CallPrimitive, fun, *args, **params):
   return map(full_lower, apply_todos(env_trace_todo(), outs))
 
 @lu.transformation_with_aux
-def process_env_traces_call(primitive: CallPrimitive, level: int,
+def process_env_traces_call(primitive: CallPrimitive, level: Optional[int],
                             params_tuple: tuple, *args):
   outs = yield args, {}
   params = dict(params_tuple)
@@ -1795,10 +1821,9 @@ def map_bind(primitive: 'MapPrimitive', fun, *args, out_axes_thunk, **params):
       out_axes = t(out_axes)
     return out_axes
   params = dict(params, out_axes_thunk=new_out_axes_thunk)
-  params_tuple = tuple(params.items())
   top_trace = find_top_trace(args)
   fun, todo_and_xforms = process_env_traces_map(
-      fun, primitive, top_trace and top_trace.level, params_tuple)
+      fun, primitive, top_trace and top_trace.level, tuple(params.items()))
   tracers = map(top_trace.full_raise, args)
   outs = primitive.process(top_trace, fun, tracers, params)
   env_trace_todo, _ = todo_and_xforms()
@@ -1826,14 +1851,16 @@ def process_env_traces_map(primitive: MapPrimitive, level: int,
   yield outs, (tuple(todo), tuple(out_axes_transforms))
 
 
-def mapped_aval(size: int, axis: int, aval: AbstractValue) -> AbstractValue:
+def mapped_aval(size: int, axis: Optional[int], aval: AbstractValue
+                ) -> AbstractValue:
   handler, _ = aval_mapping_handlers.get(type(aval), (None, None))
   if handler is not None:
     return handler(size, axis, aval)
   else:
     raise TypeError(f"no mapping handler for {aval} of type {type(aval)}")
 
-def unmapped_aval(size: int, axis_name, axis: int, aval: AbstractValue) -> AbstractValue:
+def unmapped_aval(size: int, axis_name, axis: Optional[int], aval: AbstractValue
+                  ) -> AbstractValue:
   _, handler = aval_mapping_handlers.get(type(aval), (None, None))
   if handler is not None:
     return handler(size, axis_name, axis, aval)
@@ -1843,16 +1870,20 @@ def unmapped_aval(size: int, axis_name, axis: int, aval: AbstractValue) -> Abstr
 def _map_unit(*_) -> AbstractUnit:
   return abstract_unit
 
-def _map_shaped_array(size: int, axis: int, aval: ShapedArray) -> ShapedArray:
-  assert aval.shape[axis] == size
+def _map_shaped_array(size: int, axis: Optional[int], aval: ShapedArray
+                      ) -> ShapedArray:
+  assert axis is None or aval.shape[axis] == size
   # TODO: Extend the named shape
+  if axis is None: return aval
   return ShapedArray(tuple_delete(aval.shape, axis), aval.dtype,
                      named_shape=aval.named_shape)
 
-def _unmap_shaped_array(size: int, axis_name, axis: int, aval: ShapedArray) -> ShapedArray:
+def _unmap_shaped_array(size: int, axis_name, axis: Optional[int],
+                        aval: ShapedArray) -> ShapedArray:
   named_shape = dict(aval.named_shape)
   # TODO: Make this mandatory
   named_shape.pop(axis_name, None)
+  if axis is None: return aval.replace(named_shape=named_shape)
   return ShapedArray(tuple_insert(aval.shape, axis, size), aval.dtype,
                      named_shape=named_shape)
 
@@ -2079,42 +2110,46 @@ def check_jaxpr(jaxpr: Jaxpr):
   @functools.lru_cache(maxsize=None)
   def ctx_factory():
     ctx = JaxprPpContext()
-    try: pp_jaxpr(jaxpr, ctx)  # side-effect on ctx, build variable names
+    pp_settings = JaxprPpSettings()
+    try: pp_jaxpr(jaxpr, ctx, pp_settings)  # side-effect on ctx, build variable names
     except: pass
-    return ctx
+    return ctx, pp_settings
 
   try:
     _check_jaxpr(ctx_factory, jaxpr, [v.aval for v in jaxpr.invars])
   except JaxprTypeError as e:
-    ctx = ctx_factory()
+    ctx, pp_settings = ctx_factory()
     if len(e.args) == 2:
       msg, eqnidx = e.args
-      jaxpr_str = str(pp_jaxpr_eqn_range(jaxpr, eqnidx - 10, eqnidx + 10, ctx))
+      jaxpr_str = str(pp_jaxpr_eqn_range(jaxpr, eqnidx - 10, eqnidx + 10, ctx,
+                                         pp_settings))
     else:
       msg, = e.args
-      jaxpr_str = str(pp_jaxpr_eqn_range(jaxpr, 0, 20, ctx))
+      jaxpr_str = str(pp_jaxpr_eqn_range(jaxpr, 0, 20, ctx, pp_settings))
     msg = "\n\n".join([msg, "while checking jaxpr:", jaxpr_str])
     raise JaxprTypeError(msg) from None
 
-def _check_jaxpr(ctx_factory: Callable[[], 'JaxprPpContext'], jaxpr: Jaxpr,
-                 in_avals: Sequence[AbstractValue]) -> None:
+def _check_jaxpr(
+    ctx_factory: Callable[[], Tuple['JaxprPpContext', 'JaxprPpSettings']],
+    jaxpr: Jaxpr,
+    in_avals: Sequence[AbstractValue]) -> None:
 
   def read(v: Atom) -> AbstractValue:
     if isinstance(v, Literal):
       return raise_to_shaped(get_aval(v.val))
     else:
       if v not in env:
-        ctx = ctx_factory()
+        ctx, _ = ctx_factory()
         raise JaxprTypeError(f"Variable '{pp_var(v, ctx)}' not defined")
       return env[v]
 
   def write(v: Var, a: AbstractValue) -> None:
     if v in env:
-      ctx = ctx_factory()
+      ctx, _ = ctx_factory()
       raise JaxprTypeError(f"Variable '{pp_var(v, ctx)}' already bound")
     if not isinstance(v, DropVar):
       if not typecompat(v.aval, a):
-        ctx = ctx_factory()
+        ctx, _ = ctx_factory()
         raise JaxprTypeError(
             f"Variable '{pp_var(v, ctx)}' inconsistently typed as "
             f"{pp_aval(a, ctx)}, bound as {pp_aval(v.aval, ctx)}")
@@ -2144,10 +2179,10 @@ def _check_jaxpr(ctx_factory: Callable[[], 'JaxprPpContext'], jaxpr: Jaxpr,
         out_avals = check_eqn(prim, in_avals, eqn.params)
       map(write, eqn.outvars, out_avals)
     except JaxprTypeError as e:
-      ctx = ctx_factory()
+      ctx, settings = ctx_factory()
       msg, = e.args
       src = source_info_util.summarize(eqn.source_info)
-      msg = "\n\n".join([msg, "in equation:", str(pp.nest(2, pp_eqn(eqn, ctx))),
+      msg = "\n\n".join([msg, "in equation:", str(pp.nest(2, pp_eqn(eqn, ctx, settings))),
                          f"from source: {src}"])
       raise JaxprTypeError(msg, eqn_idx) from None
 
@@ -2223,6 +2258,13 @@ def check_map(ctx_factory, prim, in_avals, params):
 
 # ------------------- Jaxpr printed representation -------------------
 
+
+class JaxprPpSettings(NamedTuple):
+  print_shapes: bool = True
+  source_info: bool = False
+  name_stack: bool = False
+  custom_pp_eqn_rules: bool = True
+
 # A JaxprPpContext allows us to globally uniquify variable names within nested
 # Jaxprs.
 class JaxprPpContext:
@@ -2250,7 +2292,7 @@ def pp_vars(vs: Sequence[Any], context: JaxprPpContext,
     return pp.nest(2, pp.group(
       pp.join(pp.text(separator) + pp.group(pp.brk()), [
         pp.text(pp_var(v, context)) +
-        pp.dim(pp.text(":" + pp_aval(v.aval, context)))
+        pp.type_annotation(pp.text(":" + pp_aval(v.aval, context)))
         for v in vs
       ])
     ))
@@ -2260,51 +2302,48 @@ def pp_vars(vs: Sequence[Any], context: JaxprPpContext,
               [pp.text(pp_var(v, context)) for v in vs])
     ))
 
-def pp_kv_pair(k:str, v: Any, context: JaxprPpContext) -> pp.Doc:
+def pp_kv_pair(k:str, v: Any, context: JaxprPpContext, settings: JaxprPpSettings) -> pp.Doc:
   if type(v) is tuple and all(isinstance(j, (Jaxpr, ClosedJaxpr)) for j in v):
-    pp_v = pp_jaxprs(v, context)
+    pp_v = pp_jaxprs(v, context, settings)
   elif isinstance(v, Jaxpr):
-    pp_v = pp_jaxpr(v, context)
+    pp_v = pp_jaxpr(v, context, settings)
   elif isinstance(v, ClosedJaxpr):
-    pp_v = pp_jaxpr(v.jaxpr, context)
+    pp_v = pp_jaxpr(v.jaxpr, context, settings)
   else:
     pp_v = pp.text(str(v))
   return pp.text(f'{k}=') + pp_v
 
-def pp_kv_pairs(kv_pairs, context: JaxprPpContext) -> pp.Doc:
+def pp_kv_pairs(kv_pairs, context: JaxprPpContext, settings: JaxprPpSettings) -> pp.Doc:
   if not kv_pairs:
     return pp.nil()
   return pp.group(
     pp.nest(2, pp.concat([
       pp.text("["),  pp.brk(""),
-      pp.join(pp.brk(), [pp_kv_pair(k, v, context) for k, v in kv_pairs])
+      pp.join(pp.brk(), [pp_kv_pair(k, v, context, settings) for k, v in kv_pairs])
     ]))
     + pp.brk("") + pp.text("]")
   )
 
-def pp_eqn(eqn, context: JaxprPpContext, *, print_shapes=True,
-           source_info=False, custom_pp_eqn_rules=True) -> pp.Doc:
-  lhs = pp_vars(eqn.outvars, context, print_shapes=print_shapes)
+def pp_eqn(eqn, context: JaxprPpContext, settings: JaxprPpSettings) -> pp.Doc:
+  lhs = pp_vars(eqn.outvars, context, print_shapes=settings.print_shapes)
   annotation = (source_info_util.summarize(eqn.source_info)
-                if source_info else None)
+                if settings.source_info else None)
   rule = pp_eqn_rules.get(eqn.primitive)
-  if rule and custom_pp_eqn_rules:
-    rhs = rule(eqn, context)
+  name_stack_annotation = f'[{eqn.source_info.name_stack}]' if settings.name_stack else None
+  if rule and settings.custom_pp_eqn_rules:
+    rhs = rule(eqn, context, settings)
   else:
-    rhs = [pp.text(eqn.primitive.name),
-           pp_kv_pairs(sorted(eqn.params.items()), context),
+    rhs = [pp.text(eqn.primitive.name, annotation=name_stack_annotation),
+           pp_kv_pairs(sorted(eqn.params.items()), context, settings),
            pp.text(" ") + pp_vars(eqn.invars, context)]
   return pp.concat([lhs, pp.text(" = ", annotation=annotation), *rhs])
-CustomPpEqnRule = Callable[[JaxprEqn, JaxprPpContext], Sequence[pp.Doc]]
+CustomPpEqnRule = Callable[[JaxprEqn, JaxprPpContext, JaxprPpSettings], Sequence[pp.Doc]]
 pp_eqn_rules: Dict[Primitive, CustomPpEqnRule]  = {}
 
-def pp_eqns(eqns, context: JaxprPpContext, *, print_shapes=True,
-            source_info=False, custom_pp_eqn_rules=True
-            ) -> pp.Doc:
+def pp_eqns(eqns, context: JaxprPpContext, settings: JaxprPpSettings) -> pp.Doc:
   return pp.join(
     pp.brk("; "),
-    [pp_eqn(e, context, print_shapes=print_shapes, source_info=source_info,
-            custom_pp_eqn_rules=custom_pp_eqn_rules) for e in eqns])
+    [pp_eqn(e, context, settings) for e in eqns])
 
 def _compact_eqn_should_include(k: str, v: Any) -> bool:
   if k == 'branches': return False
@@ -2319,41 +2358,38 @@ def str_eqn_compact(primitive_name: str, params: Dict) -> str:
                  if _compact_eqn_should_include(k, v))
   return f"{primitive_name}[{kvs}]" if len(kvs) > 0 else primitive_name
 
-def pp_jaxpr_skeleton(jaxpr, eqns_fn, context: JaxprPpContext, *,
-                      print_shapes=True) -> pp.Doc:
-  constvars = pp_vars(jaxpr.constvars, context, print_shapes=print_shapes)
-  invars = pp_vars(jaxpr.invars, context, print_shapes=print_shapes)
+def pp_jaxpr_skeleton(jaxpr, eqns_fn, context: JaxprPpContext,
+                      settings: JaxprPpSettings) -> pp.Doc:
+  constvars = pp_vars(jaxpr.constvars, context, print_shapes=settings.print_shapes)
+  invars = pp_vars(jaxpr.invars, context, print_shapes=settings.print_shapes)
   eqns = eqns_fn()
   outvars = pp.concat([
     pp.text("("), pp_vars(jaxpr.outvars, context, separator=","),
     pp.text(")" if len(jaxpr.outvars) != 1 else ",)")])
   return pp.group(pp.nest(2, pp.concat([
-    pp.text("{ "), pp.bright(pp.text("lambda ")),
+    pp.text("{ "), pp.keyword(pp.text("lambda ")),
     constvars, pp.text("; "), invars,
-    pp.text(". "), pp.bright(pp.text("let")),
+    pp.text(". "), pp.keyword(pp.text("let")),
     pp.nest(2, pp.brk() + eqns), pp.brk(),
-    pp.bright(pp.text("in ")), outvars
+    pp.keyword(pp.text("in ")), outvars
   ])) + pp.text(" }"))
 
 
-def pp_jaxpr(jaxpr, context: JaxprPpContext, *, print_shapes=True,
-             source_info=False, custom_pp_eqn_rules=True) -> pp.Doc:
-  eqns_fn = lambda: pp_eqns(jaxpr.eqns, context, print_shapes=print_shapes,
-                            source_info=source_info,
-                            custom_pp_eqn_rules=custom_pp_eqn_rules)
-  return pp_jaxpr_skeleton(jaxpr, eqns_fn, context, print_shapes=print_shapes)
+def pp_jaxpr(jaxpr, context: JaxprPpContext, settings: JaxprPpSettings) -> pp.Doc:
+  eqns_fn = lambda: pp_eqns(jaxpr.eqns, context, settings)
+  return pp_jaxpr_skeleton(jaxpr, eqns_fn, context, settings)
 
-def pp_jaxprs(jaxprs, context: JaxprPpContext) -> pp.Doc:
+def pp_jaxprs(jaxprs, context: JaxprPpContext, settings: JaxprPpSettings) -> pp.Doc:
   jaxprs = [j.jaxpr if isinstance(j, ClosedJaxpr) else j for j in jaxprs]
   return pp.group(pp.nest(2, pp.concat([
       pp.text('('), pp.brk(""),
-      pp.join(pp.brk(), map(lambda x: pp_jaxpr(x, context), jaxprs))]
+      pp.join(pp.brk(), map(lambda x: pp_jaxpr(x, context, settings), jaxprs))]
     )) + pp.brk("") + pp.text(')')
   )
 
 
 def pp_jaxpr_eqn_range(jaxpr: Jaxpr, lo: int, hi: int, context: JaxprPpContext,
-                       print_shapes=True, source_info: bool = False) -> pp.Doc:
+                       settings: JaxprPpSettings) -> pp.Doc:
   lo = max(lo, 0)
   hi = max(lo, min(hi, len(jaxpr.eqns)))
   eqns = jaxpr.eqns[lo:hi]
@@ -2364,12 +2400,11 @@ def pp_jaxpr_eqn_range(jaxpr: Jaxpr, lo: int, hi: int, context: JaxprPpContext,
     else:
       if lo != 0:
         pps.append(pp.text('...'))
-      pps.extend(map((lambda e: pp_eqn(e, context, print_shapes=print_shapes,
-                                       source_info=source_info)), eqns))
+      pps.extend(map((lambda e: pp_eqn(e, context, settings)), eqns))
       if hi != len(jaxpr.eqns):
         pps.append(pp.text('...'))
     return pp.join(pp.brk("; "), pps)
-  return pp_jaxpr_skeleton(jaxpr, eqns_fn, context, print_shapes=print_shapes)
+  return pp_jaxpr_skeleton(jaxpr, eqns_fn, context, settings)
 
 
 # TODO(mattjj,frostig): remove these stubs, which are a temporary hack for

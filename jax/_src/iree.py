@@ -59,6 +59,9 @@ class IreeBuffer(xla_client.DeviceArrayBase):
     self._device = device
     self._npy_value = np.asarray(npy_value)
 
+  def copy_to_device(self, device):
+    return self
+
   def to_py(self) -> np.ndarray:
     return self._npy_value
 
@@ -89,7 +92,7 @@ class IreeExecutable:
     outputs = self.module_object[self.function_name](*inputs)
     # TODO(phawkins): Have a way to just have it always return the list,
     # regardless of arity.
-    if not isinstance(outputs, list):
+    if not isinstance(outputs, list) and not isinstance(outputs, tuple):
       outputs = [outputs]
     return [
         IreeBuffer(self.client, self._devices[0], output) for output in outputs
@@ -125,11 +128,11 @@ class IreeClient:
 
   def get_default_device_assignment(
       self,
-      num_replicas: int,
-      num_partitions: int = 1) -> List[List[IreeDevice]]:
-    if num_replicas != 1 or num_partitions != 1:
+      num_replicas: int) -> List[IreeDevice]:
+    if num_replicas != 1:
       raise NotImplementedError("Only single-device computations implemented")
-    return [[self._devices[0]]]
+    return [self._devices[0]]
+
 
   def compile(self, computation: str,
               compile_options: xla_client.CompileOptions) -> IreeExecutable:

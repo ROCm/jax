@@ -26,6 +26,8 @@ Operators
     abs
     add
     acos
+    approx_max_k
+    approx_min_k
     argmax
     argmin
     asin
@@ -205,8 +207,10 @@ Linear algebra operators (jax.lax.linalg)
     lu
     qdwh
     qr
+    schur
     svd
     triangular_solve
+    tridiagonal_solve
 
 Argument classes
 ----------------

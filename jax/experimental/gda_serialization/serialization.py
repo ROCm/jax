@@ -18,6 +18,7 @@ import re
 from typing import Callable
 
 import jax
+from jax._src.util import prod
 from jax.experimental import global_device_array as gda
 from jax.experimental.maps import Mesh
 import jax.numpy as jnp
@@ -108,18 +109,35 @@ def run_serialization(gdas, tensorstore_specs):
   asyncio.run(_run_serializer())
 
 
-async def async_deserialize(mesh, mesh_axes, tensorstore_spec):
+async def async_deserialize(mesh, mesh_axes, tensorstore_spec, global_shape=None):
   t = ts.open(ts.Spec(tensorstore_spec), open=True).result()
+  shape = t.shape if global_shape is None else global_shape
+  requires_padding = prod(shape) > prod(t.shape)
+
+  if requires_padding:
+    new_shard_shape = gda.get_shard_shape(shape, mesh, mesh_axes)
 
   async def cb(index):
-    return await t[index].read()
+    if requires_padding:
+      # This is needed because the shape the array was saved with is smaller
+      # than the requested shape of the array in which it will be reloaded. So
+      # the extra values will be filled with 0s.
+      out = np.zeros(new_shard_shape, dtype=t.dtype.numpy_dtype)
+      requested_domain = ts.IndexTransform(input_shape=shape)[index].domain
+      restricted_domain = t.domain.intersect(requested_domain)
+      await ts.array(out)[ts.d[:].translate_to[requested_domain.origin]][restricted_domain].write(t[restricted_domain])
+      return out
+    else:
+      return await t[index].read()
 
-  return await create_async_gda_from_callback(t.shape, mesh, mesh_axes, cb)
+  return await create_async_gda_from_callback(shape, mesh, mesh_axes, cb)
 
 
-def run_deserialization(global_meshes, mesh_axes, tensorstore_specs):
+def run_deserialization(global_meshes, mesh_axes, tensorstore_specs,
+                        global_shapes=None):
   async def _run_deserializer():
-    future_gdas = jax.tree_map(async_deserialize, global_meshes, mesh_axes,
-                               tensorstore_specs)
+    future_gdas = jax.tree_map(
+        async_deserialize, global_meshes, mesh_axes, tensorstore_specs,
+        [None] * len(tensorstore_specs) if global_shapes is None else global_shapes)
     return await asyncio.gather(*future_gdas)
   return asyncio.run(_run_deserializer())

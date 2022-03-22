@@ -22,6 +22,7 @@ import jax
 from jax.config import config
 from jax import core
 from jax.core import raise_to_shaped, Trace, Tracer
+from jax._src import source_info_util
 from jax._src.tree_util import tree_unflatten, tree_flatten
 from jax._src.ad_util import (add_jaxvals, add_jaxvals_p, zeros_like_jaxval,
                               zeros_like_p, Zero)
@@ -29,7 +30,6 @@ from jax import linear_util as lu
 from jax._src.util import (unzip2, unzip3, safe_map, safe_zip, wrap_name,
                            split_list, canonicalize_axis, moveaxis,
                            as_hashable_function, curry, memoize, cache)
-from jax._src import source_info_util
 from jax.interpreters import partial_eval as pe
 
 map = safe_map
@@ -205,7 +205,10 @@ class BatchTrace(Trace):
 
   def process_call(self, call_primitive, f: lu.WrappedFun, tracers, params):
     assert call_primitive.multiple_results
-    params = dict(params, name=wrap_name(params.get('name', f.__name__), 'vmap'))
+    if config.jax_experimental_name_stack:
+      params = dict(params, name=params.get('name', f.__name__))
+    else:
+      params = dict(params, name=wrap_name(params.get('name', f.__name__), 'vmap'))
     vals, dims = unzip2((t.val, t.batch_dim) for t in tracers)
     if all(bdim is not_mapped for bdim in dims):
       return call_primitive.bind(f, *vals, **params)
@@ -372,7 +375,8 @@ def batch(fun: lu.WrappedFun, axis_name: core.AxisName, axis_size,
 def _batch_outer(axis_name, axis_size, in_dims, main_type, *in_vals):
   with core.new_main(main_type, axis_name=axis_name) as main:
     with core.extend_axis_env(axis_name, axis_size, main):
-      outs = yield (main, in_dims, *in_vals), {}
+      with source_info_util.transform_name_stack('vmap'):
+        outs = yield (main, in_dims, *in_vals), {}
       del main
   yield outs
 
@@ -444,7 +448,6 @@ def batch_jaxpr(closed_jaxpr, axis_size, in_batched, instantiate, axis_name,
   return _batch_jaxpr(closed_jaxpr, axis_size, tuple(in_batched), inst,
                       axis_name, main_type)
 
-@cache()
 def _batch_jaxpr(closed_jaxpr, axis_size, in_batched, instantiate, axis_name,
                  main_type):
   assert (isinstance(instantiate, bool) or
@@ -458,6 +461,12 @@ def _batch_jaxpr(closed_jaxpr, axis_size, in_batched, instantiate, axis_name,
                           axis_name, main_type)
 
 def batch_jaxpr_axes(closed_jaxpr, axis_size, in_axes, out_axes_dest, axis_name,
+                     main_type):
+  return _batch_jaxpr_axes(closed_jaxpr, axis_size, tuple(in_axes),
+                           tuple(out_axes_dest), axis_name, main_type)
+
+@cache()
+def _batch_jaxpr_axes(closed_jaxpr, axis_size, in_axes, out_axes_dest, axis_name,
                      main_type):
   f = lu.wrap_init(core.jaxpr_as_fun(closed_jaxpr))
   f, out_batched = _batch_jaxpr_inner(f, axis_size, out_axes_dest)
@@ -597,8 +606,10 @@ def broadcast_batcher(prim, args, dims, **params):
     out = prim.bind(*args, **params)
     return (out, (d,) * len(out)) if prim.multiple_results else (out, d)
   else:
-    size, = {shape[d] for shape, d in shapes if d is not not_mapped}
-    args = [bdim_at_front(x, d, size) if np.ndim(x) else x
+    # We pass size of 1 here because (1) at least one argument has a real batch
+    # dimension and (2) all unmapped axes can have a singleton axis inserted and
+    # then rely on the primitive's built-in broadcasting.
+    args = [bdim_at_front(x, d, 1) if np.ndim(x) else x
             for x, d in zip(args, dims)]
     ndim = max(np.ndim(x) for x in args)  # special-case scalar broadcasting
     args = [_handle_scalar_broadcasting(ndim, x, d) for x, d in zip(args, dims)]

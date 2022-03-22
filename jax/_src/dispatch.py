@@ -250,14 +250,14 @@ def lower_xla_callable(fun: lu.WrappedFun, device, backend, name,
   # pass long arg lists as tuple for TPU
   tuple_args = len(abstract_args) > 100
   axis_env = xla.AxisEnv(nreps, (), ())
-  name_stack = xla.extend_name_stack(xla.wrap_name(name, 'jit'))
+  name_stack = xla.new_name_stack(xla.wrap_name(name, 'jit'))
   closed_jaxpr = core.ClosedJaxpr(jaxpr, consts)
   module: Union[str, xc.XlaComputation]
   module_name = f"jit_{fun.__name__}"
   if config.jax_enable_mlir:
     module = mlir.lower_jaxpr_to_module(
-        module_name, closed_jaxpr, backend.platform, axis_env, name_stack,
-        donated_invars)
+        module_name, closed_jaxpr, backend.platform,
+        mlir.ReplicaAxisContext(axis_env), name_stack, donated_invars)
   else:
     module = xla.lower_jaxpr_to_xla_module(
         module_name, closed_jaxpr, backend.platform, axis_env,
@@ -622,6 +622,7 @@ class XlaCompiledComputation:
   def is_trivial(self):
     return self._xla_executable == None
 
+  @property
   def xla_executable(self):
     if self.is_trivial():
       raise ValueError("A trivial compiled computation has no XLA executable")

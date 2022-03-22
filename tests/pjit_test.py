@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import re
 from functools import partial
 import logging
@@ -29,28 +30,48 @@ from jax._src import test_util as jtu
 from jax.errors import JAXTypeError
 from jax import lax
 # TODO(skye): do we still wanna call this PartitionSpec?
+from jax.experimental import maps
 from jax.experimental import PartitionSpec as P
-from jax.experimental.maps import xmap, mesh
+from jax.experimental.maps import xmap
 from jax.experimental import global_device_array
 import jax.experimental.pjit as pjit_lib
 from jax.experimental.pjit import (pjit, pjit_p, with_sharding_constraint,
                                    SpecSync, FROM_GDA)
 from jax.interpreters import pxla
 from jax.interpreters import xla
-from jax._src.lib import xla_client
-from jax._src.lib import xla_extension_version
+from jax._src.lib import xla_client, xla_extension_version, xla_bridge
 from jax._src.util import prod, curry, unzip2, safe_zip
 
 from jax.config import config
 config.parse_flags_with_absl()
 
+if xla_extension_version >= 60:
+  prev_xla_flags = None
 
 def setUpModule():
-  if jax.default_backend() not in {'gpu', 'tpu'}:
-    raise unittest.SkipTest("pjit only supports GPU and TPU backends")
+  if xla_extension_version >= 60:
+    global prev_xla_flags
+    prev_xla_flags = os.getenv("XLA_FLAGS")
+    flags_str = prev_xla_flags or ""
+    # Don't override user-specified device count, or other XLA flags.
+    if "xla_force_host_platform_device_count" not in flags_str:
+      os.environ["XLA_FLAGS"] = (flags_str +
+                                 " --xla_force_host_platform_device_count=8")
+    # Clear any cached backends so new CPU backend will pick up the env var.
+    xla_bridge.get_backend.cache_clear()
+  else:
+    if jax.default_backend() not in {'gpu', 'tpu'}:
+      raise unittest.SkipTest("pjit only supports GPU and TPU backends")
   jtu.set_spmd_lowering_flag(True)
 
 def tearDownModule():
+  if xla_extension_version >= 60:
+    if prev_xla_flags is None:
+      del os.environ["XLA_FLAGS"]
+    else:
+      os.environ["XLA_FLAGS"] = prev_xla_flags
+    xla_bridge.get_backend.cache_clear()
+
   jtu.restore_spmd_lowering_flag()
 
 
@@ -74,7 +95,6 @@ def check_1d_2d_mesh(f, set_mesh):
 
 
 # TODO(skye): make the buffer donation utils part of JaxTestCase
-@jtu.with_config(jax_numpy_rank_promotion="raise")
 class PJitTest(jtu.BufferDonationTestCase):
 
   @jtu.with_mesh([('x', 1)])
@@ -114,6 +134,48 @@ class PJitTest(jtu.BufferDonationTestCase):
     self.assertAllClose(actual.device_buffers[0].to_py(), expected,
                         check_dtypes=False)
 
+  @jtu.with_mesh([('x', 2)])
+  def testUnevenShardingConstraint(self):
+    @partial(pjit,
+             in_axis_resources=(P('x'), P('x')),
+             out_axis_resources=None)
+    def f(x, y):
+      x = x[:3]
+      y = y[:3]
+      x = with_sharding_constraint(x, P('x'))
+      y = with_sharding_constraint(y, P('x'))
+      out = x + y
+      return jnp.pad(out, [[0, 1]])
+
+    shape = (4,)
+    x = np.arange(prod(shape), dtype=np.float32).reshape(shape)
+    actual = f(x, x + 1)
+    expected = x + (x + 1)
+    self.assertAllClose(actual[:3], expected[:3], check_dtypes=False)
+    self.assertIsInstance(actual, pxla.ShardedDeviceArray)
+    self.assertLen(actual.device_buffers, 2)
+    self.assertAllClose(actual.device_buffers[0].to_py()[:3], expected[:3],
+                        check_dtypes=False)
+
+  def testBasic1DWithMeshContextManager(self):
+    @partial(pjit,
+             in_axis_resources=(P('x'), P('x')),
+             out_axis_resources=None)
+    def f(x, y):
+      return x + y
+
+    shape = (8, 8)
+    x = np.arange(prod(shape), dtype=np.float32).reshape(shape)
+    with jtu.create_global_mesh((2,), ('x')) as mesh:
+      actual = f(x, x + 1)
+    expected = x + (x + 1)
+    self.assertEqual(mesh, jtu.create_global_mesh((2,), ('x')))
+    self.assertAllClose(actual, expected, check_dtypes=False)
+    self.assertIsInstance(actual, pxla.ShardedDeviceArray)
+    self.assertLen(actual.device_buffers, 2)
+    self.assertAllClose(actual.device_buffers[0].to_py(), expected,
+                        check_dtypes=False)
+
   @jtu.with_mesh([('x', 2), ('y', 2)])
   def testBasic2D(self):
     @partial(pjit,
@@ -141,6 +203,66 @@ class PJitTest(jtu.BufferDonationTestCase):
                         check_dtypes=False)
     self.assertAllClose(actual.device_buffers[3].to_py(), split1,
                         check_dtypes=False)
+
+  def testBasic2DWithMeshContextManager(self):
+    @partial(pjit,
+             in_axis_resources=(P(None, 'x', 'y'), P('y')),
+             out_axis_resources=P('x'))
+    def f(x, y):
+      return x @ y
+
+    x_shape = (8, 6, 4)
+    y_shape = (4, 2)
+    x = jnp.arange(np.prod(x_shape)).reshape(x_shape)
+    y = jnp.arange(np.prod(y_shape)).reshape(y_shape)
+    mesh = jtu.create_global_mesh((2, 2), ('x', 'y'))
+    with mesh:
+      actual = f(x, y)
+    expected = x @ y
+    self.assertAllClose(actual, expected, check_dtypes=False)
+    self.assertIsInstance(actual, pxla.ShardedDeviceArray)
+    self.assertLen(actual.device_buffers, 4)
+
+    split0, split1 = np.split(expected, 2)
+    self.assertAllClose(actual.device_buffers[0].to_py(), split0,
+                        check_dtypes=False)
+    self.assertAllClose(actual.device_buffers[1].to_py(), split0,
+                        check_dtypes=False)
+    self.assertAllClose(actual.device_buffers[2].to_py(), split1,
+                        check_dtypes=False)
+    self.assertAllClose(actual.device_buffers[3].to_py(), split1,
+                        check_dtypes=False)
+
+  def testDifferentNestedMesh(self):
+    with jtu.create_global_mesh((2, 1), ("x", "y")) as m1:
+      with jtu.create_global_mesh((2, 2), ("a", "b")) as m2:
+        self.assertEqual(pxla.thread_resources.env.physical_mesh, m2)
+      self.assertEqual(pxla.thread_resources.env.physical_mesh, m1)
+    self.assertEqual(pxla.thread_resources.env.physical_mesh,
+                     pxla.EMPTY_ENV.physical_mesh)
+
+  def testSameNestedMesh(self):
+    mesh = jtu.create_global_mesh((2, 1), ("a", "b"))
+    with mesh as m1:
+      with mesh as m2:
+        self.assertEqual(pxla.thread_resources.env.physical_mesh, m2)
+      self.assertEqual(pxla.thread_resources.env.physical_mesh, m1)
+    self.assertEqual(pxla.thread_resources.env.physical_mesh,
+                     pxla.EMPTY_ENV.physical_mesh)
+
+  def testMeshDecorator(self):
+    x = jnp.arange(8)
+    mesh_shape = (2, 2)
+    size = prod(mesh_shape)
+    if len(jax.devices()) < size:
+      raise unittest.SkipTest(f"Test requires {size} global devices.")
+    mesh_devices = np.array(jax.devices()[:size]).reshape(mesh_shape)
+
+    @maps.Mesh(mesh_devices, ('x', 'y'))
+    def dec():
+      return pjit(lambda x: x, in_axis_resources=P('x'), out_axis_resources=None)(x)
+    out = dec()
+    self.assertArraysEqual(out, x)
 
   @jtu.with_mesh([('x', 2), ('y', 2)])
   def testTwoMeshAxisSharding(self):
@@ -170,6 +292,9 @@ class PJitTest(jtu.BufferDonationTestCase):
 
   @jtu.with_mesh([('x', 2)])
   def testBufferDonation(self):
+    if jax.default_backend() not in {'gpu', 'tpu'}:
+      raise unittest.SkipTest('Buffer donation only supported on GPU and TPU')
+
     @partial(pjit,
              in_axis_resources=P('x'),
              out_axis_resources=P('x'),
@@ -272,13 +397,13 @@ class PJitTest(jtu.BufferDonationTestCase):
     if devices.size < 4:
       raise unittest.SkipTest("Test requires 4 devices")
     devices = devices.reshape((2, 2))
-    with mesh(devices, ('x', 'y')):
+    with maps.Mesh(devices, ('x', 'y')):
       should_be_tracing = True
       pjit(f, in_axis_resources=P(('x', 'y')), out_axis_resources=None)(x)
       should_be_tracing = False
       pjit(f, in_axis_resources=P(('x', 'y')), out_axis_resources=None)(x)
     # Re-create the mesh to make sure that has no influence on caching
-    with mesh(devices, ('x', 'y')):
+    with maps.Mesh(devices, ('x', 'y')):
       should_be_tracing = False
       pjit(f, in_axis_resources=P(('x', 'y')), out_axis_resources=None)(x)
 
@@ -333,10 +458,6 @@ class PJitTest(jtu.BufferDonationTestCase):
 
   @jtu.with_mesh([('x', 2)])
   def testGradOfConstraint(self):
-    # TODO(phawkins): remove the condition after jaxlib 0.1.76 becomes the
-    # minimum.
-    if config.jax_enable_mlir and xla_extension_version < 55:
-      raise unittest.SkipTest("test fails with jax_enable_mlir")
     # Make sure that we can compute grads through sharding constraints
     h = lambda x: jnp.sin(with_sharding_constraint(x, P('x'))).sum()
     f = pjit(lambda x: jax.grad(h)(x),
@@ -494,7 +615,7 @@ class PJitTest(jtu.BufferDonationTestCase):
       d.transfer_to_infeed((z[3 * didx:3 * didx + 3, :]))
       d.transfer_to_infeed((w[:, 5 * didx:5 * didx + 5],))
 
-    with mesh(devices, ['d']):
+    with maps.Mesh(devices, ['d']):
       logging.info('Making pjit call')
       res = pjit(
           f_for_pjit, in_axis_resources=(P('d'),), out_axis_resources=P('d'))(
@@ -517,7 +638,7 @@ class PJitTest(jtu.BufferDonationTestCase):
     x = np.arange(np.prod(shape), dtype=np.float32).reshape(shape)
 
     def dispatch():
-      with mesh(devices, ['d']):
+      with maps.Mesh(devices, ['d']):
         logging.info('Making pjit call')
         pjit(f, in_axis_resources=(P('d'),), out_axis_resources=P('d'))(x)
     execution = threading.Thread(target=dispatch)
@@ -558,8 +679,14 @@ class PJitTest(jtu.BufferDonationTestCase):
     x = jnp.arange(np.prod(shape)).reshape(shape)
     expected = x @ (x + 1)
 
-    exe = f.lower(x, x + 1).compile()
-    actual = exe(x, x + 1)
+    lowered = f.lower(x, x + 1)
+    compiled = lowered.compile()
+    actual = compiled(x, x + 1)
+
+    self.assertEqual(lowered.in_avals, compiled.in_avals)
+    self.assertEqual(
+        lowered.in_avals,
+        ((jax.ShapedArray(x.shape, x.dtype, weak_type=False),) * 2, {}))
 
     splits = np.split(expected, 4)
     self.assertAllClose(actual.device_buffers[0].to_py(), splits[0],
@@ -570,6 +697,10 @@ class PJitTest(jtu.BufferDonationTestCase):
                         check_dtypes=False)
     self.assertAllClose(actual.device_buffers[3].to_py(), splits[3],
                         check_dtypes=False)
+
+    for obj in [lowered, compiled]:
+      self.assertTrue(obj._no_kwargs, True)
+      self.assertEqual(obj.in_tree, jax.tree_flatten(((0, 0), {}))[1])
 
   @jtu.with_mesh([('x', 2), ('y', 2)])
   def testLowerCompileWithKwargs(self):
@@ -624,6 +755,48 @@ class PJitTest(jtu.BufferDonationTestCase):
         "called with:\n.*int32.*",
         lambda: exe(x_i32, x_i32))
 
+  @jtu.with_mesh([('x', 2), ('y', 2)])
+  def testLowerCompilerIR(self):
+    @partial(pjit,
+             in_axis_resources=P(('x', 'y'),),
+             out_axis_resources=P(('x', 'y'),))
+    def f(x, y):
+      return x @ y
+
+    shape = (8, 8)
+    x = jnp.arange(np.prod(shape)).reshape(shape)
+    f = f.lower(x, x + 1)
+    self.assertIsNotNone(f.compiler_ir())
+    self.assertIsNotNone(f.compiler_ir(dialect='hlo'))
+    self.assertIsNotNone(f.compiler_ir(dialect='mhlo'))
+
+  @jtu.with_mesh([('x', 2), ('y', 2)])
+  def testLowerCompileCompilerIR(self):
+    @partial(pjit,
+             in_axis_resources=P(('x', 'y'),),
+             out_axis_resources=P(('x', 'y'),))
+    def f(x, y):
+      return x @ y
+
+    shape = (8, 8)
+    x = jnp.arange(np.prod(shape)).reshape(shape)
+    f = f.lower(x, x + 1).compile()
+    self.assertIsNotNone(f.compiler_ir())
+
+  @jtu.with_mesh([('x', 2), ('y', 2)])
+  def testLowerCompileExecutable(self):
+    @partial(pjit,
+             in_axis_resources=P(('x', 'y'),),
+             out_axis_resources=P(('x', 'y'),))
+    def f(x, y):
+      return x @ y
+
+    shape = (8, 8)
+    x = jnp.arange(np.prod(shape)).reshape(shape)
+
+    f = f.lower(x, x + 1).compile()
+    self.assertIsNotNone(f.runtime_executable())
+
   @jtu.with_mesh([('x', 2)])
   def test_static_argnums(self):
     @partial(pjit, in_axis_resources=None, out_axis_resources=None,
@@ -635,10 +808,8 @@ class PJitTest(jtu.BufferDonationTestCase):
     self.assertEqual(f(1, 'bye'), 5)
 
 
-@jtu.with_config(jax_numpy_rank_promotion="raise")
 class GDAPjitTest(jtu.JaxTestCase):
 
-  @jtu.with_mesh([('x', 4), ('y', 2)])
   def test_pjit_gda_single_output(self):
     global_mesh = jtu.create_global_mesh((4, 2), ('x', 'y'))
     global_input_shape = (8, 2)
@@ -652,26 +823,27 @@ class GDAPjitTest(jtu.JaxTestCase):
         global_input_shape, global_mesh, mesh_axes, cb)
 
     with jax._src.config.parallel_functions_output_gda(True):
-      @partial(pjit, in_axis_resources=FROM_GDA, out_axis_resources=P('x', 'y'))
-      def f(x):
-        return x @ x.T
-      expected_matrix_mul = input_data @ input_data.T
+      with global_mesh:
+        @partial(pjit, in_axis_resources=FROM_GDA, out_axis_resources=P('x', 'y'))
+        def f(x):
+          return x @ x.T
+        expected_matrix_mul = input_data @ input_data.T
 
-      out = f(gda_obj)
-      self.assertIsInstance(out, global_device_array.GlobalDeviceArray)
-      self.assertEqual(out.shape, (8, 8))
-      self.assertEqual(out.local_shards[0].data.shape, (2, 4))
-      self.assertDictEqual(out._global_mesh.shape, {'x': 4, 'y': 2})
-      for s in out.local_shards:
-        self.assertArraysEqual(s.data, expected_matrix_mul[s.index])
+        out = f(gda_obj)
+        self.assertIsInstance(out, global_device_array.GlobalDeviceArray)
+        self.assertEqual(out.shape, (8, 8))
+        self.assertEqual(out.local_shards[0].data.shape, (2, 4))
+        self.assertDictEqual(out.mesh.shape, {'x': 4, 'y': 2})
+        for s in out.local_shards:
+          self.assertArraysEqual(s.data, expected_matrix_mul[s.index])
 
-      out2 = f(out)
-      self.assertIsInstance(out2, global_device_array.GlobalDeviceArray)
+        out2 = f(out)
+        self.assertIsInstance(out2, global_device_array.GlobalDeviceArray)
 
-      with self.assertRaisesRegex(
-          ValueError, ('For a non-GDA input, the corresponding resource in '
-                       'in_axis_resources cannot be `pjit.FROM_GDA`.')):
-        f(input_data)
+        with self.assertRaisesRegex(
+            ValueError, ('For a non-GDA input, the corresponding resource in '
+                         'in_axis_resources cannot be `pjit.FROM_GDA`.')):
+          f(input_data)
 
   @jtu.with_mesh([('x', 4), ('y', 2)])
   def test_pjit_gda_multi_input_multi_output(self):
@@ -771,14 +943,14 @@ class GDAPjitTest(jtu.JaxTestCase):
       self.assertIsInstance(out1, global_device_array.GlobalDeviceArray)
       self.assertEqual(out1.shape, (8, 8))
       self.assertEqual(out1.local_shards[0].data.shape, (2, 4))
-      self.assertDictEqual(out1._global_mesh.shape, {'x': 4, 'y': 2})
+      self.assertDictEqual(out1.mesh.shape, {'x': 4, 'y': 2})
       for s in out1.local_shards:
         self.assertArraysEqual(s.data, expected_matrix_mul[s.index])
 
       self.assertIsInstance(out2, global_device_array.GlobalDeviceArray)
       self.assertEqual(out2.shape, (8, 8))
       self.assertEqual(out2.local_shards[0].data.shape, (1, 8))
-      self.assertDictEqual(out2._global_mesh.shape, {'x': 4, 'y': 2})
+      self.assertDictEqual(out2.mesh.shape, {'x': 4, 'y': 2})
       for s in out2.local_shards:
         self.assertArraysEqual(s.data, expected_matrix_mul[s.index])
 
@@ -800,14 +972,14 @@ class GDAPjitTest(jtu.JaxTestCase):
       self.assertIsInstance(out1, global_device_array.GlobalDeviceArray)
       self.assertEqual(out1.shape, (8, 8))
       self.assertEqual(out1.local_shards[0].data.shape, (2, 4))
-      self.assertDictEqual(out1._global_mesh.shape, {'x': 4, 'y': 2})
+      self.assertDictEqual(out1.mesh.shape, {'x': 4, 'y': 2})
       for s in out1.local_shards:
         self.assertArraysEqual(s.data, expected_matrix_mul[s.index])
 
       self.assertIsInstance(out2, global_device_array.GlobalDeviceArray)
       self.assertEqual(out2.shape, (8, 8))
       self.assertEqual(out2.local_shards[0].data.shape, (1, 8))
-      self.assertDictEqual(out2._global_mesh.shape, {'x': 4, 'y': 2})
+      self.assertDictEqual(out2.mesh.shape, {'x': 4, 'y': 2})
       for s in out2.local_shards:
         self.assertArraysEqual(s.data, expected_matrix_mul[s.index])
 
@@ -815,7 +987,7 @@ class GDAPjitTest(jtu.JaxTestCase):
   def test_pjit_gda_mesh_mismatch(self):
     global_mesh = jtu.create_global_mesh((4, 2), ('x', 'y'))
     global_input_shape = (8, 2)
-    mesh_axes = ['x', 'y']
+    mesh_axes = P('x', 'y')
     global_input_data = np.arange(
         prod(global_input_shape), dtype=np.float32).reshape(global_input_shape)
     def cb(index):
@@ -836,7 +1008,7 @@ class GDAPjitTest(jtu.JaxTestCase):
   def test_pjit_gda_wrong_resource_for_gda_input(self):
     global_mesh = jtu.create_global_mesh((4, 2), ('x', 'y'))
     global_input_shape = (8, 2)
-    mesh_axes = ['x']
+    mesh_axes = P('x')
     global_input_data = np.arange(
         prod(global_input_shape), dtype=np.float32).reshape(global_input_shape)
     def cb(index):
@@ -871,26 +1043,38 @@ class GDAPjitTest(jtu.JaxTestCase):
     gda_obj = global_device_array.GlobalDeviceArray.from_callback(
         input_shape, global_mesh, mesh_axes, cb)
 
-    trace_counter = [0]
     @partial(pjit, in_axis_resources=mesh_axes, out_axis_resources=P('x', 'y'))
     def f(x, y):
-      trace_counter[0] += 1
       return x @ y.T
 
+    before_lower_cache = pjit_lib._pjit_lower.cache_info()
+
     f(gda_obj, gda_obj)
-    self.assertListEqual(trace_counter, [1])
+    after_lower_cache1 = pjit_lib._pjit_lower.cache_info()
+    self.assertEqual(before_lower_cache.hits, after_lower_cache1.hits)
+    self.assertEqual(before_lower_cache.misses + 1, after_lower_cache1.misses)
+
     f(gda_obj, gda_obj)
-    self.assertListEqual(trace_counter, [1])
+    after_lower_cache2 = pjit_lib._pjit_lower.cache_info()
+    self.assertEqual(after_lower_cache1.hits + 1, after_lower_cache2.hits)
+    self.assertEqual(after_lower_cache1.misses, after_lower_cache2.misses)
+
     f(input_data, input_data)
-    self.assertListEqual(trace_counter, [2])
+    after_lower_cache3 = pjit_lib._pjit_lower.cache_info()
+    self.assertEqual(after_lower_cache2.hits, after_lower_cache3.hits)
+    self.assertEqual(after_lower_cache2.misses + 1, after_lower_cache3.misses)
+
     f(gda_obj, input_data)
-    self.assertListEqual(trace_counter, [3])
+    after_lower_cache4 = pjit_lib._pjit_lower.cache_info()
+    self.assertEqual(after_lower_cache3.hits, after_lower_cache4.hits)
+    self.assertEqual(after_lower_cache3.misses + 1, after_lower_cache4.misses)
+
 
   @jtu.with_mesh([('x', 4), ('y', 2)])
   def test_partition_spec_mismatch_semantically_equivalent(self):
     global_mesh = jtu.create_global_mesh((4, 2), ('x', 'y'))
     global_input_shape = (8, 2)
-    mesh_axes = [None]
+    mesh_axes = P(None)
     global_input_data = np.arange(
         prod(global_input_shape), dtype=np.float32).reshape(global_input_shape)
 
@@ -906,22 +1090,22 @@ class GDAPjitTest(jtu.JaxTestCase):
         return x
 
       output_gda = f(gda_obj)
-      # Ensure output_gda._mesh_axes = P() is matched with P(None).
-      self.assertEqual(output_gda._mesh_axes, ())
+      # Ensure output_gda.mesh_axes = P() is matched with P(None).
+      self.assertEqual(output_gda.mesh_axes, ())
       # P(None) is in_axis_resources.
       f(output_gda)
 
   def test_from_gda_duplicates(self):
     global_mesh = jtu.create_global_mesh((1, 2), ('x', 'y'))
     global_input_shape = (8, 2)
-    mesh_axes = ['x', 'y']
+    mesh_axes = P('x', 'y')
     input_gda = create_gda(global_input_shape, global_mesh, mesh_axes)
 
     # It's occasionally possible to end up with two FROM_GDA singletons (e.g. if
     # pickling in_axis_resources and sending to other processes). Make sure this
     # this doesn't cause an error to avoid user confusion.
     from_gda_dup = pjit_lib._FromGdaSingleton()
-    with mesh(global_mesh.devices, global_mesh.axis_names):
+    with maps.Mesh(global_mesh.devices, global_mesh.axis_names):
       pjit(lambda x: x, in_axis_resources=from_gda_dup, out_axis_resources=None)(
           input_gda)
 
@@ -936,15 +1120,36 @@ class GDAPjitTest(jtu.JaxTestCase):
       def f(x):
         return x
 
-      with mesh(global_mesh.devices, global_mesh.axis_names):
+      with global_mesh:
         out_gda = f(input_gda)
-        self.assertEqual(out_gda._mesh_axes, ())
+        self.assertEqual(out_gda.mesh_axes, ())
 
         before_cache = pjit_lib._pjit_lower.cache_info()
         f(out_gda)
         after_cache = pjit_lib._pjit_lower.cache_info()
 
-        self.assertNotEqual(id(before_cache), id(after_cache))
+        self.assertEqual(before_cache.hits + 1, after_cache.hits)
+        self.assertEqual(before_cache.misses, after_cache.misses)
+
+  def test_no_recompilation_due_to_fully_replicated_and_gda_inputs(self):
+    global_mesh = jtu.create_global_mesh((1, 2), ('x', 'y'))
+    global_input_shape = (8, 2)
+    mesh_axes = P(None)
+    global_data = np.arange(
+        prod(global_input_shape)).reshape(global_input_shape)
+
+    with jax._src.config.parallel_functions_output_gda(True):
+      f = pjit(lambda x: x, in_axis_resources=mesh_axes,
+               out_axis_resources=mesh_axes)
+
+      with global_mesh:
+        out_gda = f(global_data)
+        self.assertEqual(out_gda.mesh_axes, ())
+
+        before_cache = pjit_lib._pjit_lower.cache_info()
+        f(out_gda)
+        after_cache = pjit_lib._pjit_lower.cache_info()
+
         self.assertEqual(before_cache.hits + 1, after_cache.hits)
         self.assertEqual(before_cache.misses, after_cache.misses)
 
@@ -953,7 +1158,6 @@ def spec_regex(s):
   return str(s).replace(r"(", r"\(").replace(r")", r"\)")
 
 
-@jtu.with_config(jax_numpy_rank_promotion="raise")
 class PJitErrorTest(jtu.JaxTestCase):
   @check_1d_2d_mesh(set_mesh=True)
   def testNonDivisibleArgs(self, mesh, resources):
@@ -976,19 +1180,6 @@ class PJitErrorTest(jtu.JaxTestCase):
                                 r"implies that the size of its dimension 0 should be "
                                 r"divisible by " + mesh_size + r", but it is equal to 3"):
       pjit(lambda x: x, in_axis_resources=None, out_axis_resources=P(resources, None))(x)
-
-  @check_1d_2d_mesh(set_mesh=True)
-  def testNonDivisibleConstraint(self, mesh, resources):
-    x = jnp.ones((3, 2))
-    spec = P(resources,)
-    mesh_size = str(np.prod([dim[1] for dim in mesh], dtype=np.int64))
-    with self.assertRaisesRegex(ValueError,
-                                r"One of with_sharding_constraint arguments"
-                                r".*" + spec_regex(spec) + r".*implies that the size of "
-                                r"its dimension 0 should be divisible by " + mesh_size +
-                                r", but it is equal to 3"):
-      pjit(lambda x: with_sharding_constraint(x, spec),
-           in_axis_resources=None, out_axis_resources=None)(x)
 
   @check_1d_2d_mesh(set_mesh=False)
   @jtu.with_mesh([('z', 1)])
@@ -1138,15 +1329,32 @@ class PJitErrorTest(jtu.JaxTestCase):
   def testAxisResourcesMismatch(self):
     x = jnp.ones([])
     p = [None, None, None]
+
     pjit(lambda x: x, (p,), p)([x, x, x])  # OK
+
     error = re.escape(
-        r"pjit in_axis_resources specification must be a tree prefix of the "
-        r"corresponding value, got specification (None, None, None) for value "
-        r"tree PyTreeDef((*, *)). Note that pjit in_axis_resources that are "
-        r"non-trivial pytrees should always be wrapped in a tuple representing "
-        r"the argument list.")
+        "pjit in_axis_resources specification must be a tree prefix of the "
+        "positional arguments tuple passed to the `pjit`-decorated function. "
+        "In particular, pjit in_axis_resources must either be a None, a "
+        "PartitionSpec, or a tuple of length equal to the number of positional "
+        "arguments. But pjit in_axis_resources is the wrong length: got a "
+        "tuple or list of length 3 for an args tuple of length 2.")
     with self.assertRaisesRegex(ValueError, error):
-      pjit(lambda x, y: x, p, p)(x, x)  # Error, but make sure we hint at tupling
+      pjit(lambda x, y: x, p, p)(x, x)
+
+    Foo = namedtuple('Foo', ['x'])
+    error = "in_axis_resources is not a tuple.*might need to be wrapped"
+    with self.assertRaisesRegex(ValueError, error):
+      pjit(lambda x: x, Foo(None), Foo(None))(Foo(x))
+
+    pjit(lambda x: x, (Foo(None),), Foo(None))(Foo(x))  # OK w/ singleton tuple
+
+    # TODO(apaszke,mattjj): Disable implicit list casts and enable this
+    # error = ("it looks like pjit in_axis_resources might need to be wrapped in "
+    #          "a singleton tuple.")
+    # with self.assertRaisesRegex(ValueError, error):
+    #   pjit(lambda x, y: x, p, p)([x, x, x])
+
     # TODO(apaszke): Disable implicit list casts and enable this
     # error = re.escape(
     # r"pjit in_axis_resources specification must be a tree prefix of the "
@@ -1158,10 +1366,16 @@ class PJitErrorTest(jtu.JaxTestCase):
     # r"singleton tuple.")
     # with self.assertRaisesRegex(ValueError, error):
     # pjit(lambda x: x, p, p)([x, x, x])  # Error, but make sure we hint at singleton tuple
+
     error = re.escape(
-        r"pjit out_axis_resources specification must be a tree prefix of the "
-        r"corresponding value, got specification [[None, None, None], None] for "
-        r"value tree PyTreeDef([*, *, *]).")
+        "pytree structure error: different numbers of pytree children at "
+        "key path\n"
+        "    pjit out_axis_resources tree root\n"
+        "At that key path, the prefix pytree pjit out_axis_resources has a "
+        "subtree of type\n"
+        "    <class 'list'>\n"
+        "with 2 children, but at the same key path the full pytree has a "
+        "subtree of the same type but with 3 children.")
     with self.assertRaisesRegex(ValueError, error):
       pjit(lambda x: x, (p,), [p, None])([x, x, x])  # Error, we raise a generic tree mismatch message
 
@@ -1169,7 +1383,7 @@ class PJitErrorTest(jtu.JaxTestCase):
   def testNestedDifferentResources(self):
     @partial(pjit, in_axis_resources=P('x'), out_axis_resources=None)
     def f(x):
-      with mesh(np.array([jax.local_devices()[0]]), ('x')):
+      with maps.Mesh(np.array([jax.local_devices()[0]]), ('x')):
         @partial(pjit, in_axis_resources=P('x'), out_axis_resources=None)
         def h(x):
           return x
@@ -1181,7 +1395,6 @@ class PJitErrorTest(jtu.JaxTestCase):
       f(x)
 
 
-@jtu.with_config(jax_numpy_rank_promotion="raise")
 class UtilTest(jtu.JaxTestCase):
 
   def testOpShardingRoundTrip(self):
@@ -1211,10 +1424,10 @@ class UtilTest(jtu.JaxTestCase):
       roundtrip(P(*spec))
 
   @parameterized.named_parameters(
-      ("linear", {'x': 0, 'y': 1, 'z': 2}, (('x',), ('y',), ('z',))),
-      ("combine", {'x': 0, 'y': 0, 'z': 1}, (('x', 'y'), ('z',))),
-      ("skip", {'x': 0, 'y': 0, 'z': 2}, (('x', 'y'), None, ('z',))),
-      ("multi_skip", {'x': 0, 'y': 1, 'z': 3}, (('x',), ('y',), None, ('z',))),
+      ("linear", {'x': 0, 'y': 1, 'z': 2}, P(('x',), ('y',), ('z',))),
+      ("combine", {'x': 0, 'y': 0, 'z': 1}, P(('x', 'y'), ('z',))),
+      ("skip", {'x': 0, 'y': 0, 'z': 2}, P(('x', 'y'), None, ('z',))),
+      ("multi_skip", {'x': 0, 'y': 1, 'z': 3}, P(('x',), ('y',), None, ('z',))),
   )
   def test_array_mapping_to_axis_resources(self, inp, expected_out):
     self.assertEqual(pxla.array_mapping_to_axis_resources(inp), expected_out)

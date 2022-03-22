@@ -19,6 +19,7 @@ import operator
 import random
 import unittest
 from typing import NamedTuple, Tuple
+import warnings
 
 from absl.testing import absltest
 from absl.testing import parameterized
@@ -28,9 +29,10 @@ import jax.random
 from jax import config
 from jax import dtypes
 from jax.experimental import sparse
+from jax.experimental.sparse import coo as sparse_coo
 from jax.experimental.sparse.bcoo import BCOOInfo
 from jax import lax
-from jax._src.lib import cusparse
+from jax._src.lib import sparse_apis
 from jax._src.lib import xla_bridge
 from jax import jit
 from jax import tree_util
@@ -42,6 +44,7 @@ import jax.numpy as jnp
 from jax.util import split_list
 import numpy as np
 import scipy.sparse
+
 config.parse_flags_with_absl()
 FLAGS = config.FLAGS
 
@@ -51,6 +54,8 @@ MATMUL_TOL = {
   np.complex64: 1e-5,
   np.complex128: 1E-10,
 }
+
+GPU_LOWERING_ENABLED = (sparse_apis and sparse_apis.is_supported)
 
 class BcooDotGeneralProperties(NamedTuple):
   lhs_shape: Tuple[int]
@@ -116,7 +121,6 @@ def rand_sparse(rng, nse=0.5, post=lambda x: x, rand_method=jtu.rand_default):
   return _rand_sparse
 
 
-@jtu.with_config(jax_numpy_rank_promotion="raise")
 class cuSparseTest(jtu.JaxTestCase):
   def gpu_dense_conversion_warning_context(self, dtype):
     if jtu.device_under_test() == "gpu" and np.issubdtype(dtype, np.integer):
@@ -127,6 +131,12 @@ class cuSparseTest(jtu.JaxTestCase):
     if jtu.device_under_test() == "gpu" and dtype not in [np.float32, np.float64, np.complex64, np.complex128]:
       return self.assertWarns(sparse.CuSparseEfficiencyWarning)
     return contextlib.nullcontext()
+
+  @contextlib.contextmanager
+  def assertNoWarnings(self):
+    with warnings.catch_warnings(record=True) as caught_warnings:
+      yield
+    self.assertEmpty(caught_warnings)
 
   @parameterized.named_parameters(jtu.cases_from_list(
       {"testcase_name": "_{}".format(jtu.format_shape_dtype_string(shape, dtype)),
@@ -282,6 +292,7 @@ class cuSparseTest(jtu.JaxTestCase):
       for shape in [(5, 8), (8, 5), (5, 5), (8, 8)]
       for dtype in all_dtypes
       for transpose in [True, False]))
+  @jtu.skip_on_devices("rocm")  # will be fixed in rocm-5.1
   def test_csr_matvec(self, shape, dtype, transpose):
     op = lambda M: M.T if transpose else M
 
@@ -328,7 +339,7 @@ class cuSparseTest(jtu.JaxTestCase):
     M = rng(shape, dtype)
 
     args = (M.data, M.row, M.col)
-    todense = lambda *args: sparse.coo_todense(*args, shape=M.shape)
+    todense = lambda *args: sparse_coo._coo_todense(*args, spinfo=sparse_coo.COOInfo(shape=M.shape, rows_sorted=True))
 
     self.assertArraysEqual(M.toarray(), todense(*args))
     with self.gpu_dense_conversion_warning_context(dtype):
@@ -346,7 +357,7 @@ class cuSparseTest(jtu.JaxTestCase):
 
     nse = M_coo.nnz
     index_dtype = jnp.int32
-    fromdense = lambda M: sparse.coo_fromdense(M, nse=nse, index_dtype=jnp.int32)
+    fromdense = lambda M: sparse_coo._coo_fromdense(M, nse=nse, index_dtype=jnp.int32)
 
     data, row, col = fromdense(M)
     self.assertArraysEqual(data, M_coo.data.astype(dtype))
@@ -374,7 +385,7 @@ class cuSparseTest(jtu.JaxTestCase):
     v = v_rng(op(M).shape[1], dtype)
 
     args = (M.data, M.row, M.col, v)
-    matvec = lambda *args: sparse.coo_matvec(*args, shape=M.shape, transpose=transpose)
+    matvec = lambda *args: sparse_coo._coo_matvec(*args, spinfo=sparse_coo.COOInfo(shape=M.shape, rows_sorted=True), transpose=transpose)
 
     self.assertAllClose(op(M) @ v, matvec(*args), rtol=MATMUL_TOL)
     with self.gpu_matmul_warning_context(dtype):
@@ -386,6 +397,7 @@ class cuSparseTest(jtu.JaxTestCase):
       for shape in [(5, 8), (8, 5), (5, 5), (8, 8)]
       for dtype in all_dtypes
       for transpose in [True, False]))
+  @jtu.skip_on_devices("rocm")  # will be fixed in rocm-5.1
   def test_coo_matmat(self, shape, dtype, transpose):
     op = lambda M: M.T if transpose else M
 
@@ -395,7 +407,7 @@ class cuSparseTest(jtu.JaxTestCase):
     B = B_rng((op(M).shape[1], 4), dtype)
 
     args = (M.data, M.row, M.col, B)
-    matmat = lambda *args: sparse.coo_matmat(*args, shape=shape, transpose=transpose)
+    matmat = lambda *args: sparse_coo._coo_matmat(*args, spinfo=sparse_coo.COOInfo(shape=shape, rows_sorted=True), transpose=transpose)
 
     self.assertAllClose(op(M) @ B, matmat(*args), rtol=MATMUL_TOL)
     with self.gpu_matmul_warning_context(dtype):
@@ -411,23 +423,102 @@ class cuSparseTest(jtu.JaxTestCase):
     x = jnp.arange(9).reshape(3, 3).astype(d.dtype)
 
     def f(x):
-      return sparse.coo_matmat(d, i, j, x.T, shape=shape)
+      return sparse_coo._coo_matmat(d, i, j, x.T, spinfo=sparse_coo.COOInfo(shape=shape, rows_sorted=True))
 
     result = f(x)
     result_jit = jit(f)(x)
 
     self.assertAllClose(result, result_jit)
 
+  def test_coo_sorted_indices(self):
+    rng = self.rng()
+    sprng = rand_sparse(rng)
+
+    mat = sparse.COO.fromdense(sprng((5, 6), np.float32))
+    perm = rng.permutation(mat.nse)
+    mat_unsorted = sparse.COO((mat.data[perm], mat.row[perm], mat.col[perm]), shape=mat.shape)
+    mat_resorted = mat_unsorted._sort_rows()
+    self.assertArraysEqual(mat.todense(), mat_resorted.todense())
+
+  @unittest.skipIf(not GPU_LOWERING_ENABLED, "test requires cusparse/hipsparse")
+  @jtu.skip_on_devices("rocm")  # TODO(rocm): see SWDEV-328107
+  def test_coo_sorted_indices_gpu_lowerings(self):
+    dtype = jnp.float32
+
+    mat = jnp.arange(12, dtype=dtype).reshape(4, 3)
+
+    mat_rows_sorted = sparse.COO.fromdense(mat)
+    self.assertTrue(mat_rows_sorted._rows_sorted)
+    self.assertFalse(mat_rows_sorted._cols_sorted)
+
+    mat_cols_sorted = sparse.COO.fromdense(mat.T).T
+    self.assertFalse(mat_cols_sorted._rows_sorted)
+    self.assertTrue(mat_cols_sorted._cols_sorted)
+
+    mat_unsorted = sparse.COO(mat_rows_sorted._bufs, shape=mat_rows_sorted.shape)
+    self.assertFalse(mat_unsorted._rows_sorted)
+    self.assertFalse(mat_unsorted._cols_sorted)
+
+    self.assertArraysEqual(mat, mat_rows_sorted._sort_rows().todense())
+    self.assertArraysEqual(mat, mat_cols_sorted._sort_rows().todense())
+    self.assertArraysEqual(mat, mat_unsorted._sort_rows().todense())
+
+    todense = jit(sparse.coo_todense)
+    with self.assertNoWarnings():
+      dense_rows_sorted = todense(mat_rows_sorted)
+      dense_cols_sorted = todense(mat_cols_sorted)
+      dense_unsorted = todense(mat_unsorted._sort_rows())
+    with self.assertWarnsRegex(sparse.CuSparseEfficiencyWarning, "coo_todense GPU lowering requires matrices with sorted rows.*"):
+      dense_unsorted_fallback = todense(mat_unsorted)
+    self.assertArraysEqual(mat, dense_rows_sorted)
+    self.assertArraysEqual(mat, dense_cols_sorted)
+    self.assertArraysEqual(mat, dense_unsorted)
+    self.assertArraysEqual(mat, dense_unsorted_fallback)
+
+    rhs_vec = jnp.arange(3, dtype=dtype)
+    matvec = jit(sparse.coo_matvec)
+    matvec_expected = mat @ rhs_vec
+    with self.assertNoWarnings():
+      matvec_rows_sorted = matvec(mat_rows_sorted, rhs_vec)
+      matvec_cols_sorted = matvec(mat_cols_sorted, rhs_vec)
+      matvec_unsorted = matvec(mat_unsorted._sort_rows(), rhs_vec)
+    with self.assertWarnsRegex(sparse.CuSparseEfficiencyWarning, "coo_matvec GPU lowering requires matrices with sorted rows.*"):
+      matvec_unsorted_fallback = matvec(mat_unsorted, rhs_vec)
+    self.assertArraysEqual(matvec_expected, matvec_rows_sorted)
+    self.assertArraysEqual(matvec_expected, matvec_cols_sorted)
+    self.assertArraysEqual(matvec_expected, matvec_unsorted)
+    self.assertArraysEqual(matvec_expected, matvec_unsorted_fallback)
+
+    rhs_mat = jnp.arange(6, dtype=dtype).reshape(3, 2)
+    matmat = jit(sparse.coo_matmat)
+    matmat_expected = mat @ rhs_mat
+    with self.assertNoWarnings():
+      matmat_rows_sorted = matmat(mat_rows_sorted, rhs_mat)
+      matmat_cols_sorted = matmat(mat_cols_sorted, rhs_mat)
+      matmat_unsorted = matmat(mat_unsorted._sort_rows(), rhs_mat)
+    with self.assertWarnsRegex(sparse.CuSparseEfficiencyWarning, "coo_matmat GPU lowering requires matrices with sorted rows.*"):
+      matmat_unsorted_fallback = matmat(mat_unsorted, rhs_mat)
+    self.assertArraysEqual(matmat_expected, matmat_rows_sorted)
+    self.assertArraysEqual(matmat_expected, matmat_cols_sorted)
+    self.assertArraysEqual(matmat_expected, matmat_unsorted)
+    self.assertArraysEqual(matmat_expected, matmat_unsorted_fallback)
+
   @unittest.skipIf(jtu.device_under_test() != "gpu", "test requires GPU")
   def test_gpu_translation_rule(self):
     version = xla_bridge.get_backend().platform_version
-    cuda_version = None if version == "<unknown>" else int(version.split()[-1])
-    if cuda_version is None or cuda_version < 11000:
-      self.assertFalse(cusparse and cusparse.is_supported)
-      self.assertNotIn(sparse.csr_todense_p,
-                       xla._backend_specific_translations["gpu"])
+    if version.split()[0] != "rocm":
+      cuda_version = None if version == "<unknown>" else int(
+          version.split()[-1])
+      if cuda_version is None or cuda_version < 11000:
+        self.assertFalse(sparse_apis and sparse_apis.is_supported)
+        self.assertNotIn(sparse.csr_todense_p,
+                         xla._backend_specific_translations["gpu"])
+      else:
+        self.assertTrue(sparse_apis and sparse_apis.is_supported)
+        self.assertIn(sparse.csr_todense_p,
+                      xla._backend_specific_translations["gpu"])
     else:
-      self.assertTrue(cusparse and cusparse.is_supported)
+      self.assertTrue(sparse_apis and sparse_apis.is_supported)
       self.assertIn(sparse.csr_todense_p,
                     xla._backend_specific_translations["gpu"])
 
@@ -445,7 +536,10 @@ class cuSparseTest(jtu.JaxTestCase):
     fromdense = getattr(sparse, f"{mat_type}_fromdense")
     todense = getattr(sparse, f"{mat_type}_todense")
     args = fromdense(M, nse=nse, index_dtype=jnp.int32)
-    M_out = todense(*args, shape=M.shape)
+    if mat_type == 'coo':
+      M_out = todense(args)
+    else:
+      M_out = todense(*args, shape=M.shape)
     self.assertArraysEqual(M, M_out)
 
   @parameterized.named_parameters(jtu.cases_from_list(
@@ -456,8 +550,8 @@ class cuSparseTest(jtu.JaxTestCase):
   def test_coo_todense_ad(self, shape, dtype):
     rng = rand_sparse(self.rng(), post=jnp.array)
     M = rng(shape, dtype)
-    data, row, col = sparse.coo_fromdense(M, nse=(M != 0).sum())
-    f = lambda data: sparse.coo_todense(data, row, col, shape=M.shape)
+    data, row, col = sparse_coo._coo_fromdense(M, nse=(M != 0).sum())
+    f = lambda data: sparse_coo._coo_todense(data, row, col, spinfo=sparse_coo.COOInfo(shape=M.shape, rows_sorted=True))
 
     # Forward-mode
     primals, tangents = jax.jvp(f, [data], [jnp.ones_like(data)])
@@ -479,7 +573,7 @@ class cuSparseTest(jtu.JaxTestCase):
     rng = rand_sparse(self.rng(), post=jnp.array)
     M = rng(shape, dtype)
     nse = (M != 0).sum()
-    f = lambda M: sparse.coo_fromdense(M, nse=nse)
+    f = lambda M: sparse_coo._coo_fromdense(M, nse=nse)
 
     # Forward-mode
     primals, tangents = jax.jvp(f, [M], [jnp.ones_like(M)])
@@ -508,20 +602,20 @@ class cuSparseTest(jtu.JaxTestCase):
       for bshape in [shape[-1:] + s for s in [(), (1,), (3,)]]
       for dtype in jtu.dtypes.floating + jtu.dtypes.complex))
   def test_coo_matmul_ad(self, shape, dtype, bshape):
-    coo_matmul = sparse.coo_matvec if len(bshape) == 1 else sparse.coo_matmat
+    coo_matmul = sparse_coo._coo_matvec if len(bshape) == 1 else sparse_coo._coo_matmat
     tol = {np.float32: 1E-5, np.float64: 1E-12, np.complex64: 1E-5, np.complex128: 1E-12}
 
     rng = rand_sparse(self.rng(), post=jnp.array)
     rng_b = jtu.rand_default(self.rng())
 
     M = rng(shape, dtype)
-    data, row, col = sparse.coo_fromdense(M, nse=(M != 0).sum())
+    data, row, col = sparse_coo._coo_fromdense(M, nse=(M != 0).sum())
     x = rng_b(bshape, dtype)
     xdot = rng_b(bshape, dtype)
 
     # Forward-mode with respect to the vector
     f_dense = lambda x: M @ x
-    f_sparse = lambda x: coo_matmul(data, row, col, x, shape=M.shape)
+    f_sparse = lambda x: coo_matmul(data, row, col, x, spinfo=sparse_coo.COOInfo(shape=M.shape))
     v_sparse, t_sparse = jax.jvp(f_sparse, [x], [xdot])
     v_dense, t_dense = jax.jvp(f_dense, [x], [xdot])
     self.assertAllClose(v_sparse, v_dense, atol=tol, rtol=tol)
@@ -536,8 +630,8 @@ class cuSparseTest(jtu.JaxTestCase):
     self.assertAllClose(out_dense, out_sparse, atol=tol, rtol=tol)
 
     # Forward-mode with respect to nonzero elements of the matrix
-    f_sparse = lambda data: coo_matmul(data, row, col, x, shape=M.shape)
-    f_dense = lambda data: sparse.coo_todense(data, row, col, shape=M.shape) @ x
+    f_sparse = lambda data: coo_matmul(data, row, col, x, spinfo=sparse_coo.COOInfo(shape=M.shape))
+    f_dense = lambda data: sparse_coo._coo_todense(data, row, col, spinfo=sparse_coo.COOInfo(shape=M.shape)) @ x
     data = rng((len(data),), data.dtype)
     data_dot = rng((len(data),), data.dtype)
     v_sparse, t_sparse = jax.jvp(f_sparse, [data], [data_dot])
@@ -555,7 +649,6 @@ class cuSparseTest(jtu.JaxTestCase):
     self.assertAllClose(out_dense, out_sparse, atol=tol, rtol=tol)
 
 
-@jtu.with_config(jax_numpy_rank_promotion="raise")
 class BCOOTest(jtu.JaxTestCase):
   @parameterized.named_parameters(jtu.cases_from_list(
       {"testcase_name": "_{}_nbatch={}_ndense={}".format(
@@ -917,36 +1010,46 @@ class BCOOTest(jtu.JaxTestCase):
     lhs_2d_sparse, lhs_sparse_2d_indicdes = create_unsorted_indices(
         lhs_2d_sparse, lhs_sparse_2d_indicdes)
 
-    dimension_numbers = (([1], [0]), ([], []))
-    expected_2d = lax.dot_general(
-        lhs_2d_dense, rhs, dimension_numbers=dimension_numbers)
-    actual_2d = sparse.bcoo_dot_general(
-        lhs_2d_sparse, lhs_sparse_2d_indicdes, rhs,
-        dimension_numbers=dimension_numbers,
-        lhs_spinfo=BCOOInfo(lhs_2d_dense.shape))
+    dimension_numbers_2d = (([1], [0]), ([], []))
 
+    def args_maker_2d():
+      return lhs_2d_sparse, lhs_sparse_2d_indicdes, lhs_2d_dense, rhs
+
+    def f_dense_2d(data, indices, lhs, rhs):
+      return lax.dot_general(lhs, rhs, dimension_numbers=dimension_numbers_2d)
+
+    def f_sparse_2d(data, indices, lhs, rhs):
+      return sparse.bcoo_dot_general(data, indices, rhs,
+                                     dimension_numbers=dimension_numbers_2d,
+                                     lhs_spinfo=BCOOInfo(lhs.shape))
     with self.subTest(msg="2D"):
-      self.assertAllClose(expected_2d, actual_2d)
+      self._CompileAndCheck(f_sparse_2d, args_maker_2d)
+      self._CheckAgainstNumpy(f_dense_2d, f_sparse_2d, args_maker_2d)
 
-    # It creates out-of-bound indices when nse > nnz.
     lhs_1d_dense = jnp.array([0, 1, 0, 2, 0], dtype=jnp.float32)
     lhs_1d_sparse, lhs_sparse_1d_indicdes = sparse.bcoo_fromdense(
-        lhs_1d_dense, nse=7)
+        lhs_1d_dense, nse=5)
 
     # Random permutate the indices to make them unsorted.
     lhs_1d_sparse, lhs_sparse_1d_indicdes = create_unsorted_indices(
         lhs_1d_sparse, lhs_sparse_1d_indicdes)
 
-    dimension_numbers = (([0], [0]), ([], []))
-    expected_1d = lax.dot_general(
-        lhs_1d_dense, rhs, dimension_numbers=dimension_numbers)
-    actual_1d = sparse.bcoo_dot_general(
-        lhs_1d_sparse, lhs_sparse_1d_indicdes, rhs,
-        dimension_numbers=dimension_numbers,
-        lhs_spinfo=BCOOInfo(lhs_1d_dense.shape))
+    dimension_numbers_1d = (([0], [0]), ([], []))
+
+    def args_maker_1d():
+      return lhs_1d_sparse, lhs_sparse_1d_indicdes, lhs_1d_dense, rhs
+
+    def f_dense_1d(data, indices, lhs, rhs):
+      return lax.dot_general(lhs, rhs, dimension_numbers=dimension_numbers_1d)
+
+    def f_sparse_1d(data, indices, lhs, rhs):
+      return sparse.bcoo_dot_general(data, indices, rhs,
+                                     dimension_numbers=dimension_numbers_1d,
+                                     lhs_spinfo=BCOOInfo(lhs.shape))
 
     with self.subTest(msg="1D"):
-      self.assertAllClose(expected_1d, actual_1d)
+      self._CompileAndCheck(f_sparse_1d, args_maker_1d)
+      self._CheckAgainstNumpy(f_dense_1d, f_sparse_1d, args_maker_1d)
 
   @parameterized.named_parameters(jtu.cases_from_list(
       {"testcase_name": props.testcase_name(), "props": props}
@@ -1556,13 +1659,12 @@ class BCOOTest(jtu.JaxTestCase):
     self.assertAllClose(out1, out2, rtol=tol)
     self.assertAllClose(out1, out3, rtol=tol)
   @parameterized.named_parameters(jtu.cases_from_list(
-      {"testcase_name": "_{}_{}_n_batch={}_n_dense={}".format(
-        jtu.format_shape_dtype_string(lhs_shape, lhs_dtype),
-        jtu.format_shape_dtype_string(rhs_shape, rhs_dtype),
-        n_batch, n_dense),
+      {"testcase_name": "_{}_n_batch={}_{}_n_batch={}_n_dense={}".format(
+        jtu.format_shape_dtype_string(lhs_shape, lhs_dtype), lhs_n_batch,
+        jtu.format_shape_dtype_string(rhs_shape, rhs_dtype), rhs_n_batch, n_dense),
        "lhs_shape": lhs_shape, "lhs_dtype": lhs_dtype,
        "rhs_shape": rhs_shape, "rhs_dtype": rhs_dtype,
-       "n_batch": n_batch, "n_dense": n_dense,
+       "lhs_n_batch": lhs_n_batch, "rhs_n_batch": rhs_n_batch, "n_dense": n_dense,
       }
       # TODO(jakevdp): add broadcasted shapes (from bcoo_mul_dense) once sparse-sparse mul
       # supports inputs of differing rank.
@@ -1570,19 +1672,21 @@ class BCOOTest(jtu.JaxTestCase):
                                    [(3, 4), (1, 1)], [(3, 4), (1, 4)], [(3, 4), (3, 1)], [(3, 4), (3, 4)],
                                    [(3, 4, 5), (1, 4, 5)], [(3, 4, 5), (3, 1, 1)], [(3, 4, 5), (1, 4, 1)]]
       # TODO(jakevdp): add tests for batch & dense dimensions.
-      for n_batch in range(len(lhs_shape) + 1)
-      for n_dense in range(len(lhs_shape) + 1 - n_batch)
+      for lhs_n_batch in range(len(lhs_shape) + 1)
+      for rhs_n_batch in range(len(lhs_shape) + 1)
+      for n_dense in range(len(lhs_shape) + 1 - max(lhs_n_batch, rhs_n_batch))
       for lhs_dtype in all_dtypes
       for rhs_dtype in all_dtypes))
-  def test_bcoo_mul_sparse(self, lhs_shape, lhs_dtype, rhs_shape, rhs_dtype, n_batch, n_dense):
+  def test_bcoo_mul_sparse(self, lhs_shape, lhs_dtype, rhs_shape, rhs_dtype, lhs_n_batch, rhs_n_batch, n_dense):
     rng = rand_sparse(self.rng())
     lhs = jnp.array(rng(lhs_shape, lhs_dtype))
     rhs = jnp.array(rng(rhs_shape, rhs_dtype))
 
-    sp = lambda x: sparse.BCOO.fromdense(x, n_batch=n_batch, n_dense=n_dense)
+    lhs_sp = sparse.BCOO.fromdense(lhs, n_batch=lhs_n_batch, n_dense=n_dense)
+    rhs_sp = sparse.BCOO.fromdense(rhs, n_batch=rhs_n_batch, n_dense=n_dense)
 
     out1 = lhs * rhs
-    out2 = (sp(lhs) * sp(rhs)).todense()
+    out2 = (lhs_sp * rhs_sp).todense()
 
     tol = {np.float64: 1E-13, np.complex128: 1E-13,
            np.float32: 1E-6, np.complex64: 1E-6}
@@ -1679,7 +1783,6 @@ class BCOOTest(jtu.JaxTestCase):
     self.assertArraysEqual((y_sp @ x_sp).todense(), y_de @ x_de)
 
 
-@jtu.with_config(jax_numpy_rank_promotion="raise")
 class SparseGradTest(jtu.JaxTestCase):
   def test_sparse_grad(self):
     rng_sparse = rand_sparse(self.rng())
@@ -1702,7 +1805,6 @@ class SparseGradTest(jtu.JaxTestCase):
     self.assertArraysEqual(grad_sparse.todense(), grad_sparse_from_dense)
 
 
-@jtu.with_config(jax_numpy_rank_promotion="raise")
 class SparseObjectTest(jtu.JaxTestCase):
   def test_repr(self):
     M = sparse.BCOO.fromdense(jnp.arange(5, dtype='float32'))
@@ -1898,7 +2000,6 @@ class SparseObjectTest(jtu.JaxTestCase):
     self.assertArraysEqual(M.sum(), Msp.sum())
 
 
-@jtu.with_config(jax_numpy_rank_promotion="raise")
 class SparseRandomTest(jtu.JaxTestCase):
   @parameterized.named_parameters(jtu.cases_from_list(
       {"testcase_name": "_{}_indices_dtype={}_nbatch={}_ndense={}".format(

@@ -109,7 +109,6 @@ ignore_xmap_warning = partial(
   jtu.ignore_warning, message=".*is an experimental.*")
 
 
-@jtu.with_config(jax_numpy_rank_promotion="raise")
 class PythonPmapTest(jtu.JaxTestCase):
 
   @property
@@ -160,9 +159,17 @@ class PythonPmapTest(jtu.JaxTestCase):
     shape = (jax.device_count(), 4)
     x = np.arange(prod(shape), dtype=np.float32).reshape(shape)
     expected = f(x)
-    f_exe = f.lower(x).compile()
-    ans = f_exe(x)
+    lowered = f.lower(x)
+    compiled = lowered.compile()
+    ans = compiled(x)
+
     self.assertAllClose(ans, expected)
+
+    # It's a pair of: (positional args, as a tuple of their structures, kwargs).
+    for obj in [lowered, compiled]:
+      self.assertFalse(obj._no_kwargs)
+      self.assertEqual(obj.in_tree, jax.tree_flatten(((0,), {}))[1])
+      self.assertEqual(obj.in_avals, ((jax.ShapedArray(x.shape, x.dtype),), {}))
 
   def testLowerCompileInTreeMismatch(self):
     f = self.pmap(lambda x: x - lax.pmean(x, 'i'), axis_name='i')
@@ -218,6 +225,29 @@ class PythonPmapTest(jtu.JaxTestCase):
     f_exe = f.lower(x, y).compile()
     ans = f_exe(x, y)
     self.assertAllClose(ans, expected)
+
+  def testLowerCompilerIR(self):
+    f = self.pmap(lambda x: x - lax.pmean(x, 'i'), axis_name='i')
+    shape = (jax.device_count(), 4)
+    x = np.arange(prod(shape), dtype=np.float32).reshape(shape)
+    f = f.lower(x)
+    self.assertIsNotNone(f.compiler_ir())
+    self.assertIsNotNone(f.compiler_ir(dialect='hlo'))
+    self.assertIsNotNone(f.compiler_ir(dialect='mhlo'))
+
+  def testLowerCompileCompilerIR(self):
+    f = self.pmap(lambda x: x - lax.pmean(x, 'i'), axis_name='i')
+    shape = (jax.device_count(), 4)
+    x = np.arange(prod(shape), dtype=np.float32).reshape(shape)
+    f = f.lower(x).compile()
+    self.assertIsNotNone(f.compiler_ir())
+
+  def testLowerCompileExecutable(self):
+    f = self.pmap(lambda x: x - lax.pmean(x, 'i'), axis_name='i')
+    shape = (jax.device_count(), 4)
+    x = np.arange(prod(shape), dtype=np.float32).reshape(shape)
+    f = f.lower(x).compile()
+    self.assertIsNotNone(f.runtime_executable())
 
   def testMean(self):
     f = self.pmap(lambda x: x - lax.pmean(x, 'i'), axis_name='i')
@@ -1890,8 +1920,6 @@ class PythonPmapTest(jtu.JaxTestCase):
       _ = f_bwd(x)
     self.assertEqual(count[0], 0)  # cache hits on fwd and bwd
 
-  @unittest.skipIf(jax._src.lib._xla_extension_version < 44,
-                   "XLA extension too old.")
   def testSizeOverflow(self):
     x = jnp.arange(1)
     x = self.pmap(lambda _: jnp.ones([8, 267736, 1024], dtype=jnp.int8))(x)
@@ -1904,8 +1932,14 @@ class CppPmapTest(PythonPmapTest):
   def pmap(self):
     return src_api._cpp_pmap
 
+  def pmap_fast_path_is_enabled(self):
+    num_devices = jax.device_count()
+    f = jax.pmap(lambda x: x+1)
+    size = f._cache_size()
+    f(np.zeros([num_devices], dtype=np.float32))
+    self.assertEqual(f._cache_size(), size+1)
 
-@jtu.with_config(jax_numpy_rank_promotion="raise")
+
 class VmapOfPmapTest(jtu.JaxTestCase):
 
   # TODO(apaszke)
@@ -1948,7 +1982,6 @@ class VmapOfPmapTest(jtu.JaxTestCase):
     self.assertAllClose(ans, expected)
 
 
-@jtu.with_config(jax_numpy_rank_promotion="raise")
 class VmapPmapCollectivesTest(jtu.JaxTestCase):
 
   @parameterized.named_parameters(
@@ -2134,7 +2167,6 @@ class VmapPmapCollectivesTest(jtu.JaxTestCase):
     self.assertAllClose(f(jax.pmap)(x), f(jax.vmap)(x))
 
 
-@jtu.with_config(jax_numpy_rank_promotion="raise")
 class PmapWithDevicesTest(jtu.JaxTestCase):
 
   def testAllDevices(self):
@@ -2387,7 +2419,6 @@ class PmapWithDevicesTest(jtu.JaxTestCase):
                         jax.grad(mk_case(vmap))(x, y))
 
 
-@jtu.with_config(jax_numpy_rank_promotion="raise")
 class ShardedDeviceArrayTest(jtu.JaxTestCase):
 
   def testThreadsafeIndexing(self):
@@ -2493,7 +2524,6 @@ class ShardedDeviceArrayTest(jtu.JaxTestCase):
       _ = x[0]
 
 
-@jtu.with_config(jax_numpy_rank_promotion="raise")
 class SpecToIndicesTest(jtu.JaxTestCase):
 
   def testShardsPerAxis(self):
@@ -2623,7 +2653,6 @@ def _spec_str(spec):
           f"{spec.mesh_mapping},)")
 
 
-@jtu.with_config(jax_numpy_rank_promotion="raise")
 class ShardArgsTest(jtu.JaxTestCase):
 
   def numpy_array(x):

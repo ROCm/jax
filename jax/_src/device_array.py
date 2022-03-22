@@ -138,7 +138,7 @@ class _DeviceArray(DeviceArray):  # type: ignore
     Returns the buffer object (`self`).
     """
     self._check_if_deleted()
-    self.device_buffer.block_host_until_ready()  # pytype: disable=attribute-error
+    self.device_buffer.block_until_ready()
     return self
 
   @property
@@ -164,6 +164,10 @@ class _DeviceArray(DeviceArray):  # type: ignore
   @property
   def ndim(self):
     return len(self.aval.shape)
+
+  def device(self):
+    self._check_if_deleted()
+    return self.device_buffer.device()  # pytype: disable=attribute-error
 
   def copy_to_host_async(self):
     """Requests a copy of the buffer to the host."""
@@ -307,4 +311,4 @@ deleted_buffer = DeletedBuffer()
 device_array_types: List[type] = [xc.Buffer, _DeviceArray]
 for _device_array in device_array_types:
   core.literalable_types.add(_device_array)
-  core.pytype_aval_mappings[device_array] = abstract_arrays.canonical_concrete_aval
+  core.pytype_aval_mappings[_device_array] = abstract_arrays.canonical_concrete_aval

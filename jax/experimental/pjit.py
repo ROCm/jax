@@ -15,8 +15,7 @@
 from enum import IntEnum
 import numpy as np
 from collections import OrderedDict, Counter
-from typing import Callable, Sequence, Tuple, Union
-from warnings import warn
+from typing import Callable, Sequence, Tuple, Union, Optional
 import itertools as it
 from functools import partial
 
@@ -24,9 +23,11 @@ from jax.experimental import maps
 from jax.experimental.global_device_array import GlobalDeviceArray as GDA
 from jax import core
 from jax import linear_util as lu
-from jax._src.api import _check_callable, _check_arg, Lowered
+from jax import stages
+from jax._src.api import _check_callable, _check_arg
 from jax._src import dispatch
 from jax._src import source_info_util
+from jax._src.lib import xla_extension_version
 from jax._src.api_util import (argnums_partial_except, flatten_axes,
                                flatten_fun_nokwargs, _ensure_index_tuple,
                                donation_vector, rebase_donate_argnums,
@@ -40,7 +41,9 @@ from jax.interpreters import batching
 from jax.interpreters import partial_eval as pe
 from jax.interpreters.sharded_jit import PartitionSpec
 from jax._src.lib import xla_client as xc
-from jax.tree_util import tree_map, tree_flatten, tree_unflatten
+from jax.tree_util import (tree_map, tree_flatten, tree_unflatten,
+                           treedef_is_leaf, tree_structure, treedef_tuple)
+from jax._src.tree_util import prefix_errors
 from jax._src.util import (extend_name_stack, HashableFunction, safe_zip,
                          wrap_name, wraps, distributed_debug_log,
                          split_list, cache, tuple_insert)
@@ -62,7 +65,7 @@ def pjit(fun: Callable,
          in_axis_resources,
          out_axis_resources,
          static_argnums: Union[int, Sequence[int]] = (),
-         donate_argnums: Union[int, Sequence[int]] = ()):
+         donate_argnums: Union[int, Sequence[int]] = ()) -> stages.Wrapped:
   """Makes ``fun`` compiled and automatically partitioned across multiple devices.
 
   The returned function has semantics equivalent to those of ``fun``, but is
@@ -75,7 +78,7 @@ def pjit(fun: Callable,
   propagation of the input partitioning specified in ``in_axis_resources`` and
   the output partitioning specified in ``out_axis_resources``. The resources
   specified in those two arguments must refer to mesh axes, as defined by
-  the :py:func:`jax.experimental.maps.mesh` context manager. Note that the mesh
+  the :py:func:`jax.experimental.maps.Mesh` context manager. Note that the mesh
   definition at ``pjit`` application time is ignored, and the returned function
   will use the mesh definition available at each call site.
 
@@ -168,17 +171,16 @@ def pjit(fun: Callable,
 
   >>> import jax
   >>> import jax.numpy as jnp
-  >>> from jax.experimental.maps import mesh
+  >>> from jax.experimental.maps import Mesh
   >>> from jax.experimental.pjit import PartitionSpec, pjit
   >>>
   >>> x = jnp.arange(8, dtype=jnp.float32)
   >>> f = pjit(lambda x: jax.numpy.convolve(x, jnp.asarray([0.5, 1.0, 0.5]), 'same'),
   ...         in_axis_resources=None, out_axis_resources=PartitionSpec('devices'))
-  >>> with mesh(jax.devices(), ('devices',)):
+  >>> with Mesh(jax.devices(), ('devices',)):
   ...   print(f(x))  # doctest: +SKIP
   [ 0.5  2.   4.   6.   8.  10.  12.  10. ]
   """
-  warn("pjit is an experimental feature and probably has bugs!")
   _check_callable(fun)
 
   if isinstance(in_axis_resources, list):
@@ -207,20 +209,18 @@ def pjit(fun: Callable,
                        f"was called with only {len(args)} positional arguments.")
 
     # Putting this outside of wrapped would make resources lexically scoped
-    resource_env = maps.thread_resources.env
+    resource_env = pxla.thread_resources.env
     mesh = resource_env.physical_mesh
     if mesh.empty:
       raise RuntimeError("pjit requires a non-empty mesh! Are you sure that "
                          "it's defined at the call site?")
-    if any(d.platform not in {'gpu', 'tpu'} for d in mesh.devices.flat):
-      raise RuntimeError("pjit only supports GPU and TPU devices")
+
+    if xla_extension_version < 60:
+      if any(d.platform not in {'gpu', 'tpu'} for d in mesh.devices.flat):
+        raise RuntimeError("pjit only supports GPU and TPU devices")
 
     f = lu.wrap_init(fun)
-    if static_argnums:
-      f, dyn_args = argnums_partial_except(
-          f, static_argnums, args, allow_invalid=False)
-    else:
-      dyn_args = args
+    f, dyn_args = argnums_partial_except(f, static_argnums, args, allow_invalid=False)
     del args
 
     args_flat, in_tree = tree_flatten(dyn_args)
@@ -239,43 +239,53 @@ def pjit(fun: Callable,
         maps._PositionalSemantics.GLOBAL if isinstance(a, GDA) else maps._positional_semantics.val
         for a in args_flat)
     out_positional_semantics = maps._positional_semantics.val
-    jaxpr, in_axis_resources_flat, out_axis_resources_flat = _pjit_jaxpr(
-        flat_fun, mesh, local_in_avals, in_tree,
-        hashable_pytree(in_axis_resources),
-        HashableFunction(out_tree, closure=()),
-        hashable_pytree(out_axis_resources),
-        in_positional_semantics, out_positional_semantics,
-        tuple(isinstance(a, GDA) for a in args_flat))
-    in_axis_resources_flat = tree_map(_maybe_replace_from_gda_with_pspec,
-                                      in_axis_resources_flat, tuple(args_flat))
+
+    global_in_avals, canonicalized_in_axis_resources_flat = _process_in_axis_resources(
+        mesh, local_in_avals, hashable_pytree(in_axis_resources), in_tree,
+        in_positional_semantics, tuple(isinstance(a, GDA) for a in args_flat))
+    jaxpr, canonicalized_out_axis_resources_flat = _pjit_jaxpr(
+        flat_fun, mesh, global_in_avals, HashableFunction(out_tree, closure=()),
+        hashable_pytree(out_axis_resources))
+    canonicalized_in_axis_resources_flat = tree_map(
+        _maybe_replace_from_gda_with_pspec,
+        canonicalized_in_axis_resources_flat, tuple(args_flat))
+
     params = dict(
         jaxpr=jaxpr,
-        in_axis_resources=in_axis_resources_flat,
-        out_axis_resources=out_axis_resources_flat,
+        in_axis_resources=canonicalized_in_axis_resources_flat,
+        out_axis_resources=canonicalized_out_axis_resources_flat,
         resource_env=resource_env,
         donated_invars=donated_invars,
-        name=flat_fun.__name__,
+        name=getattr(flat_fun, '__name__', '<unnamed function>'),
         in_positional_semantics=in_positional_semantics,
         out_positional_semantics=out_positional_semantics)
-    return args_flat, params, in_tree, out_tree(), donate_argnums
+    return (args_flat, local_in_avals, params, in_tree, out_tree(),
+            donate_argnums)
 
   @wraps(fun)
   def wrapped(*args, **kwargs):
-    args_flat, params, _, out_tree, _ = infer_params(*args, **kwargs)
+    args_flat, _, params, _, out_tree, _ = infer_params(*args, **kwargs)
     for arg in args_flat:
       _check_arg(arg)
     out = pjit_p.bind(*args_flat, **params)
     return tree_unflatten(out_tree, out)
 
   def lower(*args, **kwargs):
-    args_flat, params, in_tree, out_tree, donate_argnums = \
-        infer_params(*args, **kwargs)
+    (args_flat, flat_local_in_avals, params, in_tree, out_tree,
+     donate_argnums) = infer_params(*args, **kwargs)
+    in_is_global = _calc_is_global_sequence(
+        params['in_positional_semantics'], params['in_axis_resources'])
     lowering = _pjit_lower(
         params['jaxpr'], params['in_axis_resources'],
         params['out_axis_resources'], params['resource_env'],
         params['donated_invars'], params['name'],
-        params['in_positional_semantics'], params['out_positional_semantics'])
-    return Lowered(lowering, in_tree, out_tree, donate_argnums, no_kwargs=True)
+        in_is_global)
+
+    args_kwargs_in_tree = treedef_tuple([in_tree, tree_flatten({})[1]])
+    local_in_avals = args_kwargs_in_tree.unflatten(flat_local_in_avals)
+    return stages.Lowered.from_flat_info(
+        lowering, args_kwargs_in_tree, local_in_avals, donate_argnums, out_tree,
+        no_kwargs=True)
 
   wrapped.lower = lower
   return wrapped
@@ -293,18 +303,64 @@ def flatten_axis_resources(what, tree, axis_resources, tupled_args):
   try:
     return tuple(flatten_axes(what, tree, axis_resources, tupled_args=tupled_args))
   except ValueError:
-    pass
-  # Replace axis_resources with unparsed versions to avoid revealing internal details
-  flatten_axes(what, tree, tree_map(lambda parsed: parsed.user_spec, axis_resources),
-               tupled_args=tupled_args)
-  raise AssertionError("Please open a bug request!")  # This should be unreachable
+    pass  # Raise a tree prefix error below
 
-@lu.cache
-def _pjit_jaxpr(fun, mesh, local_in_avals,
-                in_tree, in_axis_resources_thunk,
-                out_tree, out_axis_resources_thunk,
-                in_positional_semantics, out_positional_semantics, is_gda):
-  # TODO(yashkatariya): Make this work with FROM_GDA special value.
+  # Tree leaves are always valid prefixes, so if there was a prefix error as
+  # assumed here, axis_resources must not be a leaf.
+  assert not treedef_is_leaf(tree_structure(axis_resources))
+
+  # Check the type directly rather than using isinstance because of namedtuples.
+  if tupled_args and (type(axis_resources) is not tuple or
+                      len(axis_resources) != len(tree.children())):
+    # We know axis_resources is meant to be a tuple corresponding to the args
+    # tuple, but while it is a non-leaf pytree, either it wasn't a tuple or it
+    # wasn't the right length.
+    msg = (f"{what} specification must be a tree prefix of the positional "
+           f"arguments tuple passed to the `pjit`-decorated function. In "
+           f"particular, {what} must either be a None, a PartitionSpec, or "
+           f"a tuple of length equal to the number of positional arguments.")
+    # If `tree` represents an args tuple, then `axis_resources` must be a tuple.
+    # TODO(mattjj,apaszke): disable implicit list casts, remove 'or list' below
+    if type(axis_resources) is not tuple:
+      msg += f" But {what} is not a tuple: got {type(axis_resources)} instead."
+    elif len(axis_resources) != len(tree.children()):
+      msg += (f" But {what} is the wrong length: got a tuple or list of length "
+              f"{len(axis_resources)} for an args tuple of length "
+              f"{len(tree.children())}.")
+
+    # As an extra hint, let's check if the user just forgot to wrap
+    # in_axis_resources in a singleton tuple.
+    if len(tree.children()) == 1:
+      try: flatten_axes(what, tree, (axis_resources,))
+      except ValueError: pass  # That's not the issue.
+      else:
+        msg += (f" Given the corresponding argument being "
+                f"passed, it looks like {what} might need to be wrapped in "
+                f"a singleton tuple.")
+
+    raise ValueError(msg)
+
+  # Replace axis_resources with unparsed versions to avoid revealing internal details
+  axis_tree = tree_map(lambda parsed: parsed.user_spec, axis_resources)
+
+  # Because ecause we only have the `tree` treedef and not the full pytree here,
+  # we construct a dummy tree to compare against. Revise this in callers?
+  dummy_tree = tree_unflatten(tree, [PytreeLeaf()] * tree.num_leaves)
+  errors = prefix_errors(axis_tree, dummy_tree)
+  if errors:
+    e = errors[0]  # Only show information about the first disagreement found.
+    raise e(what)
+
+  # At this point we've failed to find a tree prefix error.
+  assert False, "Please open a bug report!"  # This should be unreachable.
+
+class PytreeLeaf:
+  def __repr__(self): return "pytree leaf"
+
+
+@cache()
+def _process_in_axis_resources(mesh, local_in_avals, in_axis_resources_thunk,
+                               in_tree, in_positional_semantics, is_gda):
   in_axis_resources_flat = flatten_axis_resources(
         "pjit in_axis_resources", in_tree,
         in_axis_resources_thunk(), tupled_args=True)
@@ -327,14 +383,19 @@ def _pjit_jaxpr(fun, mesh, local_in_avals,
     # first one is a valid spec for a scalar value, while the second is not!
     _check_shapes_against_resources(
         "pjit arguments", mesh.is_multi_process, mesh.shape, local_in_avals,
-        in_axis_resources_flat)
+        in_axis_resources_flat, allow_uneven_sharding=False)
   else:
     _check_shapes_against_resources("pjit arguments", False, mesh.local_mesh.shape,
-                                    local_in_avals, in_axis_resources_flat)
+                                    local_in_avals, in_axis_resources_flat,
+                                    allow_uneven_sharding=False)
 
   global_in_avals = local_to_global(in_positional_semantics, mesh,
                                     local_in_avals, canonicalized_in_axis_resources_flat)
+  return tuple(global_in_avals), canonicalized_in_axis_resources_flat
 
+
+@lu.cache
+def _pjit_jaxpr(fun, mesh, global_in_avals, out_tree, out_axis_resources_thunk):
   prev_positional_val = maps._positional_semantics.val
   try:
     maps._positional_semantics.val = maps._PositionalSemantics.GLOBAL
@@ -349,11 +410,11 @@ def _pjit_jaxpr(fun, mesh, local_in_avals,
         "pjit out_axis_resources", out_tree(),
         out_axis_resources_thunk(), tupled_args=False)
   _check_shapes_against_resources("pjit outputs", mesh.is_multi_process, mesh.shape,
-                                  global_out_avals, out_axis_resources_flat)
+                                  global_out_avals, out_axis_resources_flat,
+                                  allow_uneven_sharding=False)
   canonicalized_out_axis_resources_flat = tree_map(_create_cpspec, out_axis_resources_flat)
   # lu.cache needs to be able to create weakrefs to outputs, so we can't return a plain tuple
-  return _ListWithW([jaxpr, canonicalized_in_axis_resources_flat,
-                     canonicalized_out_axis_resources_flat])
+  return _ListWithW([jaxpr, canonicalized_out_axis_resources_flat])
 
 
 class SpecSync(IntEnum):
@@ -437,9 +498,6 @@ class ParsedPartitionSpec:
             f"unsafe_user_spec={self.unsafe_user_spec}, "
             f"sync={self.sync})")
 
-REPLICATED = ParsedPartitionSpec(None, ())
-
-
 class CanonicalizedParsedPartitionSpec(ParsedPartitionSpec):
   """ParsedPartitionSpecs that are canonicalized.
 
@@ -469,11 +527,13 @@ class CanonicalizedParsedPartitionSpec(ParsedPartitionSpec):
             f"sync={self.sync})")
 
 
+REPLICATED = CanonicalizedParsedPartitionSpec(ParsedPartitionSpec(None, ()))
+
+
 def _prepare_axis_resources(axis_resources,
                             arg_name,
                             allow_unconstrained_dims=False):
-  # PyTrees don't treat None values as leaves, so we explicitly need
-  # to explicitly declare them as such
+  # PyTrees don't treat None values as leaves, so we use an is_leaf function.
   entries, treedef = tree_flatten(axis_resources, is_leaf=lambda x: x is None)
   what = f"{arg_name} leaf specifications"
   entries = [
@@ -501,10 +561,11 @@ def _check_unique_resources(axis_resources, arg_name):
       if multiple_uses:
         raise ValueError(f"A single {arg_name} specification can map every mesh axis "
                          f"to at most one positional dimension, but {arg_axis_resources.user_spec} "
-                         f"has duplicate entries for {maps.show_axes(multiple_uses)}")
+                         f"has duplicate entries for {pxla.show_axes(multiple_uses)}")
 
-def _check_shapes_against_resources(what: str, is_global_shape: bool, mesh_shape,
-                                    flat_avals, flat_axis_resources):
+def _check_shapes_against_resources(what: str, is_global_shape: bool,
+                                    mesh_shape, flat_avals, flat_axis_resources,
+                                    allow_uneven_sharding: bool):
   global_str = " global" if is_global_shape else ""
   for aval, aval_axis_resources in zip(flat_avals, flat_axis_resources):
     if _is_from_gda(aval_axis_resources):
@@ -524,7 +585,7 @@ def _check_shapes_against_resources(what: str, is_global_shape: bool, mesh_shape
         raise ValueError(f"One of {what} was given the resource assignment "
                          f"of {aval_axis_resources.user_spec}, but resource axis "
                          f"{e.args[0]} is undefined. Did you forget to declare the mesh?") from None
-      if shape[i] % size != 0:
+      if not allow_uneven_sharding and shape[i] % size != 0:
         raise ValueError(f"One of {what} was given the resource assignment "
                          f"of {aval_axis_resources.user_spec}, which implies that "
                          f"the{global_str} size of its dimension {i} should be "
@@ -540,10 +601,10 @@ def _pjit_call_impl(*args, jaxpr,
                     in_axis_resources, out_axis_resources,
                     resource_env, donated_invars, name,
                     in_positional_semantics, out_positional_semantics):
+  in_is_global = _calc_is_global_sequence(in_positional_semantics, in_axis_resources)
   compiled = _pjit_lower(
       jaxpr, in_axis_resources, out_axis_resources,
-      resource_env, donated_invars, name, in_positional_semantics,
-      out_positional_semantics).compile()
+      resource_env, donated_invars, name, in_is_global).compile()
   distributed_debug_log(("Running pjit'd function", name),
                         ("mesh", resource_env.physical_mesh))
   return compiled.unsafe_call(*args)
@@ -557,7 +618,7 @@ def _pjit_lower(
     resource_env,
     donated_invars,
     name: str,
-    in_positional_semantics, out_positional_semantics):
+    in_is_global: Sequence[bool]):
   # in_axis_resources and out_axis_resources are canonicalized to avoid
   # recompilation (since pjit_lower is cached) if its compiled with `None` but
   # in the next call `P(None)` is passed. Those are the same thing so should be
@@ -568,12 +629,10 @@ def _pjit_lower(
   f = core.jaxpr_as_fun(jaxpr)
   f.__name__ = name
   fun = lu.wrap_init(f)
-  in_is_gda = [True if ips == maps._PositionalSemantics.GLOBAL else False
-               for ips in in_positional_semantics]
   return pxla.lower_mesh_computation(
-      fun, name, resource_env.physical_mesh,
+      fun, 'pjit', name, resource_env.physical_mesh,
       in_axes, out_axes, donated_invars,
-      True, jaxpr.in_avals, tiling_method=None, in_is_gda=in_is_gda)
+      True, jaxpr.in_avals, tiling_method=None, in_is_global=in_is_global)
 
 
 def _pjit_abstract_eval(*args, jaxpr, out_axis_resources, resource_env,
@@ -587,6 +646,7 @@ def _pjit_translation_rule(ctx, avals_in, avals_out, *in_nodes, name,
                            jaxpr, in_axis_resources, out_axis_resources,
                            resource_env, donated_invars, in_positional_semantics,
                            out_positional_semantics):
+  # TODO: Make this into an MLIR rule and use manual_axes!
   mesh = resource_env.physical_mesh
   subc = xc.XlaBuilder(f"pjit_{name}")
 
@@ -726,8 +786,14 @@ def _pjit_partial_eval(trace, *in_tracers,
       out_positional_semantics=out_positional_semantics)
 
   if num_residuals:
-    executable = _pjit_lower(**known_params).compile(
-        _allow_propagation_to_outputs=True, _allow_compile_replicated=False)
+    in_is_global = _calc_is_global_sequence(
+        known_params['in_positional_semantics'], known_params['in_axis_resources'])
+    executable = _pjit_lower(
+        known_params["jaxpr"], known_params["in_axis_resources"],
+        known_params["out_axis_resources"], known_params["resource_env"],
+        known_params["donated_invars"], known_params["name"],
+        in_is_global).compile(_allow_propagation_to_outputs=True,
+                              _allow_compile_replicated=False)
     output_op_sharding = \
         executable.xla_executable.hlo_modules()[0].spmd_output_sharding
     output_sharding_specs = parse_op_sharding(output_op_sharding, mesh)
@@ -792,7 +858,7 @@ def _pjit_transpose(reduce_axes, cts_in, *primals_in,
     return tuple(x for x, mz in zip(xs, maybe_zeros) if not type(mz) is ty)
 
   body = lu.wrap_init(ad.closed_backward_pass)
-  body = lu.hashable_partial(body, jaxpr, reduce_axes)
+  body = lu.hashable_partial(body, jaxpr, reduce_axes, False)
   primals_and_nz_cts_in, in_treedef = tree_flatten((primals_in, cts_in))
   body, cts_out_treedef_thunk = flatten_fun_nokwargs(body, in_treedef)
 
@@ -846,7 +912,7 @@ def _check_resources_against_named_axes(what, aval, pos_axis_resources, named_ax
         f"{pos_axis_resources.unsynced_user_spec(SpecSync.DIM_PERMUTE)} "
         f"that uses one or more mesh axes already used by xmap to partition "
         f"a named axis appearing in its named_shape (both use mesh axes "
-        f"{maps.show_axes(overlap)})")
+        f"{pxla.show_axes(overlap)})")
 
 def _resource_typing_pjit(avals, params, source_info, resource_env, named_axis_resources):
   jaxpr = params["jaxpr"]
@@ -874,12 +940,12 @@ def with_sharding_constraint(x, axis_resources):
   axis_resources_flat = tuple(
       flatten_axes("with_sharding_constraint axis_resources",
                    tree, parsed_axis_resources))
-  resource_env = maps.thread_resources.env
+  resource_env = pxla.thread_resources.env
   mesh = resource_env.physical_mesh
   _check_shapes_against_resources(
       "with_sharding_constraint arguments",
       mesh.is_multi_process, mesh.shape,
-      x_flat, axis_resources_flat)
+      x_flat, axis_resources_flat, allow_uneven_sharding=True)
   outs = [sharding_constraint_p.bind(y, axis_resources=r, resource_env=resource_env)
           for y, r in safe_zip(x_flat, axis_resources_flat)]
   return tree_unflatten(tree, outs)
@@ -906,7 +972,8 @@ def _sharding_constraint_translation_rule(ctx, avals_in, avals_out, x_node, *,
       xla.set_sharding_proto(
           ctx.builder,
           x_node,
-          get_aval_sharding_proto(aval, axis_resources, mesh),
+          get_aval_sharding_proto(
+              aval, axis_resources, mesh, allow_uneven_axes=True),
           unspecified_dims=get_unconstrained_dims(axis_resources))
   ]
 xla.register_translation(sharding_constraint_p, _sharding_constraint_translation_rule)
@@ -918,7 +985,12 @@ def _sharding_constraint_mhlo_lowering(ctx, x_node, *, axis_resources,
   return [
       mlir.wrap_with_sharding_op(
           x_node,
-          get_aval_sharding_proto(aval, axis_resources, mesh),
+          get_aval_sharding_proto(
+              aval,
+              axis_resources,
+              mesh,
+              ctx.module_context.axis_context,
+              allow_uneven_axes=True),
           unspecified_dims=get_unconstrained_dims(axis_resources))
   ]
 mlir.register_lowering(sharding_constraint_p,
@@ -957,11 +1029,18 @@ def get_array_mapping(axis_resources: ParsedPartitionSpec) -> pxla.ArrayMapping:
 
 def get_aval_sharding_proto(aval: core.AbstractValue,
                             axis_resources: ParsedPartitionSpec,
-                            mesh: maps.Mesh) -> xc.OpSharding:
+                            mesh: maps.Mesh,
+                            axis_ctx: Optional[mlir.SPMDAxisContext] = None,
+                            allow_uneven_axes: bool = False) -> xc.OpSharding:
   array_mapping = get_array_mapping(axis_resources)
-  sharding_spec = pxla.mesh_sharding_specs(mesh.shape, mesh.axis_names)(
-      aval, array_mapping)
-  return sharding_spec.sharding_proto()
+  sharding_spec = pxla.mesh_sharding_specs(
+      mesh.shape, mesh.axis_names, allow_uneven_axes=True)(aval, array_mapping)
+  special_axes = {}
+  if axis_ctx is not None:
+    axis_names = mesh.axis_names
+    for manual_axis in axis_ctx.manual_axes:
+      special_axes[axis_names.index(manual_axis)] = xc.OpSharding.Type.MANUAL
+  return sharding_spec.sharding_proto(special_axes=special_axes)
 
 
 def get_unconstrained_dims(axis_resources: ParsedPartitionSpec):
@@ -972,17 +1051,24 @@ def global_to_local(positional_semantics, mesh, avals, axes):
   if isinstance(positional_semantics, maps._PositionalSemantics):
     positional_semantics = [positional_semantics] * len(axes)
   return [
-      aval if ps == maps._PositionalSemantics.GLOBAL or aval_axes.partitions == () else mesh.global_to_local(
+      aval if ps == maps._PositionalSemantics.GLOBAL or aval_axes.partitions == () else mesh._global_to_local(
           get_array_mapping(aval_axes), aval)
       for aval, aval_axes, ps in safe_zip(avals, axes, positional_semantics)
   ]
 
 def local_to_global(positional_semantics, mesh, avals, axes):
   return [
-      aval if ps == maps._PositionalSemantics.GLOBAL or aval_axes.partitions == () else mesh.local_to_global(
+      aval if ps == maps._PositionalSemantics.GLOBAL or aval_axes.partitions == () else mesh._local_to_global(
           get_array_mapping(aval_axes), aval)
       for aval, aval_axes, ps in safe_zip(avals, axes, positional_semantics)
   ]
+
+
+def _calc_is_global_sequence(in_positional_semantics, in_axis_resources):
+  return tuple(
+      ips == maps._PositionalSemantics.GLOBAL or p.partitions == ()
+      for ips, p in safe_zip(in_positional_semantics, in_axis_resources))
+
 
 def _create_cpspec(x):
   return x if _is_from_gda(x) else CanonicalizedParsedPartitionSpec(x)
@@ -990,7 +1076,9 @@ def _create_cpspec(x):
 def _maybe_replace_from_gda_with_pspec(
     in_axis_resources_flat: CanonicalizedParsedPartitionSpec, arg) -> CanonicalizedParsedPartitionSpec:
   if isinstance(arg, GDA):
-    gda_cpspec = gda_mesh_axes_to_canonicalized_parsed_pspec(arg._mesh_axes)
+    gda_cpspec = CanonicalizedParsedPartitionSpec(
+        ParsedPartitionSpec.from_user_input(
+            arg.mesh_axes, arg_name="GDA mesh_axes"))
     assert type(gda_cpspec) is CanonicalizedParsedPartitionSpec
     if (not _is_from_gda(in_axis_resources_flat) and
         in_axis_resources_flat != gda_cpspec):
@@ -1003,19 +1091,12 @@ def _maybe_replace_from_gda_with_pspec(
     return gda_cpspec
   return in_axis_resources_flat
 
-def gda_mesh_axes_to_canonicalized_parsed_pspec(mesh_axes) -> CanonicalizedParsedPartitionSpec:
-  if not isinstance(mesh_axes, PartitionSpec):
-    pspec = PartitionSpec(*mesh_axes)
-  else:
-    pspec = mesh_axes
-  return CanonicalizedParsedPartitionSpec(ParsedPartitionSpec.from_user_input(
-      pspec, arg_name='GDA mesh_axes'))
 
 def _maybe_check_pjit_gda_mesh(args, mesh):
   for x in args:
-    if isinstance(x, GDA) and x._global_mesh != mesh:
+    if isinstance(x, GDA) and x.mesh != mesh:
       raise ValueError("Pjit's mesh and GDA's mesh should be equal. Got Pjit "
-                       f"mesh: {mesh},\n GDA mesh: {x._global_mesh}")
+                       f"mesh: {mesh},\n GDA mesh: {x.mesh}")
 
 # -------------------- XLA OpSharding to PartitionSpec --------------------
 # Note that OpSharding is more expressive than PartitionSpecs, so it's not
@@ -1135,7 +1216,13 @@ def parse_op_sharding(op_sharding, mesh):
         dim_size //= axis_size
         dim_partitions.append(axis)
       partitions.append(tuple(dim_partitions))
-    if op_sharding.replicate_on_last_tile_dim:
+    if op_sharding.last_tile_dims == [xc.OpSharding.Type.REPLICATED]:
+      replicate_on_last_tile_dim = True
+    else:
+      replicate_on_last_tile_dim = op_sharding.replicate_on_last_tile_dim
+      if op_sharding.last_tile_dims:
+        raise NotImplementedError("Unhandled OpSharding type. Please open a bug report!")
+    if replicate_on_last_tile_dim:
       partitions = partitions[:-1]
     return ParsedPartitionSpec('<internally generated spec>', partitions)
   else:

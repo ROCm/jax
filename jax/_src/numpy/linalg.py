@@ -22,10 +22,12 @@ from typing import Tuple, Union, cast
 
 from jax import jit, custom_jvp
 from jax import lax
-from jax._src.lax import linalg as lax_linalg
+
 from jax._src import dtypes
-from jax._src.numpy.util import _wraps
+from jax._src.lax import lax as lax_internal
+from jax._src.lax import linalg as lax_linalg
 from jax._src.numpy import lax_numpy as jnp
+from jax._src.numpy.util import _wraps
 from jax._src.util import canonicalize_axis
 
 _T = lambda x: jnp.swapaxes(x, -1, -2)
@@ -38,7 +40,8 @@ def _promote_arg_dtypes(*args):
   if not jnp.issubdtype(dtype, jnp.inexact):
     dtype, weak_type = jnp.float_, False
   dtype = dtypes.canonicalize_dtype(dtype)
-  args = [lax._convert_element_type(arg, dtype, weak_type) for arg in args]
+  args = [lax_internal._convert_element_type(arg, dtype, weak_type)
+          for arg in args]
   if len(args) == 1:
     return args[0]
   else:
@@ -301,9 +304,13 @@ def _det_jvp(primals, tangents):
 
 
 @_wraps(np.linalg.eig, lax_description="""
-This differs from ``numpy.linalg.eig`` in that the return type of
-``jax.numpy.linalg.eig`` is always ``complex64`` for 32-bit input,
+This differs from :func:`numpy.linalg.eig` in that the return type of
+:func:`jax.numpy.linalg.eig` is always ``complex64`` for 32-bit input,
 and ``complex128`` for 64-bit input.
+
+At present, non-symmetric eigendecomposition is only implemented on the CPU
+backend. However eigendecomposition for symmetric/Hermitian matrices is
+implemented more widely (see :func:`jax.numpy.linalg.eigh`).
 """)
 def eig(a):
   a = _promote_arg_dtypes(jnp.asarray(a))
@@ -434,7 +441,7 @@ def norm(x, ord=None, axis : Union[None, Tuple[int, ...], int] = None,
       return jnp.sum(jnp.abs(x), axis=axis, keepdims=keepdims)
     else:
       abs_x = jnp.abs(x)
-      ord = lax._const(abs_x, ord)
+      ord = lax_internal._const(abs_x, ord)
       out = jnp.sum(abs_x ** ord, axis=axis, keepdims=keepdims)
       return jnp.power(out, 1. / ord)
 

@@ -38,9 +38,10 @@ from jax._src.api_util import flatten_axes
 from jax._src.lax.lax import (
   ranges_like, remaining, _dot_general_batch_dim_nums, _dot_general_shape_rule,
   DotDimensionNumbers)
-from jax._src.lib import cusparse
 from jax._src.lib import xla_client as xc
-from jax._src.numpy.lax_numpy import _unique
+from jax._src.numpy.setops import _unique
+
+from jax._src.lib import sparse_apis
 
 xops = xc._xla.ops
 
@@ -141,6 +142,9 @@ def _bcoo_sort_indices(data, indices, shape):
   for _ in range(props.n_batch):
     f = broadcasting_vmap(f)
   return f(data, indices)
+
+_bcoo_sort_indices_rule = xla.lower_fun(
+    _bcoo_sort_indices, multiple_results=True, new_style=True)
 
 def _unbatch_bcoo(data, indices, shape):
   n_batch = _validate_bcoo(data, indices, shape).n_batch
@@ -684,11 +688,12 @@ def _bcoo_dot_general_cuda_translation_rule(
   assert lhs_data_aval.dtype in [np.float32, np.float64, np.complex64, np.complex128]
   assert lhs_data_aval.dtype == rhs_aval.dtype
   assert lhs_indices_aval.dtype == np.int32
+  assert sparse_apis is not None
 
   if rhs_ndim == 1:
-    bcoo_dot_general_fn = cusparse.coo_matvec
+    bcoo_dot_general_fn = sparse_apis.coo_matvec
   elif rhs_ndim == 2:
-    bcoo_dot_general_fn = cusparse.coo_matmat
+    bcoo_dot_general_fn = sparse_apis.coo_matmat
     if rhs_contract[0] == 1:
       rhs = xops.Transpose(rhs, permutation=[1, 0])
   else:
@@ -736,6 +741,11 @@ def _bcoo_dot_general_gpu_translation_rule(
     ctx, avals_in, avals_out, lhs_data, lhs_indices, rhs, *, dimension_numbers,
     lhs_spinfo: BCOOInfo):
 
+  if not config.jax_bcoo_cusparse_lowering:
+    return _bcoo_dot_general_default_translation_rule(
+      ctx, avals_in, avals_out, lhs_data, lhs_indices, rhs,
+      dimension_numbers=dimension_numbers, lhs_spinfo=lhs_spinfo)
+
   (lhs_contract, rhs_contract), (lhs_batch, rhs_batch) = dimension_numbers
   lhs_data_aval, lhs_indices_aval, rhs_aval, = avals_in
   n_batch, n_sparse, n_dense, nse = _validate_bcoo(
@@ -743,7 +753,7 @@ def _bcoo_dot_general_gpu_translation_rule(
 
   dtype = lhs_data_aval.dtype
   if dtype not in [np.float32, np.float64, np.complex64, np.complex128]:
-    warnings.warn(f'bcoo_dot_general cusparse lowering not available for '
+    warnings.warn(f'bcoo_dot_general cusparse/hipsparse lowering not available for '
                   f'dtype={dtype}. Falling back to default implementation.',
                   CuSparseEfficiencyWarning)
     return _bcoo_dot_general_default_translation_rule(
@@ -757,10 +767,11 @@ def _bcoo_dot_general_gpu_translation_rule(
       ctx, avals_in, avals_out, lhs_data, lhs_indices, rhs,
       dimension_numbers=dimension_numbers, lhs_spinfo=lhs_spinfo)
   else:
-    # The lhs indices are row-wise sorted.
-    lhs_indices_row, lhs_indices_col, lhs_data = lax.sort(
-        [lhs_indices[:, 0], lhs_indices[:, 1], lhs_data])
-    lhs_indices = jnp.hstack((lhs_indices_row, lhs_indices_col))
+    # Sorts lhs by row indices.
+    lhs_data, lhs_indices = _bcoo_sort_indices_rule(
+        ctx, avals_in[:2], avals_in[:2], lhs_data, lhs_indices,
+        shape=lhs_spinfo.shape)
+
     return _bcoo_dot_general_cuda_translation_rule(
       ctx, avals_in, avals_out, lhs_data, lhs_indices, rhs,
       dimension_numbers=dimension_numbers, lhs_spinfo=lhs_spinfo)
@@ -833,7 +844,7 @@ batching.primitive_batchers[bcoo_dot_general_p] = _bcoo_dot_general_batch_rule
 
 xla.register_translation(
     bcoo_dot_general_p, _bcoo_dot_general_default_translation_rule)
-if config.jax_bcoo_cusparse_lowering and cusparse and cusparse.is_supported:
+if sparse_apis and sparse_apis.is_supported:
   xla.register_translation(bcoo_dot_general_p,
                            _bcoo_dot_general_gpu_translation_rule,
                            platform='gpu')
@@ -1200,13 +1211,14 @@ def bcoo_multiply_sparse(lhs_data, lhs_indices, rhs_data, rhs_indices, *, lhs_sp
     # Similar requirement as lax.mul:
     raise TypeError("bcoo_multiply_sparse: arrays must have same number of dimensions, "
                     f"got {lhs_shape}, {rhs_shape}")
-  if (lhs.n_batch, lhs.n_sparse, lhs.n_dense) != (rhs.n_batch, rhs.n_sparse, rhs.n_dense):
+  if lhs.n_dense != rhs.n_dense:
     raise NotImplementedError("bcoo_multiply_sparse: arrays with differing numbers of "
-                              f"batch & dense dimensions: {lhs}, {rhs}")
+                              f"dense dimensions: {lhs}, {rhs}")
+  n_batch = min(lhs.n_batch, rhs.n_batch)
   _mul = functools.partial(_bcoo_multiply_sparse_unbatched,
-                           lhs_shape=lhs_shape[lhs.n_batch:],
-                           rhs_shape=rhs_shape[rhs.n_batch:])
-  for _ in range(lhs.n_batch):
+                           lhs_shape=lhs_shape[n_batch:],
+                           rhs_shape=rhs_shape[n_batch:])
+  for _ in range(n_batch):
     _mul = broadcasting_vmap(_mul)
   data, indices = _mul(lhs_data, lhs_indices, rhs_data, rhs_indices)
   return data, indices, jnp.broadcast_shapes(lhs_shape, rhs_shape)
@@ -1214,7 +1226,15 @@ def bcoo_multiply_sparse(lhs_data, lhs_indices, rhs_data, rhs_indices, *, lhs_sp
 def _bcoo_multiply_sparse_unbatched(lhs_data, lhs_indices, rhs_data, rhs_indices, *, lhs_shape, rhs_shape):
   lhs = _validate_bcoo(lhs_data, lhs_indices, lhs_shape)
   rhs = _validate_bcoo(rhs_data, rhs_indices, rhs_shape)
-  assert lhs.n_batch == rhs.n_batch == 0
+  assert (lhs.n_batch == 0) or (rhs.n_batch == 0)  # Ensured at call site above
+
+  # TODO(jakevdp): this can be made more efficient by utilizing batch structure.
+  if lhs.n_batch:
+    lhs_data, lhs_indices = _unbatch_bcoo(lhs_data, lhs_indices, lhs_shape)
+    lhs = _validate_bcoo(lhs_data, lhs_indices, lhs_shape)
+  elif rhs.n_batch:
+    rhs_data, rhs_indices = _unbatch_bcoo(rhs_data, rhs_indices, rhs_shape)
+    rhs = _validate_bcoo(rhs_data, rhs_indices, rhs_shape)
   dims = jnp.array([i for i, (s1, s2) in enumerate(safe_zip(lhs_shape[:lhs.n_sparse], rhs_shape[:rhs.n_sparse]))
                     if s1 != 1 and s2 != 1], dtype=int)
 

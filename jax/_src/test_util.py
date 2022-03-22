@@ -41,7 +41,7 @@ from jax._src.lib import xla_bridge
 from jax._src import dispatch
 from jax.interpreters import mlir
 from jax.interpreters import xla
-from jax.experimental.maps import mesh, Mesh
+from jax.experimental.maps import Mesh
 
 
 FLAGS = flags.FLAGS
@@ -84,10 +84,12 @@ flags.DEFINE_string(
 EPS = 1e-4
 
 def _dtype(x):
-  return (getattr(x, 'dtype', None) or
-          np.dtype(_dtypes.python_scalar_dtypes.get(type(x), None)) or
-          np.asarray(x).dtype)
-
+  if hasattr(x, 'dtype'):
+    return x.dtype
+  elif type(x) in _dtypes.python_scalar_dtypes:
+    return np.dtype(_dtypes.python_scalar_dtypes[type(x)])
+  else:
+    return np.asarray(x).dtype
 
 def num_float_bits(dtype):
   return _dtypes.finfo(_dtypes.canonicalize_dtype(dtype)).bits
@@ -915,7 +917,11 @@ def with_config(**kwds):
 
 class JaxTestCase(parameterized.TestCase):
   """Base class for JAX tests including numerical checks and boilerplate."""
-  _default_config = {'jax_enable_checks': True}
+  _default_config = {
+    'jax_enable_checks': True,
+    'jax_numpy_rank_promotion': 'raise',
+    'jax_traceback_filtering': 'off',
+  }
 
   # TODO(mattjj): this obscures the error messages from failures, figure out how
   # to re-enable it
@@ -1102,7 +1108,7 @@ def with_mesh(named_shape: MeshSpec) -> Generator[None, None, None]:
   if len(local_devices) < size:
     raise unittest.SkipTest(f"Test requires {size} local devices")
   mesh_devices = np.array(local_devices[:size]).reshape(shape)
-  with mesh(mesh_devices, axis_names):
+  with Mesh(mesh_devices, axis_names):
     yield
 
 def with_mesh_from_kwargs(f):

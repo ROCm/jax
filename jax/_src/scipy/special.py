@@ -22,9 +22,9 @@ from jax._src import api
 from jax import jit
 from jax import lax, core
 from jax.interpreters import ad
-from jax._src.numpy import lax_numpy as jnp
-from jax._src.numpy.lax_numpy import (asarray, _reduction_dims, _constant_like,
-                                      _promote_args_inexact)
+import jax.numpy as jnp
+from jax._src.lax.lax import _const as _lax_const
+from jax._src.numpy.lax_numpy import asarray, _reduction_dims, _promote_args_inexact
 from jax._src.numpy.util import _wraps
 
 from typing import Optional, Tuple
@@ -90,18 +90,18 @@ def erfinv(x):
 @_wraps(osp_special.logit, update_doc=False)
 def logit(x):
   x = asarray(x)
-  return lax.log(lax.div(x, lax.sub(lax._const(x, 1), x)))
+  return lax.log(lax.div(x, lax.sub(_lax_const(x, 1), x)))
 logit.defjvps(
-    lambda g, ans, x: lax.div(g, lax.mul(x, lax.sub(lax._const(x, 1), x))))
+    lambda g, ans, x: lax.div(g, lax.mul(x, lax.sub(_lax_const(x, 1), x))))
 
 
 @api.custom_jvp
 @_wraps(osp_special.expit, update_doc=False)
 def expit(x):
   x = asarray(x)
-  one = lax._const(x, 1)
+  one = _lax_const(x, 1)
   return lax.div(one, lax.add(one, lax.exp(lax.neg(x))))
-expit.defjvps(lambda g, ans, x: g * ans * (lax._const(ans, 1) - ans))
+expit.defjvps(lambda g, ans, x: g * ans * (_lax_const(ans, 1) - ans))
 
 
 @_wraps(osp_special.logsumexp)
@@ -165,7 +165,7 @@ def xlog1py(x, y):
 @_wraps(osp_special.entr)
 def entr(x):
   x, = _promote_args_inexact("entr", x)
-  return lax.select(lax.lt(x, _constant_like(x, 0)),
+  return lax.select(lax.lt(x, _lax_const(x, 0)),
                     lax.full_like(x, -np.inf),
                     lax.neg(xlogy(x, x)))
 
@@ -175,10 +175,10 @@ def multigammaln(a, d):
   d = core.concrete_or_error(int, d, "d argument of multigammaln")
   a, d_ = _promote_args_inexact("multigammaln", a, d)
 
-  constant = lax.mul(lax.mul(lax.mul(_constant_like(a, 0.25), d_),
-                             lax.sub(d_, _constant_like(a, 1))),
-                     lax.log(_constant_like(a, np.pi)))
-  b = lax.div(jnp.arange(d, dtype=d_.dtype), _constant_like(a, 2))
+  constant = lax.mul(lax.mul(lax.mul(_lax_const(a, 0.25), d_),
+                             lax.sub(d_, _lax_const(a, 1))),
+                     lax.log(_lax_const(a, np.pi)))
+  b = lax.div(jnp.arange(d, dtype=d_.dtype), _lax_const(a, 2))
   res = jnp.sum(gammaln(jnp.expand_dims(a, axis=-1) -
                         jnp.expand_dims(b, axis=tuple(range(a.ndim)))),
                 axis=-1)
@@ -652,8 +652,8 @@ def _double_factorial(n):
 _norm_logpdf_constant = np.log(np.sqrt(2 * np.pi))
 
 def _norm_logpdf(x):
-  neg_half = _constant_like(x, -0.5)
-  log_normalizer = _constant_like(x, _norm_logpdf_constant)
+  neg_half = _lax_const(x, -0.5)
+  log_normalizer = _lax_const(x, _norm_logpdf_constant)
   return lax.sub(lax.mul(neg_half, lax.square(x)), log_normalizer)
 
 @_wraps(osp_special.i0e)
@@ -1125,7 +1125,7 @@ def _expint1(x):
 def _eval_expint_k(A, B, x):
   # helper function for all subsequent intervals
   A, B = [jnp.array(U, dtype=x.dtype) for U in [A, B]]
-  one = _constant_like(x, 1.0)
+  one = _lax_const(x, 1.0)
   w = one / x
   f = jnp.polyval(A, w) / jnp.polyval(B, w)
   f = w * f + one
@@ -1289,7 +1289,7 @@ def _expint7(x):
 
 def _expi_pos(x):
   # x > 0
-  _c = _constant_like
+  _c = _lax_const
   conds = [(_c(x, 0) < x) & (x <= _c(x, 2))] + [
     (_c(x, 2 ** i) < x) & (x <= _c(x, 2 ** (i + 1))) for i in range(1, 6)
   ]
@@ -1319,7 +1319,7 @@ def expi_jvp(primals, tangents):
 
 def _expn1(n, x):
   # exponential integral En
-  _c = _constant_like
+  _c = _lax_const
   x = jnp.array(x)
   MACHEP = jnp.finfo(x.dtype).eps
 
@@ -1357,7 +1357,7 @@ def _expn1(n, x):
 
 def _expn2(n, x):
   # x > 1.
-  _c = _constant_like
+  _c = _lax_const
   BIG = _c(x, 1.44115188075855872e17)
   MACHEP = jnp.finfo(BIG.dtype).eps  # ?
   zero = _c(x, 0.0)
@@ -1408,7 +1408,7 @@ def _expn2(n, x):
 
 def _expn3(n, x):
   # n >= 5000
-  _c = _constant_like
+  _c = _lax_const
   one = _c(x, 1.0)
   xk = x + n
   yk = one / (xk * xk)
@@ -1425,7 +1425,7 @@ def _expn3(n, x):
 @jit
 def expn(n, x):
   n, x = _promote_args_inexact("expn", n, x)
-  _c = _constant_like
+  _c = _lax_const
   zero = _c(x, 0)
   one = _c(x, 1)
   conds = [
@@ -1455,7 +1455,7 @@ def expn(n, x):
 def expn_jvp(n, primals, tangents):
   (x,), (x_dot,) = primals, tangents
   return expn(n, x), lax.mul(
-    lax.neg(x_dot), expn(lax.sub(n, _constant_like(n, 1)), x)
+    lax.neg(x_dot), expn(lax.sub(n, _lax_const(n, 1)), x)
   )
 
 

@@ -19,7 +19,7 @@ from functools import partial
 import itertools
 import operator
 from typing import (Any, Callable, Optional, Sequence, Tuple, List, TypeVar,
-                    Union)
+                    Union, cast as type_cast)
 import warnings
 
 import numpy as np
@@ -47,9 +47,10 @@ from jax.interpreters import ad
 from jax.interpreters import invertible_ad as iad
 from jax.interpreters import batching
 from jax.interpreters import masking
+import jax._src.pretty_printer as pp
 from jax._src import util
 from jax._src.util import (cache, safe_zip, prod, safe_map, canonicalize_axis,
-                           split_list)
+                           split_list, new_name_stack)
 from jax.tree_util import tree_map
 import jax._src.lib
 from jax._src.lib import pytree
@@ -82,9 +83,23 @@ Shape = core.Shape
 
 T = TypeVar("T")
 
+def _validate_shapes(shapes: Sequence[Shape]):
+  def _check_static_shape(shape: Shape):
+    checked = canonicalize_shape(shape)
+    if not all(idx >= 0 for idx in checked):
+      msg = f"Only non-negative indices are allowed when broadcasting" \
+            f" static shapes, but got shape {shape!r}."
+      raise TypeError(msg)
+
+  assert shapes
+  if config.jax_dynamic_shapes:
+    # pass dynamic shapes through unchecked
+    return
+  else:
+    _ = tuple(map(_check_static_shape, shapes))
+
 def _try_broadcast_shapes(
     shapes: Sequence[Tuple[int, ...]]) -> Optional[Tuple[int, ...]]:
-  assert shapes
   if len(shapes) == 1: return shapes[0]
   rank, *others = {len(shape) for shape in shapes}
   if others: return None  # must have consistent rank
@@ -112,6 +127,7 @@ def _broadcast_shapes_cached(*shapes: Tuple[int, ...]) -> Tuple[int, ...]:
   return _broadcast_shapes_uncached(*shapes)
 
 def _broadcast_shapes_uncached(*shapes):
+  _validate_shapes(shapes)
   fst, *rst = shapes
   if not rst: return fst
 
@@ -605,7 +621,7 @@ class Precision(xla_client.PrecisionConfig.Precision):  # type: ignore
     return self.name
 
 
-PrecisionType = Any
+PrecisionType = Precision
 PrecisionLike = Union[None, str, PrecisionType, Tuple[str, str],
                       Tuple[PrecisionType, PrecisionType]]
 
@@ -1187,8 +1203,13 @@ def squeeze(array: Array, dimensions: Sequence[int]) -> Array:
 
 def expand_dims(array: Array, dimensions: Sequence[int]) -> Array:
   """Insert any number of size 1 dimensions into an array."""
+  if len(set(dimensions)) != len(dimensions):
+    raise ValueError(f'repeated axis in lax.expand_dims: {dimensions}')
   ndim_out = np.ndim(array) + len(dimensions)
-  dims_set = frozenset(canonicalize_axis(i, ndim_out) for i in dimensions)
+  dims = [canonicalize_axis(i, ndim_out) for i in dimensions]
+  if len(set(dims)) != len(dims):  # check again after canonicalizing
+    raise ValueError(f'repeated axis in lax.expand_dims: {dims}')
+  dims_set = frozenset(dims)
   result_shape = list(np.shape(array))
   for i in sorted(dims_set):
     result_shape.insert(i, 1)
@@ -1558,13 +1579,23 @@ ad.defjvp_zero(sign_p)
 def _sign_lower_mhlo(ctx, x):
   x_aval, = ctx.avals_in
   if dtypes.issubdtype(x_aval.dtype, np.unsignedinteger):
-    return mhlo.SelectOp(
-        mhlo.CompareOp(
-            mlir.aval_to_ir_type(x_aval.update(dtype=np.dtype(np.bool_))),
-            x, mlir.full_like_aval(0, x_aval), ir.StringAttr.get("EQ"),
-            ir.StringAttr.get("UNSIGNED")).result,
-        mlir.full_like_aval(0, x_aval),
-        mlir.full_like_aval(1, x_aval)).results
+    if jax._src.lib.mlir_api_version >= 3:
+      return mhlo.SelectOp(
+          mhlo.CompareOp(
+              mlir.aval_to_ir_type(x_aval.update(dtype=np.dtype(np.bool_))), x,
+              mlir.full_like_aval(0, x_aval),
+              mhlo.ComparisonDirectionAttr.get('EQ'),
+              mhlo.ComparisonTypeAttr.get('UNSIGNED')).result,
+          mlir.full_like_aval(0, x_aval), mlir.full_like_aval(1,
+                                                              x_aval)).results
+    else:
+      return mhlo.SelectOp(
+          mhlo.CompareOp(
+              mlir.aval_to_ir_type(x_aval.update(dtype=np.dtype(np.bool_))), x,
+              mlir.full_like_aval(0, x_aval), ir.StringAttr.get('EQ'),
+              ir.StringAttr.get('UNSIGNED')).result,
+          mlir.full_like_aval(0, x_aval), mlir.full_like_aval(1,
+                                                              x_aval)).results
   return mhlo.SignOp(x).results
 
 mlir.register_lowering(sign_p, _sign_lower_mhlo)
@@ -2195,9 +2226,15 @@ def _compare_lower_mhlo(direction: str, ctx, x, y):
     compare_type = "SIGNED"
   else:
     compare_type = "UNSIGNED"
-  return mhlo.CompareOp(mlir.aval_to_ir_type(aval_out), x, y,
-                        ir.StringAttr.get(direction),
-                        ir.StringAttr.get(compare_type)).results
+  if jax._src.lib.mlir_api_version >= 3:
+    return mhlo.CompareOp(
+        mlir.aval_to_ir_type(aval_out), x, y,
+        mhlo.ComparisonDirectionAttr.get(direction),
+        mhlo.ComparisonTypeAttr.get(compare_type)).results
+  else:
+    return mhlo.CompareOp(
+        mlir.aval_to_ir_type(aval_out), x, y, ir.StringAttr.get(direction),
+        ir.StringAttr.get(compare_type)).results
 
 eq_p = naryop(_fixed_dtype(np.bool_), [_any, _any], 'eq')
 ad.defjvp_zero(eq_p)
@@ -2277,6 +2314,16 @@ def _convert_elt_type_fwd_rule(eqn):
   else:
     return [None], eqn
 
+def _convert_elt_type_pp_rule(eqn, context, settings):
+  # don't print new_dtype because the output binder shows it
+  printed_params = {}
+  if eqn.params['weak_type']:
+    printed_params['weak_type'] = True
+  return [pp.text(eqn.primitive.name),
+          core.pp_kv_pairs(sorted(printed_params.items()), context, settings),
+          pp.text(" ") + core.pp_vars(eqn.invars, context)]
+
+
 convert_element_type_p = Primitive('convert_element_type')
 convert_element_type_p.def_impl(partial(xla.apply_primitive, convert_element_type_p))
 convert_element_type_p.def_abstract_eval(
@@ -2291,6 +2338,8 @@ batching.defvectorized(convert_element_type_p)
 masking.defvectorized(convert_element_type_p)
 pe.const_fold_rules[convert_element_type_p] = _convert_elt_type_folding_rule
 pe.forwarding_rules[convert_element_type_p] = _convert_elt_type_fwd_rule
+# TODO(mattjj): un-comment the next line (see #9456)
+# core.pp_eqn_rules[convert_element_type_p] = _convert_elt_type_pp_rule
 
 def _real_dtype(dtype): return np.finfo(dtype).dtype
 
@@ -2592,10 +2641,18 @@ xla.register_translation(dot_general_p, _dot_general_cpu_translation_rule,
 
 def precision_attr(precision: PrecisionType) -> ir.ArrayAttr:
   if precision is None:
-    precision = (Precision.DEFAULT, Precision.DEFAULT)
+    full_precision = (Precision.DEFAULT, Precision.DEFAULT)
   elif not isinstance(precision, tuple):
-    precision = (precision, precision)
-  return ir.ArrayAttr.get([ir.StringAttr.get(str(p)) for p in precision])
+    full_precision = (precision, precision)
+  else:
+    full_precision = precision
+  if jax._src.lib.mlir_api_version >= 3:
+    return ir.ArrayAttr.get(
+        [mhlo.PrecisionAttr.get(str(p)) for p in full_precision])
+  else:
+    return ir.ArrayAttr.get([ir.StringAttr.get(str(p)) for p in full_precision])
+
+
 
 def _dot_general_lower(ctx, lhs, rhs, *, dimension_numbers,
                        precision, preferred_element_type: Optional[np.dtype]):
@@ -2808,7 +2865,8 @@ def _concatenate_shape_rule(*operands, **kwargs):
     shapes = [operand.shape for operand in operands]
     raise TypeError(msg.format(dimension, ", ".join(map(str, shapes))))
 
-  concat_size = sum(o.shape[dimension] for o in operands)
+  dims = [o.shape[dimension] for o in operands]
+  concat_size = -1 if -1 in dims else sum(dims)
   ex_shape = operands[0].shape
   return ex_shape[:dimension] + (concat_size,) + ex_shape[dimension+1:]
 
@@ -3109,16 +3167,9 @@ batching.primitive_batchers[reshape_p] = _reshape_batch_rule
 masking.masking_rules[reshape_p] = _reshape_masking_rule
 
 def _reshape_lower(ctx, x, *, new_sizes, dimensions):
-  aval_in, = ctx.avals_in
   aval_out, = ctx.avals_out
   if dimensions is not None:
-    aval = core.ShapedArray(np.take(aval_in.shape, dimensions), aval_in.dtype)
-    if jax._src.lib._xla_extension_version < 49:
-      x = mhlo.TransposeOp(
-          mlir.aval_to_ir_type(aval), x,
-          mlir.dense_int_elements(dimensions)).result
-    else:
-      x = mhlo.TransposeOp(x, mlir.dense_int_elements(dimensions)).result
+    x = mhlo.TransposeOp(x, mlir.dense_int_elements(dimensions)).result
   return mhlo.ReshapeOp(mlir.aval_to_ir_type(aval_out), x).results
 mlir.register_lowering(reshape_p, _reshape_lower)
 
@@ -3176,10 +3227,6 @@ masking.masking_rules[transpose_p] = _transpose_masking_rule
 
 def _transpose_lower(ctx, x, *, permutation):
   aval_out, = ctx.avals_out
-  if jax._src.lib._xla_extension_version < 49:
-    return mhlo.TransposeOp(
-        mlir.aval_to_ir_type(aval_out), x,
-        mlir.dense_int_elements(permutation)).results
   return mhlo.TransposeOp(x, mlir.dense_int_elements(permutation)).results
 mlir.register_lowering(transpose_p, _transpose_lower)
 
@@ -3189,7 +3236,7 @@ def _select_shape_rule(which, *cases):
     raise TypeError("select must have at least one case")
   if any(case.shape != cases[0].shape for case in cases[1:]):
     msg = "select cases must have the same shapes, got [{}]."
-    raise TypeError(msg.format(",".join(map(str(c.shape) for c in cases))))
+    raise TypeError(msg.format(", ".join([str(c.shape) for c in cases])))
   if which.shape and which.shape != cases[0].shape:
     msg = ("select `which` must be scalar or have the same shape as cases, "
            "got `which` shape {} but case shape {}.")
@@ -3295,7 +3342,7 @@ def _select_xla_translation(ctx, avals_in, avals_out, which, *cases):
         ctx.builder, np.array(offset + mid, dtype=which_aval.dtype))
     return xops.Select(xops.Lt(which, cutoff),
                        _select(offset, cases[:mid]),
-                       _select(mid, cases[mid:]))
+                       _select(offset + mid, cases[mid:]))
 
   return [_select(0, cases)]
 
@@ -3310,21 +3357,28 @@ def _select_mhlo_lowering(ctx, which, *cases):
   bool_shape = ir.RankedTensorType.get(which_aval.shape,
                                        ir.IntegerType.get_signless(1))
   if dtypes.issubdtype(which_aval.dtype, np.signedinteger):
-    compare_type = ir.StringAttr.get("SIGNED")
+    compare_type = 'SIGNED'
   else:
-    compare_type = ir.StringAttr.get("UNSIGNED")
-  lt = ir.StringAttr.get("LT")
+    compare_type = 'UNSIGNED'
+  lt = 'LT'
 
   def _select(offset, cases):
     assert len(cases) > 0
     if len(cases) == 1:
       return cases[0]
     mid = len(cases) // 2
-    pred = mhlo.CompareOp(
-      bool_shape, which, mlir.full_like_aval(offset + mid, which_aval),
-      lt, compare_type)
+    if jax._src.lib.mlir_api_version >= 3:
+      pred = mhlo.CompareOp(bool_shape, which,
+                            mlir.full_like_aval(offset + mid, which_aval),
+                            mhlo.ComparisonDirectionAttr.get(lt),
+                            mhlo.ComparisonTypeAttr.get(compare_type))
+    else:
+      pred = mhlo.CompareOp(bool_shape, which,
+                            mlir.full_like_aval(offset + mid, which_aval),
+                            ir.StringAttr.get(lt),
+                            ir.StringAttr.get(compare_type))
     return mhlo.SelectOp(pred, _select(offset, cases[:mid]),
-                         _select(mid, cases[mid:])).result
+                         _select(offset + mid, cases[mid:])).result
 
   return [_select(0, cases)]
 
@@ -3406,7 +3460,7 @@ def _reduction_computation(ctx, jaxpr, consts, init_values, singleton=True):
   subc = xc.XlaBuilder("reduction_computation")
   assert len(consts) == 0, "Reduction computations cannot have constants"
   args = [xla.parameter(subc, i, shape) for i, shape in enumerate(shapes)]
-  ctx = xla.TranslationContext(subc, platform, axis_env, '')
+  ctx = xla.TranslationContext(subc, platform, axis_env, new_name_stack())
   out_nodes = xla.jaxpr_subcomp(ctx, jaxpr, consts, *args)
   if singleton:
     return subc.build(out_nodes[0])
@@ -4143,60 +4197,25 @@ infeed_p.def_abstract_eval(_infeed_abstract_eval)
 xla.register_translation(infeed_p, _infeed_translation_rule)
 
 
-if jax._src.lib.mlir_api_version >= 2:
-
-  def _infeed_lowering(ctx, token, *, shapes, partitions):
-    output_types = safe_map(mlir.aval_to_ir_types, ctx.avals_out[:-1])
-    flat_output_types = util.flatten(output_types)
-    # TODO(phawkins): verify `shapes` have a major-to-minor layout.
-    layouts = ir.ArrayAttr.get([
-        ir.ArrayAttr.get(
-            [mlir.i64_attr(i)
-             for i in range(len(aval.shape) - 1, -1, -1)])
-        for aval in shapes
-    ])
-    infeed = mhlo.InfeedOp(flat_output_types + [mhlo.TokenType.get()], token,
-                           ir.StringAttr.get(''), layouts)
-    if partitions is not None:
-      mlir.set_sharding(infeed, xla.sharding_to_proto(partitions))
-    token = infeed.results[-1]
-    outs = infeed.results[:-1]
-    return util.unflatten(outs, safe_map(len, output_types)) + [[
-        token,
-    ]]
-else:
-
-  def _infeed_lowering(ctx, token, *, shapes, partitions):
-    output_types = safe_map(mlir.aval_to_ir_types, ctx.avals_out[:-1])
-    flat_output_types = util.flatten(output_types)
-    output_tuple_type = ir.TupleType.get_tuple(flat_output_types)
-    # TODO(phawkins): verify `shapes` have a major-to-minor layout.
-    layouts = ir.ArrayAttr.get([
-        ir.ArrayAttr.get([
-            ir.ArrayAttr.get(
-                [mlir.i64_attr(i)
-                 for i in range(len(aval.shape) - 1, -1, -1)])
-            for aval in shapes
-        ]),
-        ir.UnitAttr.get(),
-    ])
-    output_and_token_tuple_type = ir.TupleType.get_tuple(
-        [output_tuple_type, mhlo.TokenType.get()])
-    infeed = mhlo.InfeedOp(output_and_token_tuple_type, token,
-                           ir.StringAttr.get(''), layouts)
-    if partitions is not None:
-      mlir.set_sharding(infeed, xla.sharding_to_proto(partitions))
-    outs_tuple = mhlo.GetTupleElementOp(output_tuple_type, infeed.result,
-                                        mlir.i32_attr(0)).result
-    token = mhlo.GetTupleElementOp(mhlo.TokenType.get(), infeed.result,
-                                   mlir.i32_attr(1)).result
-    outs = [
-        mhlo.GetTupleElementOp(typ, outs_tuple, mlir.i32_attr(i)).result
-        for i, typ in enumerate(flat_output_types)
-    ]
-    return util.unflatten(outs, safe_map(len, output_types)) + [[
-        token,
-    ]]
+def _infeed_lowering(ctx, token, *, shapes, partitions):
+  output_types = safe_map(mlir.aval_to_ir_types, ctx.avals_out[:-1])
+  flat_output_types = util.flatten(output_types)
+  # TODO(phawkins): verify `shapes` have a major-to-minor layout.
+  layouts = ir.ArrayAttr.get([
+      ir.ArrayAttr.get(
+          [mlir.i64_attr(i)
+           for i in range(len(aval.shape) - 1, -1, -1)])
+      for aval in shapes
+  ])
+  infeed = mhlo.InfeedOp(flat_output_types + [mhlo.TokenType.get()], token,
+                         ir.StringAttr.get(''), layouts)
+  if partitions is not None:
+    mlir.set_sharding(infeed, xla.sharding_to_proto(partitions))
+  token = infeed.results[-1]
+  outs = infeed.results[:-1]
+  return util.unflatten(outs, safe_map(len, output_types)) + [[
+      token,
+  ]]
 
 mlir.register_lowering(infeed_p, _infeed_lowering)
 
@@ -4235,31 +4254,14 @@ outfeed_p.def_abstract_eval(_outfeed_abstract_eval)
 xla.register_translation(outfeed_p, _outfeed_translation_rule)
 
 
-if jax._src.lib.mlir_api_version >= 2:
-
-  def _outfeed_lowering(ctx, token, *xs, partitions):
-    token_aval = ctx.avals_in[0]
-    outfeed = mhlo.OutfeedOp(
-        mlir.aval_to_ir_type(token_aval), mlir.flatten_lowering_ir_args(xs),
-        token, ir.StringAttr.get(''))
-    if partitions is not None:
-      mlir.set_sharding(outfeed, xla.sharding_to_proto(partitions))
-    return outfeed.results
-else:
-
-  def _outfeed_lowering(ctx, token, *xs, partitions):
-    token_aval = ctx.avals_in[0]
-    xs_avals = ctx.avals_in[1:]
-    input_types = map(mlir.aval_to_ir_types, xs_avals)
-    flat_input_types = util.flatten(input_types)
-    input_tuple_type = ir.TupleType.get_tuple(flat_input_types)
-    tup = mhlo.TupleOp(input_tuple_type,
-                       mlir.flatten_lowering_ir_args(xs)).result
-    outfeed = mhlo.OutfeedOp(
-        mlir.aval_to_ir_type(token_aval), tup, token, ir.StringAttr.get(''))
-    if partitions is not None:
-      mlir.set_sharding(outfeed, xla.sharding_to_proto(partitions))
-    return outfeed.results
+def _outfeed_lowering(ctx, token, *xs, partitions):
+  token_aval = ctx.avals_in[0]
+  outfeed = mhlo.OutfeedOp(
+      mlir.aval_to_ir_type(token_aval), mlir.flatten_lowering_ir_args(xs),
+      token, ir.StringAttr.get(''))
+  if partitions is not None:
+    mlir.set_sharding(outfeed, xla.sharding_to_proto(partitions))
+  return outfeed.results
 
 mlir.register_lowering(outfeed_p, _outfeed_lowering)
 
@@ -4635,25 +4637,29 @@ def canonicalize_precision(precision: PrecisionLike) -> Optional[Tuple[Precision
     if config.jax_default_matmul_precision is None:
       return None
     try:
-      precision = Precision(config.jax_default_matmul_precision)
-      return (precision, precision)
+      return type_cast(
+          Tuple[PrecisionType, PrecisionType],
+          (Precision(config.jax_default_matmul_precision),
+           Precision(config.jax_default_matmul_precision)))
     except TypeError:
       raise ValueError(
           "jax_default_matmul_precision flag must be set to None or a value in "
           f"{list(Precision._strings)}, but got {config.jax_default_matmul_precision}"
       ) from None
   elif isinstance(precision, str) and precision in Precision._strings:
-    precision = Precision(precision)
-    return (precision, precision)
+    return type_cast(Tuple[PrecisionType, PrecisionType],
+                     (Precision(precision), Precision(precision)))
   elif isinstance(precision, xla_client.PrecisionConfig.Precision):
-    return (precision, precision)
+    return type_cast(Tuple[PrecisionType, PrecisionType], (precision, precision))
   elif (isinstance(precision, (list, tuple)) and len(precision) == 2 and
         all(isinstance(p, xla_client.PrecisionConfig.Precision) for p in precision)):
-    return precision  # type: ignore[return-value]
+    return type_cast(Tuple[PrecisionType, PrecisionType], precision)
   elif (isinstance(precision, (list, tuple)) and len(precision) == 2 and
         all(isinstance(s, str) for s in precision)):
     s1, s2 = precision
-    return (canonicalize_precision(s1)[0], canonicalize_precision(s2)[0])  # type: ignore
+    p1 = type_cast(Tuple[PrecisionType, PrecisionType], canonicalize_precision(s1))[0]
+    p2 = type_cast(Tuple[PrecisionType, PrecisionType], canonicalize_precision(s2))[0]
+    return (p1, p2)
   else:
     raise ValueError(
         f"Precision argument must be None, a string in {list(Precision._strings)}, "

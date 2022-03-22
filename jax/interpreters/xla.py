@@ -42,7 +42,7 @@ from jax.core import (ConcreteArray, ShapedArray,
                       Literal, str_eqn_compact, abstract_token)
 import jax._src.pretty_printer as pp
 from jax._src import util
-from jax._src.util import (prod, extend_name_stack, wrap_name,
+from jax._src.util import (prod, extend_name_stack, new_name_stack, wrap_name,
                            safe_zip, safe_map, partition_list)
 from jax._src.lib import xla_client as xc
 from jax.interpreters import partial_eval as pe
@@ -101,11 +101,15 @@ tracebacks = {}
 def make_op_metadata(primitive: core.Primitive,
                      params: Dict, *,
                      source_info: source_info_util.SourceInfo,
-                     name_stack: str = "",
+                     name_stack: Union[str, source_info_util.NameStack] = "",
                      ) -> xc.OpMetadata:
-  eqn_str = name_stack + str_eqn_compact(primitive.name, params)
+  if config.jax_experimental_name_stack:
+    eqn_str = str(source_info.name_stack) + '/' + str_eqn_compact(primitive.name, params)
+  else:
+    assert isinstance(name_stack, str)
+    eqn_str = name_stack + str_eqn_compact(primitive.name, params)
   tracebacks[eqn_str] = source_info.traceback
-  frame = source_info_util.user_frame(source_info) if source_info else None
+  frame = source_info_util.user_frame(source_info)
   return xc.OpMetadata(
         op_type=primitive.name,
         op_name=eqn_str,
@@ -374,6 +378,8 @@ for t in device_array.device_array_types:
   register_constant_handler(t, _device_array_constant_handler)
 
 
+register_constant_handler(core.Token, lambda c, _, __: [xops.CreateToken(c)])
+
 # TODO(mattjj): try to remove this canonicalize_dtype stuff
 def canonicalize_dtype(x):
   typ = type(x)
@@ -436,7 +442,7 @@ def primitive_subcomputation(platform: str, axis_env: 'AxisEnv',
   xla_args, _ = _xla_callable_args(c, avals, tuple_args=False,
                                    filter_tokens=False)
   ctx = TranslationContext(builder=c, platform=platform, axis_env=axis_env,
-                           name_stack="")
+                           name_stack=new_name_stack())
   ans = f(ctx.replace(builder=c), avals, None, *xla_args, **params)
   if prim.multiple_results:
     ans = xops.Tuple(c, ans)
@@ -549,7 +555,7 @@ class TranslationContext:
   # with a specific platform in mind.
   platform: Optional[str]
   axis_env: AxisEnv
-  name_stack: str
+  name_stack: Union[str, source_info_util.NameStack]
 
   def replace(self, **kw): return dataclasses.replace(self, **kw)
 
@@ -579,9 +585,15 @@ def jaxpr_subcomp(ctx: TranslationContext, jaxpr: core.Jaxpr,
   _partitionmap(write, jaxpr.constvars, consts)
   _partitionmap(write, jaxpr.invars, args)
   for eqn in jaxpr.eqns:
+    if config.jax_experimental_name_stack:
+      assert isinstance(ctx.name_stack, source_info_util.NameStack), type(ctx.name_stack)
+      source_info = eqn.source_info.replace(
+          name_stack=ctx.name_stack + eqn.source_info.name_stack)
+    else:
+      source_info = eqn.source_info
     op_metadata = make_op_metadata(
         eqn.primitive, eqn.params, name_stack=ctx.name_stack,
-        source_info=eqn.source_info)
+        source_info=source_info)
     ctx.builder.set_op_metadata(op_metadata)
     in_nodes = _flatmap(read, eqn.invars)
     if (ctx.platform is not None and
@@ -594,7 +606,9 @@ def jaxpr_subcomp(ctx: TranslationContext, jaxpr: core.Jaxpr,
           f"XLA translation rule for primitive '{eqn.primitive.name}' not found")
 
     with source_info_util.user_context(eqn.source_info.traceback):
-      ans = rule(ctx, map(aval, eqn.invars), map(aval, eqn.outvars),
+      eqn_ctx = (ctx.replace(name_stack=source_info.name_stack) if
+          config.jax_experimental_name_stack else ctx)
+      ans = rule(eqn_ctx, map(aval, eqn.invars), map(aval, eqn.outvars),
                  *in_nodes, **eqn.params)
 
     assert isinstance(ans, collections.abc.Sequence), (ans, eqn)
@@ -753,8 +767,8 @@ def set_up_aliases(c, xla_args, out_shape: XlaShape, donated_args, tuple_args):
 @profiler.annotate_function
 def lower_jaxpr_to_xla_module(
     fn_name: str, jaxpr: core.ClosedJaxpr, platform: str, axis_env: AxisEnv,
-    name_stack: str, tuple_args: bool, donated_invars: Sequence[bool],
-    replicated_args: Optional[Sequence[bool]],
+    name_stack: Union[source_info_util.NameStack, str], tuple_args: bool,
+    donated_invars: Sequence[bool], replicated_args: Optional[Sequence[bool]],
     arg_partitions: Optional[Any],
     out_partitions: Optional[Any],
     partitions_are_protos: bool = False
@@ -802,22 +816,21 @@ def lower_jaxpr_to_xla_module(
   return c.build(output)
 
 
-
 xla_call_p: core.CallPrimitive = core.CallPrimitive('xla_call')
 xla_call = xla_call_p.bind
 
-def _xla_call_partial_eval_update_params(params, in_unknowns):
-  call_jaxpr = params['call_jaxpr']
+def _xla_call_partial_eval_update_params(params, kept_inputs, num_new_inputs):
   donated_invars = params['donated_invars']
-  if not in_unknowns and donated_invars:
+  if not kept_inputs and donated_invars:
     # JaxprTrace.post_process_call creates a call with no input tracers
-    new_donated_invars = (False,) * len(call_jaxpr.invars)
+    donated_invars = (False,) * num_new_inputs
   else:
+    assert len(kept_inputs) == len(donated_invars)
     # JaxprTrace.process_call drops known input tracers
-    donated_invars = [d for d, uk in zip(donated_invars, in_unknowns) if uk]
-    new_donated_invars = ((False,) * (len(call_jaxpr.invars) - len(donated_invars))
-                          + tuple(donated_invars))
-  return dict(params, donated_invars=new_donated_invars)
+    donated_invars = [d for d, kept in zip(donated_invars, kept_inputs) if kept]
+    # Any new inputs are prepended to the left, so mark those as not donated.
+    donated_invars = [False] * num_new_inputs + donated_invars
+  return dict(params, donated_invars=tuple(donated_invars))
 pe.call_param_updaters[xla_call_p] = _xla_call_partial_eval_update_params
 
 def _xla_call_jvp_update_params(params, nz_tangents, nz_tangents_out_thunk):
@@ -858,7 +871,9 @@ ad.primitive_transposes[xla_call_p] = partial(ad.call_transpose, xla_call_p)
 
 
 def _xla_call_partial_eval_custom_params_updater(
-    unks_in: List[bool], num_res: int, params_known: dict, params_staged: dict
+    unks_in: Sequence[bool],
+    kept_outs_known: Sequence[bool], kept_outs_staged: Sequence[bool],
+    num_res: int, params_known: dict, params_staged: dict
   ) -> Tuple[dict, dict]:
   # pruned inputs to jaxpr_known according to unks_in, so prune donated_invars
   donated_invars_known, _ = partition_list(unks_in, params_known['donated_invars'])
@@ -873,7 +888,8 @@ pe.partial_eval_jaxpr_custom_rules[xla_call_p] = \
 pe.dce_rules[xla_call_p] = pe.dce_jaxpr_call_rule
 
 
-def _pp_xla_call(eqn: core.JaxprEqn, context: core.JaxprPpContext
+def _pp_xla_call(eqn: core.JaxprEqn, context: core.JaxprPpContext,
+                 settings: core.JaxprPpSettings,
                  ) -> List[pp.Doc]:
   printed_params = {k:v for k, v in eqn.params.items() if
                     k == 'call_jaxpr' or k == 'name' or
@@ -881,7 +897,7 @@ def _pp_xla_call(eqn: core.JaxprEqn, context: core.JaxprPpContext
                     k == 'device' and v is not None or
                     k == 'donated_invars' and any(v)}
   return [pp.text(eqn.primitive.name),
-          core.pp_kv_pairs(sorted(printed_params.items()), context),
+          core.pp_kv_pairs(sorted(printed_params.items()), context, settings),
           pp.text(" ") + core.pp_vars(eqn.invars, context)]
 core.pp_eqn_rules[xla_call_p] = _pp_xla_call
 
@@ -1039,7 +1055,7 @@ def lower_fun(fun: Callable, *, multiple_results: bool, backend=None,
       wrapped_fun = _tuple_output(wrapped_fun)
     with core.extend_axis_env_nd(zip(axis_env.names, axis_env.sizes)):
       jaxpr, _, consts = pe.trace_to_jaxpr_dynamic(wrapped_fun, avals)
-    ctx = TranslationContext(c, backend, axis_env, '')
+    ctx = TranslationContext(c, backend, axis_env, new_name_stack())
     outs = jaxpr_subcomp(ctx, jaxpr, _xla_consts(c, consts), *xla_args)
     if (multiple_results or
         any(len(aval_to_xla_shapes(v.aval)) > 1 for v in jaxpr.outvars)):

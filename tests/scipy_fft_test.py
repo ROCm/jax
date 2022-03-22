@@ -42,7 +42,7 @@ def _get_dctn_test_s(shape, axes):
     s_list.extend(itertools.product(*[[shape[ax]+i for i in range(-shape[ax]+1, shape[ax]+1)] for ax in axes]))
   return s_list
 
-@jtu.with_config(jax_numpy_rank_promotion="raise")
+
 class LaxBackedScipyFftTests(jtu.JaxTestCase):
   """Tests for LAX-backed scipy.fft implementations"""
 
@@ -54,7 +54,6 @@ class LaxBackedScipyFftTests(jtu.JaxTestCase):
       for n in [None, 1, 7, 13, 20]
       for axis in [-1, 0]
       for norm in [None, 'ortho']))
-  @jtu.skip_on_devices("rocm")
   def testDct(self, shape, dtype, n, axis, norm):
     rng = jtu.rand_default(self.rng())
     args_maker = lambda: (rng(shape, dtype),)
@@ -72,7 +71,6 @@ class LaxBackedScipyFftTests(jtu.JaxTestCase):
     for axes in _get_dctn_test_axes(shape)
     for s in _get_dctn_test_s(shape, axes)
     for norm in [None, 'ortho']))
-  @jtu.skip_on_devices("rocm")
   def testDctn(self, shape, dtype, s, axes, norm):
     rng = jtu.rand_default(self.rng())
     args_maker = lambda: (rng(shape, dtype),)

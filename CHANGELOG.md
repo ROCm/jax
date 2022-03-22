@@ -8,13 +8,72 @@ Remember to align the itemized text with the first line of an item within a list
 PLEASE REMEMBER TO CHANGE THE '..main' WITH AN ACTUAL TAG in GITHUB LINK.
 -->
 
-## jax 0.3.1 (Unreleased)
+## jax 0.3.5 (Unreleased)
 * [GitHub
-  commits](https://github.com/google/jax/compare/jax-v0.3.0...main).
+  commits](https://github.com/google/jax/compare/jax-v0.3.4...main).
+* Changes:
+  * added {func}`jax.random.loggamma` & improved behavior of {func}`jax.random.beta`
+    and {func}`jax.random.dirichlet` for small parameter values `({jax-issue}`9906`).
 
 
-## jaxlib 0.3.1 (Unreleased)
+## jaxlib 0.3.3 (Unreleased)
+
+
+## jax 0.3.4 (March 18, 2022)
+* [GitHub
+  commits](https://github.com/google/jax/compare/jax-v0.3.3...jax-v0.3.4).
+
+
+## jax 0.3.3 (March 17, 2022)
+* [GitHub
+  commits](https://github.com/google/jax/compare/jax-v0.3.2...jax-v0.3.3).
+
+
+## jax 0.3.2 (March 16, 2022)
+* [GitHub
+  commits](https://github.com/google/jax/compare/jax-v0.3.1...jax-v0.3.2).
+* Changes:
+  * The functions `jax.ops.index_update`, `jax.ops.index_add`, which were
+    deprecated in 0.2.22, have been removed. Please use
+    [the `.at` property on JAX arrays](https://jax.readthedocs.io/en/latest/_autosummary/jax.numpy.ndarray.at.html)
+    instead, e.g., `x.at[idx].set(y)`.
+  * Moved `jax.experimental.ann.approx_*_k` into `jax.lax`. These functions are
+    optimized alternatives to `jax.lax.top_k`.
+  * {func}`jax.numpy.broadcast_arrays` and {func}`jax.numpy.broadcast_to` now require scalar
+    or array-like inputs, and will fail if they are passed lists (part of {jax-issue}`#7737`).
+  * The standard jax[tpu] install can now be used with Cloud TPU v4 VMs.
+  * `pjit` now works on CPU (in addition to previous TPU and GPU support).
+
+
+## jaxlib 0.3.2 (March 16, 2022)
 * Changes
+  * ``XlaComputation.as_hlo_text()`` now supports printing large constants by
+    passing boolean flag ``print_large_constants=True``.
+* Deprecations:
+  * The ``.block_host_until_ready()`` method on JAX arrays has been deprecated.
+    Use ``.block_until_ready()`` instead.
+
+## jax 0.3.1 (Feb 18, 2022)
+* [GitHub
+  commits](https://github.com/google/jax/compare/jax-v0.3.0...jax-v0.3.1).
+
+* Changes:
+  * `jax.test_util.JaxTestCase` and `jax.test_util.JaxTestLoader` are now deprecated.
+    The suggested replacement is to use `parametrized.TestCase` directly. For tests that
+    rely on custom asserts such as `JaxTestCase.assertAllClose()`, the suggested replacement
+    is to use standard numpy testing utilities such as {func}`numpy.testing.assert_allclose()`,
+    which work directly with JAX arrays ({jax-issue}`#9620`).
+  * `jax.test_util.JaxTestCase` now sets `jax_numpy_rank_promotion='raise'` by default
+    ({jax-issue}`#9562`). To recover the previous behavior, use the new
+    `jax.test_util.with_config` decorator:
+    ```python
+    @jtu.with_config(jax_numpy_rank_promotion='allow')
+    class MyTestCase(jtu.JaxTestCase):
+      ...
+    ```
+  * Added {func}`jax.scipy.linalg.schur`, {func}`jax.scipy.linalg.sqrtm`,
+    {func}`jax.scipy.signal.csd`, {func}`jax.scipy.signal.stft`,
+    {func}`jax.scipy.signal.welch`.
 
 
 ## jax 0.3.0 (Feb 10, 2022)

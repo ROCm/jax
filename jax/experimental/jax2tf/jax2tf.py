@@ -21,25 +21,11 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tupl
 
 import jax
 from jax import lax
-from jax._src import ad_util
-from jax._src import api_util
 from jax import config
 from jax import core, custom_derivatives
 from jax import linear_util as lu
 from jax import random, tree_util
 from jax import numpy as jnp
-from jax._src import ad_checkpoint
-from jax._src import api
-from jax._src import dispatch
-from jax._src import dtypes
-from jax._src.lax import control_flow as lax_control_flow
-from jax._src.lax import lax as lax_internal
-from jax._src.lax import linalg as lax_linalg
-from jax._src.lax import slicing as lax_slicing
-from jax._src import source_info_util
-from jax._src import util
-import jax._src.prng
-import jax._src.random
 from jax.experimental import maps
 from jax.experimental import pjit
 from jax.interpreters import ad
@@ -47,6 +33,22 @@ from jax.interpreters import partial_eval
 from jax.interpreters import pxla
 from jax.interpreters import sharded_jit
 from jax.interpreters import xla
+
+import jax._src.prng
+import jax._src.random
+from jax._src import ad_checkpoint
+from jax._src import ad_util
+from jax._src import api
+from jax._src import api_util
+from jax._src import dispatch
+from jax._src import dtypes
+from jax._src import source_info_util
+from jax._src import util
+from jax._src.lax import control_flow as lax_control_flow
+from jax._src.lax import lax as lax_internal
+from jax._src.lax import linalg as lax_linalg
+from jax._src.lax import slicing as lax_slicing
+from jax._src.lax import windowed_reductions as lax_windowed_reductions
 from jax._src.lib import xla_client
 
 from jax.experimental.jax2tf import shape_poly
@@ -163,7 +165,8 @@ class _ThreadLocalState(threading.local):
     self.shape_env: Sequence[Tuple[str, TfVal]] = ()
 
     # Whether to actually include XLA op metadata in the generated TF ops
-    self.include_xla_op_metadata = True
+    # TODO(b/189306134): implement support for XLA metadata
+    self.include_xla_op_metadata = False
 
     # A cache for the tf.convert_to_tensor for constants. We try to preserve
     # sharing for constants, to enable tf.Graph to take advantage of it.
@@ -260,7 +263,7 @@ def convert(fun: Callable,
   """
   api._check_callable(fun)
   fun_name = getattr(fun, "__name__", "unknown")
-  name_stack = util.extend_name_stack(util.wrap_name(fun_name, "jax2tf"))
+  name_stack = util.wrap_name(fun_name, "jax2tf") + "/"
   def converted_fun(*args: TfVal, **kwargs: TfVal) -> TfVal:
     # TODO: is there a better way to check if we are inside a transformation?
     if not core.trace_state_clean() and not _thread_local_state.inside_call_tf:
@@ -404,9 +407,7 @@ def convert(fun: Callable,
             fun_vjp_jax,
             with_gradient=False,
             polymorphic_shapes=vjp_polymorphic_shapes)(args_flat, out_cts_flat)
-        in_cts, kwin_cts = tree_util.tree_unflatten(in_tree, in_cts_flat)
-        assert not kwin_cts
-      return in_cts
+      return in_cts_flat
 
     try:
       assert not _thread_local_state.shape_env, f"Unexpected shape environment {_thread_local_state.shape_env}"
@@ -415,6 +416,7 @@ def convert(fun: Callable,
       _thread_local_state.enable_xla = enable_xla
 
       prev_include_xla_op_metadata = _thread_local_state.include_xla_op_metadata
+      # TODO(b/189306134): implement support for XLA metadata
       _thread_local_state.include_xla_op_metadata = False
 
       _thread_local_state.shape_env = shape_env
@@ -979,10 +981,12 @@ tf_not_yet_impl = [
     "reduce_precision",
     "schur",
     "name",
+    "optimization_barrier",
 
     # Not high priority?
     "after_all",
     "all_to_all",
+    "approx_top_k",
     "create_token",
     "custom_transpose_call",
     "custom_vmap_call",
@@ -1348,7 +1352,7 @@ def _not(x):
 tf_impl[lax.not_p] = _not
 
 
-def bool_to_int8(f, argnums: Sequence[int]):
+def handle_boolean_args(f, argnums: Sequence[int], boolean_f=None):
   """Computes functions with some bool args and bool results using int8.
 
   This is needed because some TF ops do not work for bool args, e.g.,
@@ -1357,12 +1361,14 @@ def bool_to_int8(f, argnums: Sequence[int]):
   Args:
     f: a TF callable to wrap. It will be called with non-boolean arguments.
     argnums: the positional arguments that may be booleans.
+    boolean_f: [Optional] a TF callable compatible with boolean
+      arguments.
 
   Returns: a TF callable that can take a mix of boolean positional arguments
     (in the positions specified by `argnums`) and some non-boolean positional
     arguments. If there are no boolean arguments, just calls `f`. Otherwise,
-    casts the boolean arguments to `int8`, calls `f`, then casts the result to
-    `bool`.
+    it calls `boolean_f` if defined. Otherwise, casts the boolean
+    arguments to `int8`, calls `f`, then casts the result to `bool`.
   """
   argnums = tf.nest.flatten(argnums)
 
@@ -1373,38 +1379,46 @@ def bool_to_int8(f, argnums: Sequence[int]):
     else:
       # All argnums should be boolean
       assert len(argnum_types) == 1, argnum_types
-      args_cast = [(tf.cast(a, tf.int8) if i in argnums else a)
-                   for i, a in enumerate(args)]
-      if "_in_avals" in kwargs:
+      if boolean_f != None:
+        return boolean_f(*args, **kwargs)
+      else:
+        args_cast = [(tf.cast(a, tf.int8) if i in argnums else a)
+                    for i, a in enumerate(args)]
+        if "_in_avals" in kwargs:
 
-        def cast_aval(aval):
-          assert aval.dtype == np.bool_
-          return core.ShapedArray(aval.shape, np.int8)
+          def cast_aval(aval):
+            assert aval.dtype == np.bool_
+            return core.ShapedArray(aval.shape, np.int8)
 
-        _in_avals_cast = [
-            cast_aval(aval) if i in argnums else aval
-            for i, aval in enumerate(kwargs["_in_avals"])
-        ]
-        _out_aval_cast = tf.nest.map_structure(cast_aval, kwargs["_out_aval"])
-        kwargs = dict(
-            kwargs, _in_avals=_in_avals_cast, _out_aval=_out_aval_cast)
-      out = f(*args_cast, **kwargs)
-      return tf.nest.map_structure(lambda o: tf.cast(o, tf.bool), out)
+          _in_avals_cast = [
+              cast_aval(aval) if i in argnums else aval
+              for i, aval in enumerate(kwargs["_in_avals"])
+          ]
+          _out_aval_cast = tf.nest.map_structure(cast_aval, kwargs["_out_aval"])
+          kwargs = dict(
+              kwargs, _in_avals=_in_avals_cast, _out_aval=_out_aval_cast)
+        out = f(*args_cast, **kwargs)
+        return tf.nest.map_structure(lambda o: tf.cast(o, tf.bool), out)
 
   return wrapper
 
 
-tf_impl[lax.or_p] = bool_to_int8(tf.bitwise.bitwise_or, argnums=(0, 1))
-tf_impl[lax.and_p] = bool_to_int8(tf.bitwise.bitwise_and, argnums=(0, 1))
-tf_impl[lax.xor_p] = bool_to_int8(tf.bitwise.bitwise_xor, argnums=(0, 1))
+tf_impl[lax.or_p] = handle_boolean_args(tf.bitwise.bitwise_or, argnums=(0, 1), boolean_f=tf.logical_or)
+tf_impl[lax.and_p] = handle_boolean_args(tf.bitwise.bitwise_and, argnums=(0, 1), boolean_f=tf.logical_and)
+tf_impl[lax.xor_p] = handle_boolean_args(tf.bitwise.bitwise_xor, argnums=(0, 1), boolean_f=tf.math.logical_xor)
 
 tf_impl[lax.eq_p] = tf.math.equal
 tf_impl[lax.ne_p] = tf.math.not_equal
 
-tf_impl[lax.ge_p] = bool_to_int8(tf.math.greater_equal, argnums=(0, 1))
-tf_impl[lax.gt_p] = bool_to_int8(tf.math.greater, argnums=(0, 1))
-tf_impl[lax.le_p] = bool_to_int8(tf.math.less_equal, argnums=(0, 1))
-tf_impl[lax.lt_p] = bool_to_int8(tf.math.less, argnums=(0, 1))
+boolean_greater = lambda x,y: tf.logical_and(x, tf.logical_not(y)) # Only one combo: T,F -> T
+boolean_less = lambda x,y: tf.logical_and(tf.logical_not(x), y) # Only one combo: F,T -> T
+boolean_greater_or_equal = lambda x, y: tf.logical_not(boolean_less(x,y)) # All cases except F,T
+boolean_less_or_equal = lambda x, y: tf.logical_not(boolean_greater(x,y)) # All cases except T,F
+
+tf_impl[lax.gt_p] = handle_boolean_args(tf.math.greater, argnums=(0, 1), boolean_f=boolean_greater)
+tf_impl[lax.lt_p] = handle_boolean_args(tf.math.less, argnums=(0, 1), boolean_f=boolean_less)
+tf_impl[lax.ge_p] = handle_boolean_args(tf.math.greater_equal, argnums=(0, 1), boolean_f=boolean_greater_or_equal)
+tf_impl[lax.le_p] = handle_boolean_args(tf.math.less_equal, argnums=(0, 1), boolean_f=boolean_less_or_equal)
 
 tf_impl[lax.linalg.cholesky_p] = tf.linalg.cholesky
 
@@ -1671,10 +1685,12 @@ axes_to_axis = lambda func: lambda operand, axes: func(operand, axis=axes)
 # reduce_sum and reduce_prod are not supported for bool
 tf_impl[lax.reduce_sum_p] = axes_to_axis(tf.reduce_sum)
 tf_impl[lax.reduce_prod_p] = axes_to_axis(tf.reduce_prod)
-tf_impl[lax.reduce_max_p] = (
-    bool_to_int8(axes_to_axis(tf.reduce_max), argnums=[0]))
-tf_impl[lax.reduce_min_p] = (
-    bool_to_int8(axes_to_axis(tf.reduce_min), argnums=[0]))
+tf_impl[lax.reduce_max_p] = handle_boolean_args(
+  axes_to_axis(tf.reduce_max), argnums=[0],
+  boolean_f=axes_to_axis(tf.reduce_any)) # Max is T if any one is T
+tf_impl[lax.reduce_min_p] = handle_boolean_args(
+  axes_to_axis(tf.reduce_min), argnums=[0],
+  boolean_f=axes_to_axis(tf.reduce_all)) # Min is F if not all are T
 tf_impl[lax.reduce_or_p] = axes_to_axis(tf.reduce_any)
 tf_impl[lax.reduce_and_p] = axes_to_axis(tf.reduce_all)
 
@@ -1995,18 +2011,22 @@ def _cumred(lax_reduce_fn: Callable,
                              extra_name_stack=extra_name_stack)
 
 
-tf_impl_with_avals[lax.cummax_p] = _cumred(lax_reduce_window_fn=lax._reduce_window_max,
-                                           lax_reduce_fn=lax.max,
-                                           extra_name_stack="cummax")
-tf_impl_with_avals[lax.cummin_p] = _cumred(lax_reduce_window_fn=lax._reduce_window_min,
-                                           lax_reduce_fn=lax.min,
-                                           extra_name_stack="cummin")
-tf_impl_with_avals[lax.cumsum_p] = _cumred(lax_reduce_window_fn=lax._reduce_window_sum,
-                                           lax_reduce_fn=lax.add,
-                                           extra_name_stack="cumsum")
-tf_impl_with_avals[lax.cumprod_p] = _cumred(lax_reduce_window_fn=lax._reduce_window_prod,
-                                            lax_reduce_fn=lax.mul,
-                                            extra_name_stack="cumprod")
+tf_impl_with_avals[lax.cummax_p] = _cumred(
+    lax_reduce_window_fn=lax_windowed_reductions._reduce_window_max,
+    lax_reduce_fn=lax.max,
+    extra_name_stack="cummax")
+tf_impl_with_avals[lax.cummin_p] = _cumred(
+    lax_reduce_window_fn=lax_windowed_reductions._reduce_window_min,
+    lax_reduce_fn=lax.min,
+    extra_name_stack="cummin")
+tf_impl_with_avals[lax.cumsum_p] = _cumred(
+    lax_reduce_window_fn=lax_windowed_reductions._reduce_window_sum,
+    lax_reduce_fn=lax.add,
+    extra_name_stack="cumsum")
+tf_impl_with_avals[lax.cumprod_p] = _cumred(
+    lax_reduce_window_fn=lax_windowed_reductions._reduce_window_prod,
+    lax_reduce_fn=lax.mul,
+    extra_name_stack="cumprod")
 
 
 def _select_and_scatter(operand, source, init_value, select_jaxpr,
@@ -2018,7 +2038,7 @@ def _select_and_scatter(operand, source, init_value, select_jaxpr,
 tf_impl[lax.select_and_scatter_p] = _select_and_scatter
 
 
-@partial(bool_to_int8, argnums=(0, 1))
+@partial(handle_boolean_args, argnums=(0, 1))
 def _select_and_scatter_add(source, operand, *, select_prim, window_dimensions,
                             window_strides, padding, _in_avals, _out_aval):
   init_value = tf.zeros((), operand.dtype)
@@ -2093,7 +2113,7 @@ def _gather_dimensions_proto(indices_shape, dimension_numbers):
   return proto
 
 
-@partial(bool_to_int8, argnums=[0])
+@partial(handle_boolean_args, argnums=[0])
 def _gather(operand, start_indices, *, dimension_numbers, slice_sizes: core.Shape,
             indices_are_sorted, unique_indices, mode, fill_value,
             _in_avals: Sequence[core.ShapedArray],
@@ -2325,7 +2345,7 @@ tf_impl_with_avals[lax.scan_p] = _convert_jax_impl(
 tf_impl_with_avals[ad_checkpoint.remat_p] = \
   _convert_jax_impl(partial(lax_control_flow._remat_translation_rule,
                             # TODO: jax2tf cannot discriminate by platform
-                            platform="tpu"),
+                            platform="cpu"),
                     multiple_results=True,
                     extra_name_stack="checkpoint")
 
@@ -2607,7 +2627,8 @@ def _shard_value(mesh: maps.Mesh,
           type=int(sharding_proto.type),
           tile_assignment_dimensions=sharding_proto.tile_assignment_dimensions,
           tile_assignment_devices=sharding_proto.tile_assignment_devices,
-          replicate_on_last_tile_dim=sharding_proto.replicate_on_last_tile_dim))
+          replicate_on_last_tile_dim=sharding_proto.replicate_on_last_tile_dim,
+          last_tile_dims=sharding_proto.last_tile_dims))
   return xla_sharding.Sharding(proto=xla_sharding_proto).apply_to_tensor(
       val, use_sharding_op=True)
 

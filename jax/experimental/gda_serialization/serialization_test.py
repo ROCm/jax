@@ -21,6 +21,7 @@ import jax
 from jax._src import test_util as jtu
 from jax._src import util
 from jax.config import config
+from jax.experimental import PartitionSpec as P
 from jax.experimental.global_device_array import GlobalDeviceArray
 from jax.experimental.gda_serialization import serialization
 from jax.experimental.maps import Mesh
@@ -43,7 +44,7 @@ class CheckpointTest(jtu.JaxTestCase):
   def test_checkpointing(self):
     global_mesh = create_global_mesh((4, 2), ('x', 'y'))
     global_input_shape = (8, 2)
-    mesh_axes = ['x', 'y']
+    mesh_axes = P('x', 'y')
     num = util.prod(global_input_shape)
 
     # First GDA
@@ -66,7 +67,7 @@ class CheckpointTest(jtu.JaxTestCase):
     def cb3(index):
       return np.array([])
     global_mesh1d = create_global_mesh((8,), ('x',))
-    gda3 = GlobalDeviceArray.from_callback((0,), global_mesh1d, [None], cb3)
+    gda3 = GlobalDeviceArray.from_callback((0,), global_mesh1d, P(None), cb3)
     ckpt_dir3 = pathlib.Path(self.create_tempdir('third').full_path)
 
     ckpt_paths = [str(ckpt_dir1), str(ckpt_dir2), str(ckpt_dir3)]
@@ -76,7 +77,7 @@ class CheckpointTest(jtu.JaxTestCase):
 
     m1, m2, m3 = serialization.run_deserialization(
         [global_mesh, global_mesh, global_mesh1d],
-        [mesh_axes, ['x'], [None]],
+        [mesh_axes, P('x'), P(None)],
         tspecs)
 
     self.assertArraysEqual(m1.local_shards[0].data.to_py(),
@@ -99,6 +100,44 @@ class CheckpointTest(jtu.JaxTestCase):
       self.assertArraysEqual(s.data.to_py(), np.array([]))
     self.assertEqual(m3.dtype, np.float32)
 
+  def test_checkpointing_with_bigger_shape(self):
+    global_mesh = create_global_mesh((2, 2), ('x', 'y'))
+    global_input_shape = (8, 2)
+    num = util.prod(global_input_shape)
+
+    # First GDA
+    global_input_data1 = np.arange(num).reshape(global_input_shape)
+    def cb1(index):
+      return global_input_data1[index]
+    gda1 = GlobalDeviceArray.from_callback(global_input_shape, global_mesh,
+                                           P('x', 'y'), cb1)
+    ckpt_dir1 = pathlib.Path(self.create_tempdir('first').full_path)
+
+    ckpt_paths = [str(ckpt_dir1)]
+    tspecs = jax.tree_map(serialization.get_tensorstore_spec, ckpt_paths)
+
+    serialization.run_serialization([gda1], tspecs)
+
+    m1, = serialization.run_deserialization(
+        [create_global_mesh((4, 2), ('x', 'y'))],
+        [P('x', 'y')],
+        tspecs,
+        [(12, 2)],
+    )
+
+    expected_data = {
+        0: np.array([[0], [2], [4]]),
+        1: np.array([[1], [3], [5]]),
+        2: np.array([[6], [8], [10]]),
+        3: np.array([[7], [9], [11]]),
+        4: np.array([[12], [14], [0]]),
+        5: np.array([[13], [15], [0]]),
+        6: np.array([[0], [0], [0]]),
+        7: np.array([[0], [0], [0]]),
+    }
+
+    for l in m1.local_shards:
+      self.assertArraysEqual(l.data.to_py(), expected_data[l.device.id])
 
 if __name__ == '__main__':
   absltest.main(testLoader=jtu.JaxTestLoader())

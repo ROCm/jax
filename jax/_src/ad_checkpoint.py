@@ -335,11 +335,8 @@ def remat_partial_eval(trace, *tracers, jaxpr, **params):
   return pe._zip_knowns(out_known_tracers, out_jaxpr_tracers, out_unknowns)
 pe.custom_partial_eval_rules[remat_p] = remat_partial_eval
 
-def remat_partial_eval_custom_params_updater(_, __, params_known, params_staged):
-  jaxpr_known = params_known.pop('call_jaxpr')
-  jaxpr_staged = params_staged.pop('call_jaxpr')
-  return (dict(params_known, jaxpr=jaxpr_known),
-          dict(params_staged, jaxpr=jaxpr_staged, differentiated=True))
+def remat_partial_eval_custom_params_updater(_, __, ___, ____, params_known, params_staged):
+  return params_known, dict(params_staged, differentiated=True)
 pe.partial_eval_jaxpr_custom_rules[remat_p] = \
     partial(pe.call_partial_eval_custom_rule, 'jaxpr',
             remat_partial_eval_custom_params_updater)
@@ -356,7 +353,7 @@ def remat_transpose(reduce_axes, out_cts, *in_primals, jaxpr, **params):
     primal_fun = lu.wrap_init(partial(core.eval_jaxpr, jaxpr, ()))
     tangent_jaxpr, _, consts = pe.trace_to_jaxpr(primal_fun, in_pvals, False)
     dummy_args = [ad.UndefinedPrimal(v.aval) for v in tangent_jaxpr.invars]
-    in_cts_ = ad.backward_pass(tangent_jaxpr, reduce_axes, consts, dummy_args,
+    in_cts_ = ad.backward_pass(tangent_jaxpr, reduce_axes, False, consts, dummy_args,
                                out_cts)
     in_cts, cell.treedef = tree_flatten(in_cts_)
     return in_cts

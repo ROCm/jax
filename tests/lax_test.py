@@ -26,17 +26,18 @@ from absl.testing import parameterized
 import numpy as np
 
 import jax
-import jax.numpy as jnp
 from jax import core
-from jax._src import dtypes
 from jax import lax
-from jax._src import test_util as jtu
-from jax import tree_util
-from jax._src import lax_reference
+import jax.numpy as jnp
 from jax.test_util import check_grads
+from jax import tree_util
 import jax.util
-from jax._src.util import prod
 
+from jax._src import dtypes
+from jax._src import test_util as jtu
+from jax._src import lax_reference
+from jax._src.util import prod
+from jax._src.lax import lax as lax_internal
 from jax._src.lax.lax import _device_put_raw
 
 
@@ -181,7 +182,6 @@ LAX_OPS = [
 ]
 
 
-@jtu.with_config(jax_numpy_rank_promotion="raise")
 class LaxTest(jtu.JaxTestCase):
   """Numerical tests for LAX operations."""
 
@@ -233,7 +233,7 @@ class LaxTest(jtu.JaxTestCase):
   def testConvertElementType(self, from_dtype, to_dtype, weak_type):
     rng = jtu.rand_default(self.rng())
     args_maker = lambda: [rng((2, 3), from_dtype)]
-    op = lambda x: lax._convert_element_type(x, to_dtype, weak_type)
+    op = lambda x: lax_internal._convert_element_type(x, to_dtype, weak_type)
     self._CompileAndCheck(op, args_maker)
 
     x = rng((1,), from_dtype)
@@ -288,8 +288,8 @@ class LaxTest(jtu.JaxTestCase):
       for weak_type in [True, False]))
   def testBitcastConvertWeakType(self, from_dtype, to_dtype, weak_type):
     rng = jtu.rand_default(self.rng())
-    x_in = lax._convert_element_type(rng((2, 3), from_dtype),
-                                     weak_type=weak_type)
+    x_in = lax_internal._convert_element_type(rng((2, 3), from_dtype),
+                                              weak_type=weak_type)
     op = lambda x: lax.bitcast_convert_type(x, to_dtype)
     self.assertEqual(dtypes.is_weakly_typed(x_in), weak_type)
     x_out = op(x_in)
@@ -371,6 +371,25 @@ class LaxTest(jtu.JaxTestCase):
     op = lambda *args: lax.concatenate(args, dim)
     numpy_op = lambda *args: lax_reference.concatenate(args, dim)
     self._CheckAgainstNumpy(numpy_op, op, args_maker)
+
+
+  @parameterized.named_parameters(jtu.cases_from_list(
+      {"testcase_name": "_dim={}_baseshape=[{}]_dtype={}".format(
+          dim, ",".join(str(d) for d in base_shape), np.dtype(dtype).name),
+       "dim": dim, "base_shape": base_shape, "dtype": dtype}
+      for dtype in default_dtypes
+      for base_shape in [(-1,), (3, -1), (2, -1, 4)]
+      for dim in range(len(base_shape))))
+  def testConcatenateDynamicShape(self, dim, base_shape, dtype):
+    aval1 = core.ShapedArray(base_shape, dtype)
+    expected_shape = list(base_shape)
+    expected_shape[dim] = -1 if expected_shape[dim] == -1 else expected_shape[dim] * 2
+    expected_shape = tuple(expected_shape)
+
+    def f(x, y):
+      return lax.concatenate((x, y), dim)
+    out = jax.eval_shape(f, aval1, aval1)
+    self.assertEqual(out.shape, expected_shape)
 
   @parameterized.named_parameters(jtu.cases_from_list(
       {"testcase_name":
@@ -1473,6 +1492,7 @@ class LaxTest(jtu.JaxTestCase):
     def args_maker():
       return [rng(pred_shape, np.bool_), rng(arg_shape, arg_dtype),
               rng(arg_shape, arg_dtype)]
+    return self._CheckAgainstNumpy(lax_reference.select, lax.select, args_maker)
     return self._CompileAndCheck(lax.select, args_maker)
 
   @parameterized.named_parameters(jtu.cases_from_list(
@@ -1487,28 +1507,19 @@ class LaxTest(jtu.JaxTestCase):
       for (pred_dtype, num_args) in (
           list(itertools.product([np.dtype(np.bool_), np.dtype(np.int32)],
                                  [1, 2])) +
-          [(np.dtype(np.int32), 3)])))
+          [(np.dtype(np.int32), 6)])))
   def testSelectN(self, pred_dtype, pred_shape, arg_shape, arg_dtype, num_args):
+    if pred_dtype == np.bool_:
+      pred_rng = jtu.rand_default(self.rng())
+    else:
+      pred_rng = jtu.rand_int(self.rng(), low=-1, high=num_args + 1)
     rng = jtu.rand_default(self.rng())
     def args_maker():
-      return [rng(pred_shape, pred_dtype)] + (
-          [rng(arg_shape, arg_dtype)] * num_args)
+      return [pred_rng(pred_shape, pred_dtype)] + (
+          [rng(arg_shape, arg_dtype) for _ in range(num_args)])
+    return self._CheckAgainstNumpy(lambda c, *xs: np.choose(c, xs, mode='clip'),
+                                   lax.select_n, args_maker)
     return self._CompileAndCheck(lax.select_n, args_maker)
-
-  @parameterized.named_parameters(jtu.cases_from_list(
-      {"testcase_name": "_predshape={}_argshapes={}".format(
-          jtu.format_shape_dtype_string(pred_shape, np.bool_),
-          jtu.format_shape_dtype_string(arg_shape, arg_dtype)),
-       "pred_shape": pred_shape, "arg_shape": arg_shape, "arg_dtype": arg_dtype}
-      for arg_shape in [(), (3,), (2, 3)]
-      for pred_shape in ([(), arg_shape] if arg_shape else [()])
-      for arg_dtype in default_dtypes))
-  def testSelectAgainstNumpy(self, pred_shape, arg_shape, arg_dtype):
-    rng = jtu.rand_default(self.rng())
-    def args_maker():
-      return [rng(pred_shape, np.bool_), rng(arg_shape, arg_dtype),
-              rng(arg_shape, arg_dtype)]
-    return self._CheckAgainstNumpy(lax_reference.select, lax.select, args_maker)
 
   @parameterized.named_parameters(jtu.cases_from_list(
       {"testcase_name":
@@ -1749,8 +1760,9 @@ class LaxTest(jtu.JaxTestCase):
       for init_weak_type in [True, False]))
   def testReduceWeakType(self, op_namespace, op, arr_weak_type, init_weak_type):
     op = getattr(op_namespace, op)
-    arr = lax._convert_element_type(np.arange(10), int, weak_type=arr_weak_type)
-    init = lax._convert_element_type(1, int, weak_type=init_weak_type)
+    arr = lax_internal._convert_element_type(np.arange(10), int,
+                                             weak_type=arr_weak_type)
+    init = lax_internal._convert_element_type(1, int, weak_type=init_weak_type)
     fun = lambda arr, init: lax.reduce(arr, init, op, (0,))
     out = fun(arr, init)
     self.assertEqual(dtypes.is_weakly_typed(out), arr_weak_type and init_weak_type)
@@ -2633,9 +2645,9 @@ class LaxTest(jtu.JaxTestCase):
     if dtype in set(python_scalar_types):
       val = dtype(0)
     else:
-      val = lax._convert_element_type(0, dtype, weak_type=weak_type)
+      val = lax_internal._convert_element_type(0, dtype, weak_type=weak_type)
 
-    const = lax._const(val, 0)
+    const = lax_internal._const(val, 0)
     self.assertEqual(dtypes.dtype(val, canonicalize=True),
                      dtypes.dtype(const, canonicalize=True))
 
@@ -2669,7 +2681,6 @@ class LaxTest(jtu.JaxTestCase):
         np.array(lax.dynamic_slice(x, np.uint8([128]), (1,))), [128])
 
 
-@jtu.with_config(jax_numpy_rank_promotion="raise")
 class LazyConstantTest(jtu.JaxTestCase):
   def _Check(self, make_const, expected):
     # check casting to ndarray works
@@ -2740,7 +2751,7 @@ class LazyConstantTest(jtu.JaxTestCase):
           [(1001, 1001), (0, 1)],
       ]))
   def testDeltaConstant(self, dtype, shape, axes):
-    make_const = lambda: lax._delta(dtype, shape, axes)
+    make_const = lambda: lax_internal._delta(dtype, shape, axes)
     # don't check the asarray case, just assume it's right
     expected = np.asarray(make_const())
     self._Check(make_const, expected)
@@ -2819,7 +2830,8 @@ class LazyConstantTest(jtu.JaxTestCase):
       for weak_type in [True, False]))
   def testArgMinMaxWeakType(self, jax_fn, weak_type):
     op = lambda x: jax_fn(x, axis=0, index_dtype=np.int32)
-    x_in = lax._convert_element_type(np.ones((2, 2)), weak_type=weak_type)
+    x_in = lax_internal._convert_element_type(np.ones((2, 2)),
+                                              weak_type=weak_type)
     self.assertEqual(dtypes.is_weakly_typed(x_in), weak_type)
     x_out = op(x_in)
     self.assertEqual(dtypes.is_weakly_typed(x_out), False)
@@ -2872,7 +2884,6 @@ class LazyConstantTest(jtu.JaxTestCase):
         np.log1p(np.float32(1e-5)), lax.log1p(np.complex64(1e-5)))
 
 
-@jtu.with_config(jax_numpy_rank_promotion="raise")
 class LaxNamedShapeTest(jtu.JaxTestCase):
 
   def test_abstract_eval(self):

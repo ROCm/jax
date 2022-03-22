@@ -24,20 +24,20 @@ import itertools
 import re
 import typing
 from typing import (Any, Callable, Dict, List, Optional, Sequence, Set, Tuple,
-                    Type, Union)
+                    Type, Union, FrozenSet)
 from typing_extensions import Protocol
 import warnings
 
+import jax
 from jax import core
 from jax import linear_util as lu
 from jax._src import ad_util
 from jax._src import device_array
 from jax._src import dtypes
 from jax._src.lib.mlir import ir
-from jax._src.lib.mlir.dialects import builtin
 from jax._src.lib.mlir.dialects import chlo
 from jax._src.lib.mlir.dialects import mhlo
-from jax._src.lib.mlir.dialects import std
+from jax._src.lib.mlir.dialects import func as func_dialect
 from jax._src.lib import xla_client as xc
 from jax._src import source_info_util
 import jax._src.util as util
@@ -45,6 +45,15 @@ import jax.interpreters.ad as ad
 import jax.interpreters.partial_eval as pe
 import jax.interpreters.xla as xla
 import numpy as np
+
+# TODO(jakevdp): remove this when minimum_jaxlib_version >= 0.3.3
+if jax._src.lib.mlir_api_version >= 4:
+  FuncOp = func_dialect.FuncOp  # pytype: disable=module-attr
+else:
+  from jax._src.lib.mlir.dialects import builtin  # pylint: disable=import-not-at-top
+  FuncOp = builtin.FuncOp  # pytype: disable=module-attr
+# mypy gets confused by conditional imports, so alias to Any for now.
+FuncOpType = Any
 
 
 map, unsafe_map = util.safe_map, map
@@ -164,7 +173,10 @@ def ir_constants(val: Any,
   """
   for t in type(val).__mro__:
     handler = _constant_handlers.get(t)
-    if handler: return handler(val, canonicalize_types)
+    if handler:
+      out = handler(val, canonicalize_types)
+      assert all(isinstance(v, ir.Value) for v in out), (type(val), out)
+      return out
   if hasattr(val, '__jax_array__'):
     return ir_constants(val.__jax_array__(), canonicalize_types)
   raise TypeError("No constant handler for type: {}".format(type(val)))
@@ -258,14 +270,16 @@ def _device_array_constant_handler(val, canonicalize_types):
 for t in device_array.device_array_types:
   register_constant_handler(t, _device_array_constant_handler)
 
+register_constant_handler(
+  core.Token, lambda _, __: [mhlo.CreateTokenOp(mhlo.TokenType.get()).result])
 
 # Source locations
 
 def _source_info_to_location(
     primitive: core.Primitive, params: Dict,
     source_info: source_info_util.SourceInfo,
-    name_stack: str = "") -> ir.Location:
-  eqn_str = name_stack + core.str_eqn_compact(primitive.name, params)
+    name_stack: Union[str, source_info_util.NameStack] = "") -> ir.Location:
+  eqn_str = str(name_stack) + core.str_eqn_compact(primitive.name, params)
   frame = source_info_util.user_frame(source_info)
   if frame is None:
     loc = ir.Location.unknown()
@@ -278,6 +292,7 @@ def _source_info_to_location(
 
 
 # Translation rules
+NameStack = Union[str, source_info_util.NameStack]
 
 def make_ir_context() -> ir.Context:
   """Creates an MLIR context suitable for JAX IR."""
@@ -287,6 +302,42 @@ def make_ir_context() -> ir.Context:
   return context
 
 
+Mesh = Any
+MeshAxisName = Any
+
+@dataclasses.dataclass(frozen=True)
+class SPMDAxisContext:
+  """A hardware axis context for parallel computations that use the GSPMD partitioner.
+
+  This includes the mesh that will later by used to execute this computation,
+  as well as a set of mesh axes that are currently (e.g. because the current lowering
+  is invoked inside an xmap) lowered in the MANUAL sharding mode.
+  """
+  mesh: Mesh
+  manual_axes: FrozenSet[MeshAxisName] = frozenset()
+
+  @property
+  def axis_env(self):
+    # TODO: Should we restrict the mesh to manual axes? This depends on the
+    # semantics of ReplicaId in partially manual computations, but I don't
+    # know what they are...
+    return xla.AxisEnv(nreps=1, names=(), sizes=())
+
+  def extend_manual(self, axes: FrozenSet[MeshAxisName]) -> 'SPMDAxisContext':
+    return SPMDAxisContext(self.mesh, self.manual_axes | axes)
+
+
+@dataclasses.dataclass(frozen=True)
+class ReplicaAxisContext:
+  """A hardware axis context for parallel computations that are partitioned by JAX.
+
+  Unlike in the SPMDAxisContext, this means that JAX might need to emit calls to
+  explicit collectives.
+  """
+  axis_env: xla.AxisEnv
+
+AxisContext = Union[SPMDAxisContext, ReplicaAxisContext]
+
 @dataclasses.dataclass
 class ModuleContext:
   """Module-wide context information for MLIR lowering."""
@@ -295,26 +346,33 @@ class ModuleContext:
   ip: ir.InsertionPoint
   symbol_table: ir.SymbolTable
   platform: str
-  axis_env: xla.AxisEnv
-  name_stack: str
+  axis_context: AxisContext
+  name_stack: NameStack
 
   # Cached primitive lowerings.
-  cached_primitive_lowerings: Dict[Any, builtin.FuncOp]
+  cached_primitive_lowerings: Dict[Any, FuncOpType]
+
+  @property
+  def axis_env(self) -> xla.AxisEnv:
+    return self.axis_context.axis_env
 
   def __init__(
-      self, platform: str, axis_env: xla.AxisEnv, name_stack: str,
+      self,
+      platform: str,
+      axis_context: AxisContext,
+      name_stack: NameStack,
       context: Optional[ir.Context] = None,
       module: Optional[ir.Module] = None,
       ip: Optional[ir.InsertionPoint] = None,
       symbol_table: Optional[ir.SymbolTable] = None,
-      cached_primitive_lowerings: Optional[Dict[Any, builtin.FuncOp]] = None):
+      cached_primitive_lowerings: Optional[Dict[Any, FuncOpType]] = None):
     assert platform is not None
     self.context = context or make_ir_context()
     self.module = module or ir.Module.create(loc=ir.Location.unknown(self.context))
     self.ip = ip or ir.InsertionPoint(self.module.operation.opview.body)
     self.symbol_table = symbol_table or ir.SymbolTable(self.module.operation)
     self.platform = platform
-    self.axis_env = axis_env
+    self.axis_context = axis_context
     self.name_stack = name_stack
     self.cached_primitive_lowerings = ({} if cached_primitive_lowerings is None
                                        else cached_primitive_lowerings)
@@ -367,10 +425,35 @@ def flatten_lowering_ir_args(
 _module_unique_id = itertools.count()
 _module_name_regex = re.compile(r"[^\w.-]")
 
+def sharded_aval(aval: core.ShapedArray,
+                 sharding: Optional[xc.OpSharding]) -> core.ShapedArray:
+  """Returns the new aval sharded based on sharding proto."""
+  if sharding is None:
+    return aval
+
+  if (sharding.type == xc.OpSharding.Type.REPLICATED or
+      sharding.type == xc.OpSharding.Type.MANUAL):
+    return aval
+
+  sharded_shape = []
+  tile_rank = len(sharding.tile_assignment_dimensions)
+  if sharding.replicate_on_last_tile_dim:
+    tile_rank -= 1
+  if sharding.last_tile_dims:
+    tile_rank -= len(sharding.last_tile_dims)
+  if tile_rank == 0:
+    return aval
+
+  for i in range(tile_rank):
+    partitions = sharding.tile_assignment_dimensions[i]
+    assert partitions > 0
+    sharded_shape.append((aval.shape[i] + partitions - 1) // partitions)
+  return aval.update(tuple(sharded_shape))
+
 def lower_jaxpr_to_module(
     module_name: str, jaxpr: core.ClosedJaxpr, platform: str,
-    axis_env: xla.AxisEnv,
-    name_stack: str, donated_args: Sequence[bool],
+    axis_context: AxisContext,
+    name_stack: NameStack, donated_args: Sequence[bool],
     replicated_args: Optional[Sequence[bool]] = None,
     arg_shardings: Optional[Sequence[Optional[xc.OpSharding]]] = None,
     result_shardings: Optional[Sequence[Optional[xc.OpSharding]]] = None
@@ -380,20 +463,32 @@ def lower_jaxpr_to_module(
   Handles the quirks of the argument/return value passing conventions of the
   runtime."""
   input_output_aliases = None
+  in_avals = jaxpr.in_avals
+  if arg_shardings is not None:
+    in_avals = [
+        sharded_aval(in_aval, in_sharding)
+        for in_aval, in_sharding in zip(in_avals, arg_shardings)
+    ]
+  out_avals = jaxpr.out_avals
+  if result_shardings is not None:
+    out_avals = [
+        sharded_aval(out_aval, out_sharding)
+        for out_aval, out_sharding in zip(out_avals, result_shardings)
+    ]
   platforms_with_donation = ("gpu", "tpu")
   if platform in platforms_with_donation:
     input_output_aliases, donated_args = _set_up_aliases(
-        jaxpr.in_avals, jaxpr.out_avals, donated_args)
+        in_avals, out_avals, donated_args)
   if any(donated_args):
     # TODO(tomhennigan): At call time we should mark these buffers as deleted.
-    unused_donations = [str(a) for a, d in zip(jaxpr.in_avals, donated_args)
+    unused_donations = [str(a) for a, d in zip(in_avals, donated_args)
                         if d]
     msg = "See an explanation at https://jax.readthedocs.io/en/latest/notebooks/faq.html#buffer-donation."
     if platform not in platforms_with_donation:
       msg = f"Donation is not implemented for {platform}.\n{msg}"
     warnings.warn(f"Some donated buffers were not usable: {', '.join(unused_donations)}.\n{msg}")
 
-  ctx = ModuleContext(platform, axis_env, name_stack)
+  ctx = ModuleContext(platform, axis_context, name_stack)
   with ctx.context, ir.Location.unknown(ctx.context):
     # Remove module name characters that XLA would alter. This ensures that
     # XLA computation preserves the module name.
@@ -441,14 +536,18 @@ def _set_up_aliases(avals_in, avals_out, donated_args):
   return input_output_aliases, out_donated_args
 
 def lower_jaxpr_to_fun(
-    ctx: ModuleContext, name: str, jaxpr: core.ClosedJaxpr, *,
-    public: bool = False, replace_units_with_dummy: bool = False,
+    ctx: ModuleContext,
+    name: str,
+    jaxpr: core.ClosedJaxpr,
+    *,
+    public: bool = False,
+    replace_units_with_dummy: bool = False,
     replace_tokens_with_dummy: bool = False,
     replicated_args: Optional[Sequence[bool]] = None,
     arg_shardings: Optional[Sequence[Optional[xc.OpSharding]]] = None,
     result_shardings: Optional[Sequence[Optional[xc.OpSharding]]] = None,
     input_output_aliases: Optional[Sequence[Optional[int]]] = None
-  ) -> builtin.FuncOp:
+) -> FuncOpType:
   """Lowers jaxpr and its callees to an IR function.
 
   Assumes that an MLIR context, location, and insertion point are set.
@@ -482,7 +581,7 @@ def lower_jaxpr_to_fun(
   flat_input_types = util.flatten(input_types)
   flat_output_types = util.flatten(output_types)
   ftype = ir.FunctionType.get(flat_input_types, flat_output_types)
-  func_op = builtin.FuncOp(name, ftype, ip=ctx.ip)
+  func_op = FuncOp(name, ftype, ip=ctx.ip)
   func_op.attributes["sym_visibility"] = ir.StringAttr.get(
       "public" if public else "private")
   ctx.symbol_table.insert(func_op)
@@ -559,12 +658,12 @@ def lower_jaxpr_to_fun(
         outs.append(ir_constants(np.zeros((), np.bool_)))
       else:
         outs.append(out)
-    std.ReturnOp(util.flatten(outs))
+    func_dialect.ReturnOp(util.flatten(outs))
 
   return func_op
 
 def _emit_lowering_rule_as_fun(lowering_rule,
-                               ctx: LoweringRuleContext) -> builtin.FuncOp:
+                               ctx: LoweringRuleContext) -> FuncOpType:
   """Emits the contents of a lowering rule as a private function."""
   input_types = map(aval_to_ir_types, ctx.avals_in)
   output_types = map(aval_to_ir_types, ctx.avals_out)
@@ -572,7 +671,7 @@ def _emit_lowering_rule_as_fun(lowering_rule,
   flat_output_types = util.flatten(output_types)
   ftype = ir.FunctionType.get(flat_input_types, flat_output_types)
   assert ctx.primitive is not None
-  func_op = builtin.FuncOp(ctx.primitive.name, ftype, ip=ctx.module_context.ip)
+  func_op = FuncOp(ctx.primitive.name, ftype, ip=ctx.module_context.ip)
   func_op.attributes["sym_visibility"] = ir.StringAttr.get("private")
   ctx.module_context.symbol_table.insert(func_op)
   entry_block = func_op.add_entry_block()
@@ -580,7 +679,7 @@ def _emit_lowering_rule_as_fun(lowering_rule,
     unflattened_args = util.unflatten(entry_block.arguments,
                                       map(len, input_types))
     outs = lowering_rule(ctx, *_unwrap_singleton_ir_values(unflattened_args))
-    std.ReturnOp(util.flatten(map(wrap_singleton_ir_values, outs)))
+    func_dialect.ReturnOp(util.flatten(map(wrap_singleton_ir_values, outs)))
   return func_op
 
 def jaxpr_subcomp(ctx: ModuleContext, jaxpr: core.Jaxpr,
@@ -590,27 +689,28 @@ def jaxpr_subcomp(ctx: ModuleContext, jaxpr: core.Jaxpr,
 
   Assumes that an MLIR context, location, and insertion point are set.
   """
-  def read(v):
+  def read(v: core.Var) -> Sequence[ir.Value]:
     if type(v) is core.Literal:
       return ir_constants(v.val, canonicalize_types=True)
     else:
       return env[v]
 
-  def aval(v):
+  def aval(v: core.Var) -> core.AbstractValue:
     if type(v) is core.Literal:
       return xla.abstractify(v.val)
     else:
       return v.aval
 
-  def write(v, node):
+  def write(v: core.Var, node: Sequence[ir.Value]):
     assert node is not None
     env[v] = tuple(node)
 
 
-  env: Dict[core.Var, Tuple[ir.Value]] = {}
+  env: Dict[core.Var, Tuple[ir.Value, ...]] = {}
 
   assert len(args) == len(jaxpr.invars), (jaxpr, args)
   assert len(consts) == len(jaxpr.constvars), (jaxpr, consts)
+  assert all(isinstance(v, ir.Value) for vs in consts for v in vs), consts
   write(core.unitvar, ())
   map(write, jaxpr.constvars, consts)
   map(write, jaxpr.invars, args)
@@ -685,9 +785,9 @@ def _call_lowering(fn_name, stack_name, call_jaxpr, backend, ctx, avals_in,
       name_stack=xla.extend_name_stack(ctx.name_stack, stack_name))
   symbol_name = lower_jaxpr_to_fun(sub_ctx, fn_name,
                                    core.ClosedJaxpr(call_jaxpr, ())).name.value
-  call = std.CallOp(flat_output_types,
-                    ir.FlatSymbolRefAttr.get(symbol_name),
-                    flatten_lowering_ir_args(args))
+  call = func_dialect.CallOp(flat_output_types,
+                             ir.FlatSymbolRefAttr.get(symbol_name),
+                             flatten_lowering_ir_args(args))
   return util.unflatten(call.results, map(len, output_types))
 
 def _xla_call_lower(ctx, *args,
@@ -736,15 +836,27 @@ def _minmax_mhlo(op, cmp, x, y):
     ry = mhlo.RealOp(y).result
     dims = [tensor_type.get_dim_size(i) for i in range(tensor_type.rank)]
     bool_shape = ir.RankedTensorType.get(dims, ir.IntegerType.get_signless(1))
-    real_eq = mhlo.CompareOp(bool_shape, rx, ry, ir.StringAttr.get("EQ"),
-                             ir.StringAttr.get("FLOAT"))
-    real_cmp = mhlo.CompareOp(bool_shape, rx, ry,
-                              ir.StringAttr.get(cmp),
-                              ir.StringAttr.get("FLOAT"))
-    imag_cmp = mhlo.CompareOp(bool_shape, mhlo.ImagOp(x).result,
-                              mhlo.ImagOp(y).result,
-                              ir.StringAttr.get(cmp),
-                              ir.StringAttr.get("FLOAT"))
+    if jax._src.lib.mlir_api_version >= 3:
+      real_eq = mhlo.CompareOp(bool_shape, rx, ry,
+                               mhlo.ComparisonDirectionAttr.get("EQ"),
+                               mhlo.ComparisonTypeAttr.get("FLOAT"))
+      real_cmp = mhlo.CompareOp(bool_shape, rx, ry,
+                                mhlo.ComparisonDirectionAttr.get(cmp),
+                                mhlo.ComparisonTypeAttr.get("FLOAT"))
+      imag_cmp = mhlo.CompareOp(bool_shape,
+                                mhlo.ImagOp(x).result,
+                                mhlo.ImagOp(y).result,
+                                mhlo.ComparisonDirectionAttr.get(cmp),
+                                mhlo.ComparisonTypeAttr.get("FLOAT"))
+    else:
+      real_eq = mhlo.CompareOp(bool_shape, rx, ry, ir.StringAttr.get("EQ"),
+                               ir.StringAttr.get("FLOAT"))
+      real_cmp = mhlo.CompareOp(bool_shape, rx, ry, ir.StringAttr.get(cmp),
+                                ir.StringAttr.get("FLOAT"))
+      imag_cmp = mhlo.CompareOp(bool_shape,
+                                mhlo.ImagOp(x).result,
+                                mhlo.ImagOp(y).result, ir.StringAttr.get(cmp),
+                                ir.StringAttr.get("FLOAT"))
     which = mhlo.SelectOp(real_eq, imag_cmp, real_cmp).result
     return mhlo.SelectOp(which, x, y)
   else:
@@ -766,9 +878,15 @@ def convert_mhlo(x, aval_in, aval_out):
       compare_type = "SIGNED"
     else:
       compare_type = "UNSIGNED"
-    return mhlo.CompareOp(
-        aval_to_ir_type(aval_out), x, full_like_aval(0, aval_in),
-        ir.StringAttr.get("NE"), ir.StringAttr.get(compare_type)).result
+    if jax._src.lib.mlir_api_version >= 3:
+      return mhlo.CompareOp(
+          aval_to_ir_type(aval_out), x, full_like_aval(0, aval_in),
+          mhlo.ComparisonDirectionAttr.get("NE"),
+          mhlo.ComparisonTypeAttr.get(compare_type)).result
+    else:
+      return mhlo.CompareOp(
+          aval_to_ir_type(aval_out), x, full_like_aval(0, aval_in),
+          ir.StringAttr.get("NE"), ir.StringAttr.get(compare_type)).result
   return mhlo.ConvertOp(aval_to_ir_type(aval_out), x).result
 
 def _wrap_with_spmd_op(name: str,
@@ -835,9 +953,9 @@ def cache_lowering(f):
 
     output_types = map(aval_to_ir_types, ctx.avals_out)
     flat_output_types = util.flatten(output_types)
-    call = std.CallOp(flat_output_types,
-                      ir.FlatSymbolRefAttr.get(func.name.value),
-                      flatten_lowering_ir_args(args))
+    call = func_dialect.CallOp(flat_output_types,
+                               ir.FlatSymbolRefAttr.get(func.name.value),
+                               flatten_lowering_ir_args(args))
     return util.unflatten(call.results, map(len, output_types))
   return cached_lowering
 
@@ -865,8 +983,9 @@ def xla_fallback_lowering(prim: core.Primitive):
     output_type = (ir.TupleType.get_tuple(flat_output_types)
                    if prim.multiple_results else flat_output_types[0])
 
-    call = std.CallOp([output_type], ir.FlatSymbolRefAttr.get(callee_name),
-                      flatten_lowering_ir_args(args)).result
+    call = func_dialect.CallOp([output_type],
+                               ir.FlatSymbolRefAttr.get(callee_name),
+                               flatten_lowering_ir_args(args)).result
     if not prim.multiple_results:
       return [call]
     flat_results = [mhlo.GetTupleElementOp(typ, call, i32_attr(i)).result

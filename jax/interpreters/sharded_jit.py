@@ -30,12 +30,12 @@ from jax._src import dispatch
 from jax._src.lib import xla_bridge as xb
 from jax._src.lib import xla_client as xc
 from jax._src.lib.mlir import ir
-from jax._src.lib.mlir.dialects import std
+from jax._src.lib.mlir.dialects import func as func_dialect
 from jax._src.api_util import (argnums_partial, flatten_axes, flatten_fun,
                                _ensure_index_tuple)
 import jax._src.util as util
 from jax.tree_util import tree_flatten, tree_unflatten
-from jax._src.util import (extend_name_stack, wrap_name, wraps, safe_map,
+from jax._src.util import (new_name_stack, wrap_name, wraps, safe_map,
                            safe_zip, HashableFunction)
 from jax._src.config import config
 
@@ -149,7 +149,7 @@ def _sharded_callable(
   xla_args = _xla_sharded_args(c, global_abstract_args, in_parts)
   axis_env = xla.AxisEnv(nrep, (), ())
   ctx = xla.TranslationContext(
-      c, platform, axis_env, extend_name_stack(wrap_name(name, "sharded_jit")))
+      c, platform, axis_env, new_name_stack(wrap_name(name, "sharded_jit")))
   out_nodes = xla.jaxpr_subcomp(ctx, jaxpr, xla_consts, *xla_args)
   out_tuple = xla.with_sharding(c, out_parts, xops.Tuple, c, out_nodes)
   built = c.Build(out_tuple)
@@ -202,7 +202,7 @@ def _sharded_jit_translation_rule(ctx, avals_in, avals_out, *in_nodes,
 
   sub_ctx = ctx.replace(
       builder=subc,
-      name_stack=extend_name_stack(wrap_name(name, "sharded_jit")))
+      name_stack=new_name_stack(wrap_name(name, "sharded_jit")))
   out_nodes = xla.jaxpr_subcomp(sub_ctx, call_jaxpr, (), *args)
   out_parts = out_parts_thunk()
   assert len(out_parts) == len(out_nodes)
@@ -234,15 +234,15 @@ def _sharded_jit_lowering(ctx, *in_nodes,
       args.append(ns)
 
   sub_ctx = ctx.module_context.replace(
-      name_stack=extend_name_stack(wrap_name(name, "sharded_jit")))
+      name_stack=new_name_stack(wrap_name(name, "sharded_jit")))
   fn = mlir.lower_jaxpr_to_fun(sub_ctx, f"sharded_jit_{name}",
                                core.ClosedJaxpr(call_jaxpr, ()))
 
   output_types = safe_map(mlir.aval_to_ir_types, ctx.avals_out)
   flat_output_types = util.flatten(output_types)
-  call = std.CallOp(flat_output_types,
-                    ir.FlatSymbolRefAttr.get(fn.name.value),
-                    mlir.flatten_lowering_ir_args(args))
+  call = func_dialect.CallOp(flat_output_types,
+                             ir.FlatSymbolRefAttr.get(fn.name.value),
+                             mlir.flatten_lowering_ir_args(args))
   out_nodes = util.unflatten(call.results, safe_map(len, output_types))
 
   out_parts = out_parts_thunk()
@@ -291,8 +291,8 @@ mlir.register_lowering(sharded_call_p, _sharded_jit_lowering)
 
 class _UnconstrainedPartitionSingleton:
 
-    def __str__ (self):
-      return "UNCONSTRAINED"
+  def __str__(self):
+    return "UNCONSTRAINED"
 
 
 # Unconstrained sentinel value for PartitionSpec, representing a dimension for

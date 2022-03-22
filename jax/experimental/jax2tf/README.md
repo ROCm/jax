@@ -13,8 +13,12 @@ written in JAX, possibly including JAX transformations, and turn it into
 a function that uses only TensorFlow operations. The converted function
 can be called or traced from TensorFlow and will behave as if it was written in TensorFlow.
 In practice this means that you can take some code written in JAX and execute it using
-TensorFlow eager mode, or stage it out as a TensorFlow graph, even save it
-as a SavedModel for archival, or for use with TensorFlow tools such as serving stack,
+TensorFlow eager mode, or stage it out as a TensorFlow graph, even use it
+with TensorFlow tooling such as: SavedModel for archival ([examples below](#usage-saved-model)),
+TensorFlow Serving ([examples](https://github.com/google/jax/blob/main/jax/experimental/jax2tf/examples/serving/README.md)),
+TFX ([examples](https://github.com/tensorflow/tfx/blob/master/tfx/examples/penguin/README.md#instructions-for-using-flax)),
+TensorFlow Lite ([examples](https://github.com/google/jax/blob/main/jax/experimental/jax2tf/examples/tflite/mnist/README.md)),
+TensorFlow.js ([examples](https://github.com/google/jax/blob/main/jax/experimental/jax2tf/examples/tf_js/quickdraw/README.md)),
 or TensorFlow Hub.
 
 This package also contains the `jax2tf.call_tf` mechanism to call TensorFlow functions
@@ -442,6 +446,19 @@ as `False` and produce a converted function that returns `1` just because the di
 are not identical: there are some concrete input shapes for which the function
 should return `0`.
 
+Note that JAX will give an error when trying to use a dimension polynomial
+as a JAX value, e.g., in the following code:
+
+```
+jax2tf.convert(lambda x: jnp.prod(jnp.array(x.shape)),
+               polymorphic_shapes=["(b, ...)"])(np.ones((3, 4))
+```
+
+Note that the above code would work if we replace `jnp.array` and `jnp.prod`
+with `np.array`and `np.prod`, because dimension polynomials overload multiplication.
+See the next section if you do need to convert a dimension polynomials to
+a JAX value.
+
 ### Dimension variables appearing in the numeric computation
 
 There are some situations when dimension variables arise in the staged computation itself.
@@ -605,13 +622,6 @@ operations. There is support for `sharded_jit` and `pjit`.
 
 If you suspect that the SavedModel is larger than it should be, check first
 that you are not including the parameters as constants in the graph (see [above](#usage-saved-model)).
-
-Additionally, the SavedModel obtained from a `jax2tf.convert`-ed function may include source
-location information. This ensures that the debugging experience is similar
-for JAX with XLA vs. `jax2tf.convert` with XLA. However, this debugging information
-increases the size of the SavedModel, even possibly doubling it. You can
-disable the generation of this metadata with the parameter
-`include_xla_op_metadata`.
 
 ### SavedModel supports only first-order gradients
 

@@ -82,7 +82,6 @@ from jax._src.lax.lax import (
   conj as conj,
   conj_p as conj_p,
   convert_element_type as convert_element_type,
-  _convert_element_type as _convert_element_type,
   convert_element_type_p as convert_element_type_p,
   cos as cos,
   cos_p as cos_p,
@@ -247,13 +246,6 @@ from jax._src.lax.lax import (
   xor_p as xor_p,
   zeros_like_array as zeros_like_array,
 )
-from jax._src.lax.lax import (
-  _reduce_sum, _reduce_max, _reduce_min, _reduce_or, _reduce_and,
-  _float, _complex, _input_dtype,
-  _const, _eq_meet, _broadcasting_select,
-  _check_user_dtype_supported, _one, _zero,
-  _upcast_fp16_for_computation, _broadcasting_shape_rule,
-  _eye, _tri, _delta, _ones, _zeros, _dilate_shape)
 from jax._src.lax.slicing import (
   GatherDimensionNumbers as GatherDimensionNumbers,
   GatherScatterMode as GatherScatterMode,
@@ -271,6 +263,7 @@ from jax._src.lax.slicing import (
   index_in_dim as index_in_dim,
   index_take as index_take,
   scatter as scatter,
+  scatter_apply as scatter_apply,
   scatter_add as scatter_add,
   scatter_add_p as scatter_add_p,
   scatter_max as scatter_max,
@@ -299,12 +292,6 @@ from jax._src.lax.convolution import (
   conv_with_general_padding as conv_with_general_padding,
 )
 from jax._src.lax.windowed_reductions import (
-  _reduce_window_sum,
-  _reduce_window_max,
-  _reduce_window_min,
-  _reduce_window_prod,
-  _select_and_gather_add,
-  _select_and_scatter_add,
   reduce_window as reduce_window,
   reduce_window_max_p as reduce_window_max_p,
   reduce_window_min_p as reduce_window_min_p,
@@ -367,6 +354,11 @@ from jax._src.lax.parallel import (
 from jax._src.lax.other import (
   conv_general_dilated_local as conv_general_dilated_local,
   conv_general_dilated_patches as conv_general_dilated_patches
+)
+from jax._src.lax.ann import (
+  approx_max_k as approx_max_k,
+  approx_min_k as approx_min_k,
+  approx_top_k_p as approx_top_k_p
 )
 from jax._src.ad_util import stop_gradient_p as stop_gradient_p
 from jax.lax import linalg as linalg

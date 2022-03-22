@@ -12,6 +12,46 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+r"""Jet is an experimental module for higher-order automatic differentiation
+  that does not rely on repeated first-order automatic differentiation.
+
+  How? Through the propagation of truncated Taylor polynomials.
+  Consider a function :math:`f = g \circ h`, some point :math:`x`
+  and some offset :math:`v`.
+  First-order automatic differentiation (such as :func:`jax.jvp`)
+  computes the pair :math:`(f(x), \partial f(x)[v])` from the the pair
+  :math:`(h(x), \partial h(x)[v])`.
+
+  :func:`jet` implements the higher-order analogue:
+  Given the tuple
+
+  .. math::
+    (h_0, ... h_K) :=
+    (h(x), \partial h(x)[v], \partial^2 h(x)[v, v], ..., \partial^K h(x)[v,...,v]),
+
+  which represents a :math:`K`-th order Taylor approximation
+  of :math:`h` at :math:`x`, :func:`jet` returns a :math:`K`-th order
+  Taylor approximation of :math:`f` at :math:`x`,
+
+  .. math::
+    (f_0, ..., f_K) :=
+    (f(x), \partial f(x)[v], \partial^2 f(x)[v, v], ..., \partial^K f(x)[v,...,v]).
+
+  More specifically, :func:`jet` computes
+
+  .. math::
+    f_0, (f_1, . . . , f_K) = \texttt{jet} (f, h_0, (h_1, . . . , h_K))
+
+  and can thus be used for high-order
+  automatic differentiation of :math:`f`.
+  Details are explained in
+  `these notes <https://github.com/google/jax/files/6717197/jet.pdf>`__.
+
+  Note:
+    Help improve :func:`jet` by contributing
+    `outstanding primitive rules <https://github.com/google/jax/issues/2431>`__.
+"""
+
 from typing import Callable
 
 from functools import partial
@@ -19,19 +59,70 @@ from functools import partial
 import numpy as np
 
 import jax
-import jax.numpy as jnp
 from jax import core
-from jax._src.util import unzip2
-from jax._src import ad_util
-from jax._src import dispatch
+from jax import lax
+from jax.custom_derivatives import custom_jvp_call_jaxpr_p
+from jax.interpreters import xla
+import jax.linear_util as lu
+import jax.numpy as jnp
 from jax.tree_util import (register_pytree_node, tree_structure,
                            treedef_is_leaf, tree_flatten, tree_unflatten)
-import jax.linear_util as lu
-from jax.interpreters import xla
-from jax.custom_derivatives import custom_jvp_call_jaxpr_p
-from jax import lax
+
+from jax._src import ad_util
+from jax._src import dispatch
+from jax._src.lax import lax as lax_internal
+from jax._src.util import unzip2
+
 
 def jet(fun, primals, series):
+  r"""Taylor-mode higher-order automatic differentiation.
+
+  Args:
+    fun: Function to be differentiated. Its arguments should be arrays, scalars,
+      or standard Python containers of arrays or scalars. It should return an
+      array, scalar, or standard Python container of arrays or scalars.
+    primals: The primal values at which the Taylor approximation of ``fun`` should be
+      evaluated. Should be either a tuple or a list of arguments,
+      and its length should be equal to the number of positional parameters of
+      ``fun``.
+    series: Higher order Taylor-series-coefficients.
+      Together, `primals` and `series` make up a truncated Taylor polynomial.
+      Should be either a tuple or a list of tuples or lists,
+      and its length dictates the degree of the truncated Taylor polynomial.
+
+  Returns:
+    A ``(primals_out, series_out)`` pair, where ``primals_out`` is ``fun(*primals)``,
+    and together, ``primals_out`` and ``series_out`` are a
+    truncated Taylor polynomial of :math:`f(h(\cdot))`.
+    The ``primals_out`` value has the same Python tree structure as ``primals``,
+    and the ``series_out`` value the same Python tree structure as ``series``.
+
+  For example:
+
+  >>> import jax
+  >>> import jax.numpy as np
+
+  Consider the function :math:`h(z) = z^3`, :math:`x = 0.5`,
+  and the first few Taylor coefficients
+  :math:`h_0=x^3`, :math:`h_1=3x^2`, and :math:`h_2=6x`.
+  Let :math:`f(y) = \sin(y)`.
+
+  >>> h0, h1, h2 = 0.5**3., 3.*0.5**2., 6.*0.5
+  >>> f, df, ddf = np.sin, np.cos, lambda *args: -np.sin(*args)
+
+  :func:`jet` returns the Taylor coefficients of :math:`f(h(z)) = \sin(z^3)`
+  according to Faà di Bruno's formula:
+
+  >>> f0, (f1, f2) =  jet(f, (h0,), ((h1, h2),))
+  >>> print(f0,  f(h0))
+  0.12467473 0.12467473
+
+  >>> print(f1, df(h0) * h1)
+  0.7441479 0.74414825
+
+  >>> print(f2, ddf(h0) * h1 ** 2 + df(h0) * h2)
+  2.9064622 2.9064634
+  """
   try:
     order, = set(map(len, series))
   except ValueError:
@@ -283,7 +374,10 @@ def deriv_prop(prim, deriv, primals_in, series_in):
   return primal_out, series_out
 
 
-def_deriv(lax.erf_p, lambda x: lax.mul(lax._const(x, 2. / np.sqrt(np.pi)), lax.exp(lax.neg(lax.square(x)))))
+def_deriv(lax.erf_p,
+          lambda x: lax.mul(
+              lax_internal._const(x, 2. / np.sqrt(np.pi)),
+              lax.exp(lax.neg(lax.square(x)))))
 
 
 def def_comp(prim, comp):
@@ -521,15 +615,20 @@ def _gen_reduce_choose_taylor_rule(chooser_fun):
     primal_dtype = gs[0].dtype
     shape = [1 if i in axes else d for i, d in enumerate(operand.shape)]
     location_indicators = lax.convert_element_type(
-          lax._eq_meet(operand, lax.reshape(primal_out, shape)), primal_dtype)
-    counts = lax._reduce_sum(location_indicators, axes)
+        lax_internal._eq_meet(operand, lax.reshape(primal_out, shape)),
+        primal_dtype)
+    counts = lax_internal._reduce_sum(location_indicators, axes)
     def _reduce_chooser_taylor_rule(g):
-      return lax.div(lax._reduce_sum(lax.mul(g, location_indicators), axes), counts)
+      return lax.div(
+          lax_internal._reduce_sum(lax.mul(g, location_indicators), axes),
+          counts)
     series_out = [_reduce_chooser_taylor_rule(g) for g in gs]
     return primal_out, series_out
   return chooser_taylor_rule
-jet_rules[lax.reduce_max_p] = _gen_reduce_choose_taylor_rule(lax._reduce_max)
-jet_rules[lax.reduce_min_p] = _gen_reduce_choose_taylor_rule(lax._reduce_min)
+jet_rules[lax.reduce_max_p] = _gen_reduce_choose_taylor_rule(
+    lax_internal._reduce_max)
+jet_rules[lax.reduce_min_p] = _gen_reduce_choose_taylor_rule(
+    lax_internal._reduce_min)
 
 def _abs_taylor_rule(x, series_in, **params):
   x, = x

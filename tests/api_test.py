@@ -54,6 +54,7 @@ from jax.interpreters.sharded_jit import PartitionSpec as P
 from jax._src import device_array
 import jax._src.lib
 from jax._src.lib import xla_client
+from jax._src.lib import xla_extension_version
 from jax._src import test_util as jtu
 from jax import tree_util
 from jax import linear_util as lu
@@ -70,7 +71,6 @@ python_version = (sys.version_info[0], sys.version_info[1])
 numpy_version = tuple(map(int, np.__version__.split('.')[:3]))
 
 
-@jtu.with_config(jax_numpy_rank_promotion="raise")
 class CPPJitTest(jtu.BufferDonationTestCase):
   """Shared tests between the Python and the C++ jax,jit implementations.
 
@@ -80,11 +80,6 @@ class CPPJitTest(jtu.BufferDonationTestCase):
 
   @property
   def jit(self):
-    # Right now, the CPP tests also test the Python code-path when jaxlib is
-    # too old.
-    # TODO(jblespiau,phawkins): Remove this when jaxlib has been released.
-    # This is in the future, because we are making a breaking change to
-    # Tensorflow.
     return api._cpp_jit
 
   def test_jit_repr(self):
@@ -422,12 +417,11 @@ class CPPJitTest(jtu.BufferDonationTestCase):
         TypeError, ".* 'foo' of type <.*'str'> is not a valid JAX type",
         lambda: self.jit(f)("foo"))
 
-    if jax._src.lib._xla_extension_version >= 47:
-      # Jax type objects aren't valid data arguments.
-      self.assertRaisesRegex(
-          TypeError,
-          ".* '.*int32.*' of type <.*_ScalarMeta.*> is not a valid JAX type",
-          lambda: self.jit(f)(jnp.int32))
+    # Jax type objects aren't valid data arguments.
+    self.assertRaisesRegex(
+        TypeError,
+        ".* '.*int32.*' of type <.*_ScalarMeta.*> is not a valid JAX type",
+        lambda: self.jit(f)(jnp.int32))
 
   def test_jit_on_all_devices(self):
     # Verifies we can run the same computation on every device present, even
@@ -462,6 +456,23 @@ class CPPJitTest(jtu.BufferDonationTestCase):
     g()                     # g still runs
     del g                   # no more references to x
     assert x() is None      # x is gone
+
+  @unittest.skipIf(xla_extension_version < 59, "Test requires jaxlib > 0.3.0")
+  def test_jit_of_nonweakreferenceable_function(self):
+    class CallableWithSlots:
+      __slots__ = []
+      def __call__(self, x):
+        return x + 1
+
+    c = CallableWithSlots()
+    with self.assertRaisesRegex(TypeError, "cannot create weak reference.*"):
+      weakref.ref(c)
+    # Building a jit object does not crash.
+    f = self.jit(c)
+    with self.assertRaisesRegex(TypeError, "cannot create weak reference.*"):
+      # Calling the jit object will fail, but not because of the C++ JIT. The
+      # Python-level jit cache requires weak reference support.
+      f(3)
 
   def test_jit_raises_on_first_invocation_on_non_hashable_static_argnum(self):
     if self.jit != api._python_jit:
@@ -510,8 +521,6 @@ class CPPJitTest(jtu.BufferDonationTestCase):
       # we could.
       jitted_f(1, HashableWithoutEq())
 
-  @unittest.skipIf(jax._src.lib._xla_extension_version < 50,
-                   "requires jaxlib >= 0.1.76")
   def test_cpp_jit_raises_other_exceptions_when_hashing_fails(self):
     class A:
       def __hash__(self):
@@ -749,9 +758,16 @@ class CPPJitTest(jtu.BufferDonationTestCase):
       return jnp.sqrt(x ** 2) + 1.
 
     f_jit = self.jit(f)
-    f_low = f_jit.lower(1.)
-    f_exe = f_low.compile()
-    self.assertAllClose(f_exe(1.), 2.)
+    lowered = f_jit.lower(1.)
+    compiled = lowered.compile()
+    self.assertAllClose(compiled(1.), 2.)
+    self.assertEqual(lowered.in_avals, compiled.in_avals)
+    expected_dtype = np.float64 if config.x64_enabled else np.float32
+    for obj in [lowered, compiled]:
+      self.assertEqual(
+          obj.in_avals,
+          ((jax.ShapedArray([], expected_dtype, weak_type=True),), {}))
+      self.assertEqual(obj.in_tree, jax.tree_flatten(((0,), {}))[1])
 
   def test_jit_lower_duck_typing(self):
     f_jit = self.jit(lambda x: 2 * x)
@@ -828,8 +844,20 @@ class CPPJitTest(jtu.BufferDonationTestCase):
         "for a particular signature. Detected .*BatchTracer",
         err)
 
-  @unittest.skipIf(jax._src.lib._xla_extension_version < 45,
-                   "requires jaxlib >= 0.1.75")
+  def test_jit_lower_compiler_ir(self):
+    f = self.jit(lambda x: x + 4).lower(1.)
+    self.assertIsNotNone(f.compiler_ir())
+    self.assertIsNotNone(f.compiler_ir(dialect='hlo'))
+    self.assertIsNotNone(f.compiler_ir(dialect='mhlo'))
+
+  def test_jit_lower_compile_compiler_ir(self):
+    f = self.jit(lambda x: x + 4).lower(1.).compile()
+    self.assertIsNotNone(f.compiler_ir())
+
+  def test_jit_lower_compile_executable(self):
+    f = self.jit(lambda x: x + 4).lower(1.).compile()
+    self.assertIsNotNone(f.runtime_executable())
+
   def test_jit_enum_as_dict_keys_fails(self):
     class E(enum.Enum):
       A = 0
@@ -843,8 +871,6 @@ class CPPJitTest(jtu.BufferDonationTestCase):
       f({E.A: 1.0, E.B: 2.0})
 
 
-  @unittest.skipIf(jax._src.lib._xla_extension_version < 56,
-                   "requires jaxlib >= 0.1.76")
   def test_jit_static_argnums_requires_type_equality(self):
     # See: https://github.com/google/jax/pull/9311
     @partial(self.jit, static_argnums=(0,))
@@ -860,7 +886,6 @@ class CPPJitTest(jtu.BufferDonationTestCase):
       python_should_be_executing = False
       self.assertEqual(x, f(x))
 
-@jtu.with_config(jax_numpy_rank_promotion="raise")
 class PythonJitTest(CPPJitTest):
 
   @property
@@ -868,7 +893,6 @@ class PythonJitTest(CPPJitTest):
     return api._python_jit
 
 
-@jtu.with_config(jax_numpy_rank_promotion="raise")
 class APITest(jtu.JaxTestCase):
 
   def test_grad_item(self):
@@ -1192,6 +1216,26 @@ class APITest(jtu.JaxTestCase):
 
     f = lambda x: jnp.dot(x, jnp.dot(A, x))
     assert np.allclose(hessian(f)(x), A + A.T)
+
+  @jtu.skip_on_devices("tpu")
+  def test_hessian_holomorphic(self):
+    R = self.rng().randn
+    A = R(4, 4)
+    x = R(4) * (1 + 2j)
+
+    f = lambda x: jnp.dot(x, jnp.dot(A, x))
+    assert np.allclose(hessian(f, holomorphic=True)(x), A + A.T)
+
+  @jtu.skip_on_devices("tpu")
+  def test_hessian_aux(self):
+    R = self.rng().randn
+    A = R(4, 4)
+    x = R(4)
+
+    f = lambda x: (jnp.dot(x, jnp.dot(A, x)), x)
+    h, aux = hessian(f, has_aux=True)(x)
+    assert np.allclose(h, A + A.T)
+    assert np.allclose(aux, x)
 
   def test_std_basis(self):
     basis = api._std_basis(jnp.zeros(3))
@@ -2959,6 +3003,11 @@ class APITest(jtu.JaxTestCase):
     x = jax.jit(jax.lax.create_token)(1.0)
     self.assertIsInstance(x, jax.core.Token)
 
+  def test_jit_capturing_token(self):
+    tok = jax.core.token
+    _, y = jax.jit(lambda x: (x + 2, tok))(7)
+    self.assertIsInstance(y, jax.core.Token)
+
   def test_leak_checker_catches_a_jit_leak(self):
     with jax.checking_leaks():
       lst = []
@@ -3338,8 +3387,8 @@ class APITest(jtu.JaxTestCase):
 
     @jax.jit
     def loss(A, x):
-        h = jax.nn.sigmoid(A * x)
-        return jnp.sum((h - x)**2)
+      h = jax.nn.sigmoid(A * x)
+      return jnp.sum((h - x)**2)
 
     with jax.checking_leaks():
       _ = jax.grad(loss)(A, x)  # doesn't crash
@@ -3416,7 +3465,6 @@ class APITest(jtu.JaxTestCase):
         FLAGS.jax_numpy_rank_promotion = allow_promotion
 
 
-@jtu.with_config(jax_numpy_rank_promotion="raise")
 class RematTest(jtu.JaxTestCase):
 
   @parameterized.named_parameters(
@@ -3894,10 +3942,12 @@ class RematTest(jtu.JaxTestCase):
     c = api.xla_computation(f)(2.)
     self.assertNotIn('while', c.as_hlo_text())
     self.assertNotIn('conditional', c.as_hlo_text())
+    self.assertNotIn('opt-barrier', c.as_hlo_text())
 
     c = api.xla_computation(grad(f))(2.)
     text = c.as_hlo_text()
-    self.assertTrue('while' in text or 'conditional' in text)
+    self.assertTrue('while' in text or 'conditional' in text
+                    or 'opt-barrier' in text)
 
   def test_no_cse_widget_with_prevent_cse_false(self):
     @partial(api.remat, prevent_cse=False)
@@ -4273,7 +4323,7 @@ class RematTest(jtu.JaxTestCase):
 
     _ = api.linearize(partial(f, core.unit), 3.)
 
-@jtu.with_config(jax_numpy_rank_promotion="raise")
+
 class JaxprTest(jtu.JaxTestCase):
 
   def test_scalar_literals(self):
@@ -4417,7 +4467,6 @@ class JaxprTest(jtu.JaxTestCase):
     self.assertLen(jaxpr.eqns, 0)
 
 
-@jtu.with_config(jax_numpy_rank_promotion="raise")
 class CustomJVPTest(jtu.JaxTestCase):
 
   def test_basic(self):
@@ -5333,44 +5382,44 @@ class CustomJVPTest(jtu.JaxTestCase):
 
     @jax.custom_jvp
     def f(mat, aux):
-        num_rows, num_cols = mat.shape
-        return jnp.ones((num_rows, 1)) / num_cols
+      num_rows, num_cols = mat.shape
+      return jnp.ones((num_rows, 1)) / num_cols
 
     @f.defjvp
     def f_jvp(primals, tangents):
-        mat, aux = primals
-        vec, _ = tangents
-        output = f(*primals)
-        num_rows, num_cols = mat.shape
-        size = num_rows * num_cols
-        # -----
-        bd_mat = mat.reshape(1, 1, num_rows, num_cols)
-        bd_mat = jnp.tile(bd_mat, reps=(num_rows, num_cols))
-        bd_mat = bd_mat.reshape(size, num_rows, num_cols)
-        # -----
-        rowsum = jnp.sum(mat, axis=1, keepdims=True)
-        colsum = jnp.sum(mat, axis=0, keepdims=True)
-        bd_rowsum = jnp.tile(rowsum, reps=(1, num_rows))
-        bd_colsum = jnp.tile(colsum, reps=(num_cols, 1))
-        # -----
-        bd_vec = vec.reshape(size, 1)
-        # -----
-        def operate(mx, val):
-            buf = 0
-            for i in range(2):
-                buf = buf + jnp.matmul(mx, bd_colsum) / jnp.power(aux, i)
-            buf = jnp.matmul(bd_rowsum, buf)
-            return buf * val[None, :]
-        # -----
-        # Vertorizing will raise shape error
-        bd_buf = jax.vmap(operate, in_axes=(0, 0), out_axes=0)(bd_mat, bd_vec)
-        # -----
-        bd_buf = bd_buf / aux
-        jvp = jnp.sum(bd_buf, axis=0)
-        jvp = jnp.mean(jvp, axis=1, keepdims=True)
-        # -----
-        # JVP ends successfully, but still raise an error
-        return (output, jvp)
+      mat, aux = primals
+      vec, _ = tangents
+      output = f(*primals)
+      num_rows, num_cols = mat.shape
+      size = num_rows * num_cols
+      # -----
+      bd_mat = mat.reshape(1, 1, num_rows, num_cols)
+      bd_mat = jnp.tile(bd_mat, reps=(num_rows, num_cols))
+      bd_mat = bd_mat.reshape(size, num_rows, num_cols)
+      # -----
+      rowsum = jnp.sum(mat, axis=1, keepdims=True)
+      colsum = jnp.sum(mat, axis=0, keepdims=True)
+      bd_rowsum = jnp.tile(rowsum, reps=(1, num_rows))
+      bd_colsum = jnp.tile(colsum, reps=(num_cols, 1))
+      # -----
+      bd_vec = vec.reshape(size, 1)
+      # -----
+      def operate(mx, val):
+        buf = 0
+        for i in range(2):
+          buf = buf + jnp.matmul(mx, bd_colsum) / jnp.power(aux, i)
+        buf = jnp.matmul(bd_rowsum, buf)
+        return buf * val[None, :]
+      # -----
+      # Vertorizing will raise shape error
+      bd_buf = jax.vmap(operate, in_axes=(0, 0), out_axes=0)(bd_mat, bd_vec)
+      # -----
+      bd_buf = bd_buf / aux
+      jvp = jnp.sum(bd_buf, axis=0)
+      jvp = jnp.mean(jvp, axis=1, keepdims=True)
+      # -----
+      # JVP ends successfully, but still raise an error
+      return (output, jvp)
 
     jax.grad(lambda mat, aux: jnp.sum(f(mat, aux)))(mat, 0.5)  # doesn't crash
 
@@ -5391,8 +5440,33 @@ class CustomJVPTest(jtu.JaxTestCase):
     shape = grad(lambda x: jnp.sum(f(x)))(jnp.array(1.)).shape
     self.assertEqual(shape, ())
 
+  def test_maybe_perturbed_internal_helper_function(self):
+    # This is a unit test for an internal API. We include it so as not to
+    # regress https://github.com/google/jax/issues/9567. For an explanation of
+    # this helper function, see https://github.com/google/jax/issues/6415.
+    from jax._src.custom_derivatives import _maybe_perturbed
+    def f(x):
+      def g(y, _):
+          z = y * x
+          self.assertTrue(_maybe_perturbed(z))
+          return y, None
+      g(1, None)
+      return lax.scan(g, 1, xs=None, length=1)[0]
 
-@jtu.with_config(jax_numpy_rank_promotion="raise")
+    jax.jvp(f, (1.0,), (1.0,))  # assertions inside f
+
+  def test_maybe_perturbed_int_regression(self):
+    # see https://github.com/google/jax/discussions/9951
+    from jax._src.custom_derivatives import closure_convert
+
+    @jax.jit
+    def f():
+      x = jnp.array(1)
+      _, aux_args = closure_convert(lambda: x)
+      self.assertEmpty(aux_args)
+    f()
+
+
 class CustomVJPTest(jtu.JaxTestCase):
 
   def test_basic(self):
@@ -6307,17 +6381,17 @@ class CustomVJPTest(jtu.JaxTestCase):
     def mul(x, coeff): return x * coeff
     def mul_fwd(x, coeff): return mul(x, coeff), (x, coeff)
     def mul_bwd(res, g):
-        x, coeff = res
-        g_x = g * coeff
-        g_coeff = (x * g).sum()
-        return g_x, g_coeff
+      x, coeff = res
+      g_x = g * coeff
+      g_coeff = (x * g).sum()
+      return g_x, g_coeff
     mul.defvjp(mul_fwd, mul_bwd)
 
     def scan_over_mul(x, coeff):
-        def f_(x, t):
-            return mul(x, coeff), None
-        y, _ = jax.lax.scan(f_, x, jnp.arange(3))
-        return y
+      def f_(x, t):
+        return mul(x, coeff), None
+      y, _ = jax.lax.scan(f_, x, jnp.arange(3))
+      return y
 
     key = jax.random.PRNGKey(0)
     key1, key2 = jax.random.split(key, 2)
@@ -6361,7 +6435,38 @@ def transpose_unary(f, x_example):
   return transposed
 
 
-@jtu.with_config(jax_numpy_rank_promotion="raise")
+# This class wraps api.custom_transpose in order to pass in a
+# particular tree of output type on each call. Otherwise it forwards
+# all attribute access.
+class _custom_transpose:
+  def __init__(self, out_types, fun):
+    self.out_types = out_types
+    self.fun = api.custom_transpose(fun)
+
+  def __getattr__(self, name):
+    return getattr(self.fun, name)
+
+  def __call__(self, *args):
+    return self.fun(self.out_types, *args)
+
+
+# This function is meant to be used as a decorator that delegates to
+# custom_transpose but makes it easy to specify output argument types
+# by example. If used directly a decorator (i.e. not invoked with
+# example arguments), assumes a scalar-valued function.
+#
+# TODO(frostig): remove this (and its uses) once custom_transpose offers
+# an option of inferring output types.
+def custom_transpose(example_out):
+  if isinstance(example_out, Callable):
+    out_type = core.get_aval(0.).at_least_vspace()
+    return _custom_transpose(out_type, example_out)
+  return partial(
+      _custom_transpose,
+      tree_util.tree_map(
+          lambda x: core.get_aval(x).at_least_vspace(), example_out))
+
+
 class CustomTransposeTest(jtu.JaxTestCase):
 
   def test_linear_call(self):
@@ -6483,7 +6588,7 @@ class CustomTransposeTest(jtu.JaxTestCase):
 
   def test_basic(self):
     def f(x, y):
-      @api.custom_transpose
+      @custom_transpose(jnp.ones(2))
       def fn(r, x): return x / r
       @fn.def_transpose
       def tp(r, t): return t / r
@@ -6504,7 +6609,7 @@ class CustomTransposeTest(jtu.JaxTestCase):
 
   def test_incorrect_transpose(self):
     def f(x, y):
-      @api.custom_transpose
+      @custom_transpose(jnp.ones(2))
       def fn(r, x): return x / r
       @fn.def_transpose
       def tp(r, t): return t / (2. * r)  # nb: not the true transpose
@@ -6524,9 +6629,9 @@ class CustomTransposeTest(jtu.JaxTestCase):
                         transpose_unary(f1_ref, x)(x))
 
   def test_transpose_transpose_transpose(self):
-    @api.custom_transpose
+    @custom_transpose(jnp.ones(2))
     def fn(r, x): return x / r
-    @api.custom_transpose
+    @custom_transpose(jnp.ones(2))
     def tp(r, t): return t / (2. * r)  # nb: untrue transpose
 
     fn.def_transpose(tp)
@@ -6547,7 +6652,7 @@ class CustomTransposeTest(jtu.JaxTestCase):
 
   def test_scalar_to_vector(self):
     def f(c, x):
-      @api.custom_transpose
+      @custom_transpose([0., 0.])
       def fn(_, x):
         return [x, x]
 
@@ -6570,8 +6675,8 @@ class CustomTransposeTest(jtu.JaxTestCase):
   def test_nested(self):
     # identity function with an untrue transpose of 0
     def id_(x):
-      f = api.custom_transpose(lambda _, x: x)
-      t = api.custom_transpose(lambda _, t: 0.)
+      f = custom_transpose(lambda _, x: x)
+      t = custom_transpose(lambda _, t: 0.)
       f.def_transpose(t)
       t.def_transpose(f)
       return f((), x)
@@ -6580,8 +6685,8 @@ class CustomTransposeTest(jtu.JaxTestCase):
     # forward and transpose have custom transpositions that should
     # never end up invoked.
     def f(x):
-      f_ = api.custom_transpose(lambda _, x: id_(x))
-      t_ = api.custom_transpose(lambda _, t: id_(7.))
+      f_ = custom_transpose(lambda _, x: id_(x))
+      t_ = custom_transpose(lambda _, t: id_(7.))
       f_.def_transpose(t_)
       t_.def_transpose(f_)
       return f_((), x)
@@ -6605,7 +6710,7 @@ class CustomTransposeTest(jtu.JaxTestCase):
   def test_one_degree(self):
     T = lambda f: transpose_unary(f, 0.)
 
-    @api.custom_transpose
+    @custom_transpose
     def f(_, z): return 2. * z
     @f.def_transpose
     def ft(_, z): return 3. * z
@@ -6620,11 +6725,11 @@ class CustomTransposeTest(jtu.JaxTestCase):
   def test_two_degrees(self):
     T = lambda f: transpose_unary(f, 0.)
 
-    @api.custom_transpose
+    @custom_transpose
     def f(_, z): return 2. * z
 
     @f.def_transpose
-    @api.custom_transpose
+    @custom_transpose
     def ft(_, z): return 3. * z
 
     @ft.def_transpose
@@ -6640,9 +6745,9 @@ class CustomTransposeTest(jtu.JaxTestCase):
   def test_symmetric(self):
     T = lambda f: transpose_unary(f, 0.)
 
-    @api.custom_transpose
+    @custom_transpose
     def f(_, z): return 2. * z
-    @api.custom_transpose
+    @custom_transpose
     def g(_, z): return 3. * z
 
     f.def_transpose(g)
@@ -6658,7 +6763,7 @@ class CustomTransposeTest(jtu.JaxTestCase):
   def test_recursive(self):
     T = lambda f: transpose_unary(f, 0.)
 
-    @api.custom_transpose
+    @custom_transpose
     def f(c, z): return c * z
 
     @f.def_transpose
@@ -6671,12 +6776,80 @@ class CustomTransposeTest(jtu.JaxTestCase):
     self.assertAllClose(4., T(T(T(g)))(1.))
     self.assertAllClose(5., T(T(T(T(g))))(1.))  # ...
 
-  def test_jit(self):
+  def test_jvp_lin(self):
     def f(x, y):
-      @api.custom_transpose
+      @custom_transpose(jnp.ones(2))
       def fn(r, x): return x / r
       @fn.def_transpose
       def tp(r, t): return t / r
+      return x + fn(y, x)
+
+    def f_ref(x, y): return x + x / y
+
+    x, y, tx = 6., 3., 1.
+    g = lambda x: f(x, y)
+    g_ref = lambda x: f_ref(x, y)
+    self.assertAllClose(api.jvp(g, [x], [tx]), api.jvp(g_ref, [x], [tx]))
+
+  def test_jvp_res(self):
+    raise unittest.SkipTest('unimplemented')  # TODO(frostig)
+
+    def f(x, y):
+      @custom_transpose(jnp.ones(2))
+      def fn(r, x): return x / r
+      @fn.def_transpose
+      def tp(r, t): return t / r
+      return x + fn(y, x)
+
+    def f_ref(x, y): return x + x / y
+
+    x, y, ty = 6., 3., 1.
+    g = lambda y: f(x, y)
+    g_ref = lambda y: f_ref(x, y)
+    self.assertAllClose(api.jvp(g, [y], [ty]), api.jvp(g_ref, [y], [ty]))
+
+  def test_jvp_both(self):
+    raise unittest.SkipTest('unimplemented')  # TODO(frostig)
+
+    def f(x, y):
+      @custom_transpose(jnp.ones(2))
+      def fn(r, x): return x / r
+      @fn.def_transpose
+      def tp(r, t): return t / r
+      return x + fn(y, x)
+
+    def f_ref(x, y): return x + x / y
+
+    x, y, tx, ty = 6., 3., 1., 1.
+    self.assertAllClose(api.jvp(f,     [x, y], [tx, ty]),
+                        api.jvp(f_ref, [x, y], [tx, ty]))
+
+  def test_make_jaxpr(self):
+    def f(x, y):
+      @custom_transpose(jnp.ones(2))
+      def fn(r, x): return x / r
+      @fn.def_transpose
+      def tp(r, t): return 2 * t / r
+
+      return x + fn(y, x)
+
+    x = jnp.ones(2) * 6.
+    y = jnp.ones(2) * 3.
+    f_ = lambda x: f(x, y)
+    f_t = transpose_unary(f_, x)
+
+    jaxpr = api.make_jaxpr(f_)(x)
+    self.assertIn('custom_transpose_call', str(jaxpr))
+
+    jaxpr_t = api.make_jaxpr(f_t)(x)
+    self.assertNotIn('custom_transpose_call', str(jaxpr_t))
+
+  def test_jit(self):
+    def f(x, y):
+      @custom_transpose(jnp.ones(2))
+      def fn(r, x): return x / r
+      @fn.def_transpose
+      def tp(r, t): return 2 * t / r
 
       return x + fn(y, x)
 
@@ -6686,11 +6859,37 @@ class CustomTransposeTest(jtu.JaxTestCase):
 
     f_ = lambda x: f(x, y)
     f_t = transpose_unary(f_, x)
+    g_ = jax.jit(f_)
+    g_t = transpose_unary(g_, x)
     self.assertAllClose(f_(x), jax.jit(f_)(x))
     self.assertAllClose(f_t(x), jax.jit(f_t)(x))
+    self.assertAllClose(f_(x), g_(x))
+    self.assertAllClose(f_t(x), g_t(x))
+
+  def test_jit_recursive(self):
+    raise unittest.SkipTest('unimplemented')  # TODO(frostig,mattjj)
+    def f(x, y):
+      @custom_transpose(jnp.ones(2))
+      def fn(r, x): return x / r
+      @fn.def_transpose
+      def tp(r, t): return 2 * fn(r, t)
+
+      return x + fn(y, x)
+
+    x = jnp.ones(2) * 6.
+    y = jnp.ones(2) * 3.
+    self.assertAllClose(f(x, y), jax.jit(f)(x, y))
+
+    f_ = lambda x: f(x, y)
+    f_t = transpose_unary(f_, x)
+    g_ = jax.jit(f_)
+    g_t = transpose_unary(g_, x)
+    self.assertAllClose(f_(x), jax.jit(f_)(x))
+    self.assertAllClose(f_t(x), jax.jit(f_t)(x))
+    self.assertAllClose(f_(x), g_(x))
+    self.assertAllClose(f_t(x), g_t(x))
 
 
-@jtu.with_config(jax_numpy_rank_promotion="raise")
 class CustomVmapTest(jtu.JaxTestCase):
 
   def test_basic(self):
@@ -7117,7 +7316,6 @@ class CustomVmapTest(jtu.JaxTestCase):
     self.assertEqual(str(jaxpr), str(jaxpr_ref))
 
 
-@jtu.with_config(jax_numpy_rank_promotion="raise")
 class CustomApiTest(jtu.JaxTestCase):
   """Test interactions among the custom_{vmap,jvp,vjp,transpose,*} APIs"""
 
@@ -7155,7 +7353,6 @@ class CustomApiTest(jtu.JaxTestCase):
           self.assertIsInstance(getattr(f, method), Callable)
 
 
-@jtu.with_config(jax_numpy_rank_promotion="raise")
 class InvertibleADTest(jtu.JaxTestCase):
 
   @jtu.ignore_warning(message="Values that an @invertible function closes")
@@ -7264,7 +7461,6 @@ class InvertibleADTest(jtu.JaxTestCase):
                         check_dtypes=True)
 
 
-@jtu.with_config(jax_numpy_rank_promotion="raise")
 class BufferDonationTest(jtu.BufferDonationTestCase):
 
   @jtu.skip_on_devices("cpu")  # In/out aliasing not supported on CPU.
@@ -7287,7 +7483,6 @@ class BufferDonationTest(jtu.BufferDonationTestCase):
     pmap_fun(a)  # doesn't crash
 
 
-@jtu.with_config(jax_numpy_rank_promotion="raise")
 class NamedCallTest(jtu.JaxTestCase):
 
   def test_default_name(self):
@@ -7301,7 +7496,13 @@ class NamedCallTest(jtu.JaxTestCase):
       return my_test_function(x)
 
     c = jax.xla_computation(f)(2)
-    self.assertIn("my_test_function", c.as_hlo_text())
+    if config.jax_experimental_name_stack:
+      print_opts = xla_client._xla.HloPrintOptions.short_parsable()
+      print_opts.print_metadata = True
+      hlo_text = c.as_hlo_module().to_string(print_opts)
+    else:
+      hlo_text = c.as_hlo_text()
+    self.assertIn("my_test_function", hlo_text)
 
   def test_non_jaxtype_arg(self):
     # For the test to fail without the invalid JaxType filter we need to pass
@@ -7368,7 +7569,6 @@ class NamedCallTest(jtu.JaxTestCase):
     self.assertRaises(OverflowError, f, int_min - 1)
 
 
-@jtu.with_config(jax_numpy_rank_promotion="raise")
 class BackendsTest(jtu.JaxTestCase):
 
   @unittest.skipIf(not sys.executable, "test requires sys.executable")
@@ -7391,7 +7591,6 @@ class BackendsTest(jtu.JaxTestCase):
     assert "No GPU/TPU found" not in result.stderr.decode()
 
 
-@jtu.with_config(jax_numpy_rank_promotion="raise")
 class CleanupTest(jtu.JaxTestCase):
   def test_call_wrapped_second_phase_cleanup(self):
     try:
@@ -7401,7 +7600,7 @@ class CleanupTest(jtu.JaxTestCase):
     assert core.trace_state_clean()
 
 
-@jtu.with_config(jax_dynamic_shapes=True)
+@jtu.with_config(jax_dynamic_shapes=True, jax_numpy_rank_promotion="allow")
 class DynamicShapeTest(jtu.JaxTestCase):
   def test_basic_staging(self):
     def f(x, y):
