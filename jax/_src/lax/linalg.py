@@ -36,10 +36,9 @@ from jax._src.lax import lax as lax_internal
 from jax._src.lib import lapack
 
 from jax._src.lib import cuda_linalg
-from jax._src.lib import cusolver
 from jax._src.lib import hip_linalg
-from jax._src.lib import hipsolver
 from jax._src.lib import sparse_apis
+from jax._src.lib import solver_apis
 
 from jax._src.lib import xla_client
 
@@ -368,16 +367,9 @@ xla.register_translation(
     partial(_cholesky_cpu_gpu_translation_rule, lapack.potrf),
     platform='cpu')
 
-if cusolver is not None:
-  xla.register_translation(
+xla.register_translation(
     cholesky_p,
-    partial(_cholesky_cpu_gpu_translation_rule, cusolver.potrf),
-    platform='gpu')
-
-if hipsolver is not None:
-  xla.register_translation(
-    cholesky_p,
-    partial(_cholesky_cpu_gpu_translation_rule, hipsolver.potrf),
+    partial(_cholesky_cpu_gpu_translation_rule, solver_apis.potrf),
     platform='gpu')
 
 # Asymmetric eigendecomposition
@@ -569,14 +561,8 @@ xla.register_translation(
     eigh_p, partial(_eigh_cpu_gpu_translation_rule, _cpu_syevd),
     platform='cpu')
 
-if cusolver is not None:
-  xla.register_translation(
-    eigh_p, partial(_eigh_cpu_gpu_translation_rule, cusolver.syevd),
-    platform='gpu')
-
-if hipsolver is not None:
-  xla.register_translation(
-    eigh_p, partial(_eigh_cpu_gpu_translation_rule, hipsolver.syevd),
+xla.register_translation(
+    eigh_p, partial(_eigh_cpu_gpu_translation_rule, solver_apis.syevd),
     platform='gpu')
 
 
@@ -753,17 +739,11 @@ def _triangular_solve_gpu_translation_rule(
     return [xops.TriangularSolve(a, b, left_side, lower, unit_diagonal,
                                  transpose)]
 
-if cusolver is not None:
-  xla.register_translation(
+xla.register_translation(
       triangular_solve_p,
-      partial(_triangular_solve_gpu_translation_rule, cusolver.trsm),
+      partial(_triangular_solve_gpu_translation_rule, solver_apis.trsm),
       platform='gpu')
 
-if hipsolver is not None:
-  xla.register_translation(
-      triangular_solve_p,
-      partial(_triangular_solve_gpu_translation_rule, hipsolver.trsm),
-      platform='gpu')
 
 # Support operation for LU decomposition: Transformation of the pivots returned
 # by LU decomposition into permutations.
@@ -1054,15 +1034,10 @@ xla.register_translation(lu_p,
                          partial(_lu_cpu_gpu_translation_rule, lapack.getrf),
                          platform='cpu')
 
-if cusolver is not None:
-  xla.register_translation(
-      lu_p, partial(_lu_cpu_gpu_translation_rule, cusolver.getrf),
+xla.register_translation(
+      lu_p, partial(_lu_cpu_gpu_translation_rule, solver_apis.getrf),
       platform='gpu')
 
-if hipsolver is not None:
-  xla.register_translation(
-      lu_p, partial(_lu_cpu_gpu_translation_rule, hipsolver.getrf),
-      platform='gpu')
 
 xla.register_translation(lu_p, _lu_tpu_translation_rule, platform='tpu')
 
@@ -1221,16 +1196,9 @@ xla.register_translation(
     qr_p, partial(_qr_cpu_gpu_translation_rule, lapack.geqrf, lapack.orgqr),
     platform='cpu')
 
-if cusolver is not None:
-  xla.register_translation(
+xla.register_translation(
       qr_p,
-      partial(_qr_cpu_gpu_translation_rule, cusolver.geqrf, cusolver.orgqr),
-      platform='gpu')
-
-if hipsolver is not None:
-  xla.register_translation(
-      qr_p,
-      partial(_qr_cpu_gpu_translation_rule, hipsolver.geqrf, hipsolver.orgqr),
+      partial(_qr_cpu_gpu_translation_rule, solver_apis.geqrf, solver_apis.orgqr),
       platform='gpu')
 
 # Singular value decomposition
@@ -1393,14 +1361,8 @@ xla.register_translation(
     svd_p, partial(_svd_cpu_gpu_translation_rule, lapack.gesdd),
     platform='cpu')
 
-if cusolver is not None:
-  xla.register_translation(
-    svd_p, partial(_svd_cpu_gpu_translation_rule, cusolver.gesvd),
-    platform='gpu')
-
-if hipsolver is not None:
-  xla.register_translation(
-    svd_p, partial(_svd_cpu_gpu_translation_rule, hipsolver.gesvd),
+xla.register_translation(
+    svd_p, partial(_svd_cpu_gpu_translation_rule, solver_apis.gesvd),
     platform='gpu')
 
 def _tridiagonal_solve_gpu_translation_rule(ctx, avals_in, avals_out, dl, d, du,
