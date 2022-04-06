@@ -71,7 +71,7 @@ def threefry2x32_lowering(keys, data):
     assert x.type == typ, (x.type, typ)
   ndims = len(dims)
 
-  opaque = _hip_prng.cuda_threefry2x32_descriptor(_prod(dims))
+  opaque = _hip_prng.hip_threefry2x32_descriptor(_prod(dims))
   layout = ir.DenseIntElementsAttr.get(np.arange(ndims - 1, -1, -1),
                                        type=ir.IndexType.get())
   i32_type = ir.IntegerType.get_signless(32)
