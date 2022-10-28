@@ -19,7 +19,6 @@ RUN bin/bash -c 'if [[ $ROCM_DEB_REPO == http://repo.radeon.com/rocm/*  ]] ; the
       echo "deb [arch=amd64 trusted=yes] $ROCM_DEB_REPO $ROCM_BUILD_NAME $ROCM_BUILD_NUM" > /etc/apt/sources.list.d/rocm.list ; \
     fi'
 
-
 RUN apt-get update --allow-insecure-repositories && DEBIAN_FRONTEND=noninteractive apt-get install -y \
   build-essential \
   software-properties-common \
@@ -33,6 +32,9 @@ RUN apt-get update --allow-insecure-repositories && DEBIAN_FRONTEND=noninteracti
   virtualenv \
   python3-pip \
   pciutils \
+  python-is-python3 \
+  libffi-dev \
+  libssl-dev \
   wget && \
   apt-get clean && \
   rm -rf /var/lib/apt/lists/*
@@ -74,17 +76,17 @@ RUN touch ${ROCM_PATH}/.info/version
 
 ENV PATH="/root/bin:/root/.local/bin:$PATH"
 
+# Install pyenv with different python versions
+RUN git clone https://github.com/pyenv/pyenv.git /pyenv
+ENV PYENV_ROOT /pyenv
 
-# Install python3.9
-RUN add-apt-repository ppa:deadsnakes/ppa && \
-  apt update && \
-  apt install -y python3.9-dev \
-    python3-pip \
-    python3.9-distutils \
-    python-is-python3
+RUN /pyenv/bin/pyenv install 3.7.2
+RUN /pyenv/bin/pyenv install 3.8.0
+RUN /pyenv/bin/pyenv install 3.9.0
+RUN /pyenv/bin/pyenv install 3.10.0
 
-RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.9 1
-
-RUN pip3 install --upgrade --force-reinstall setuptools pip
-  
-RUN pip3 install absl-py numpy==1.20.0 scipy wheel six setuptools pytest pytest-rerunfailures matplotlib
+RUN eval "$(/pyenv/bin/pyenv init -)"
+RUN /pyenv/bin/pyenv local 3.7.2 && pip install numpy==1.20.0 setuptools wheel six auditwheel scipy pytest pytest-rerunfailures matplotlib absl-py
+RUN /pyenv/bin/pyenv local 3.8.0 && pip install numpy==1.20.0 setuptools wheel six auditwheel scipy pytest pytest-rerunfailures matplotlib absl-py
+RUN /pyenv/bin/pyenv local 3.9.0 && pip install numpy==1.20.0 setuptools wheel six auditwheel scipy pytest pytest-rerunfailures matplotlib absl-py
+RUN /pyenv/bin/pyenv local 3.10.0 && pip install numpy==1.20.0 setuptools wheel six auditwheel scipy pytest pytest-rerunfailures matplotlib absl-py
