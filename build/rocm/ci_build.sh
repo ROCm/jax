@@ -111,11 +111,16 @@ docker run ${KEEP_IMAGE} --name ${DOCKER_IMG_NAME} --pid=host \
   "${DOCKER_IMG_NAME}" \
   ${POSITIONAL_ARGS[@]}
 
+: ' 
+
+SKIP COMMITING DOCKER FOR DEBUG
+
 if [[ "${KEEP_IMAGE}" != "--rm" ]] && [[ $? == "0" ]]; then
   echo "Committing the docker container as jax-rocm"
   docker stop ${DOCKER_IMG_NAME}
   docker commit ${DOCKER_IMG_NAME} jax-rocm
   docker rm ${DOCKER_IMG_NAME}
 fi
+'
 
 echo "ROCm build was successful!"
