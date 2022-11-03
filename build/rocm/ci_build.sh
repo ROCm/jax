@@ -37,6 +37,10 @@ POSITIONAL_ARGS=()
 
 while [[ $# -gt 0 ]]; do
   case $1 in
+    --py_version)
+      PYTHON_VERSION="$2"
+      shift 2
+      ;;
     --dockerfile)
       DOCKERFILE_PATH="$2"
       DOCKER_CONTEXT_PATH=$(dirname "${DOCKERFILE_PATH}")
@@ -107,6 +111,7 @@ docker run ${KEEP_IMAGE} --name ${DOCKER_IMG_NAME} --pid=host \
   -v ${WORKSPACE}:/workspace \
   -w /workspace \
   -e TENSORFLOW_ROCM_COMMIT=${TENSORFLOW_ROCM_COMMIT} \
+  -e PYTHON_VERSION=$PYTHON_VERSION \
   ${ROCM_EXTRA_PARAMS} \
   "${DOCKER_IMG_NAME}" \
   ${POSITIONAL_ARGS[@]}
