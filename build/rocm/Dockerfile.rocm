@@ -7,6 +7,7 @@ ARG ROCM_BUILD_NUM=main
 ARG ROCM_PATH=/opt/rocm-5.3.0
 
 ARG DEBIAN_FRONTEND=noninteractive
+ARG PYTHON_VERSION=3.9.0
 ENV HOME /root/
 ENV ROCM_PATH=$ROCM_PATH
 
@@ -82,12 +83,6 @@ RUN git clone https://github.com/pyenv/pyenv.git /pyenv
 ENV PYENV_ROOT /pyenv
 ENV PATH $PYENV_ROOT/shims:$PYENV_ROOT/bin:$PATH
 
-RUN pyenv install 3.7.2
-RUN pyenv install 3.8.0
-RUN pyenv install 3.9.0
-RUN pyenv install 3.10.0
+RUN pyenv install ${PYTHON_VERSION}
 
-RUN eval "$(pyenv init -)" && pyenv local 3.7.2 && pip3 install --upgrade --force-reinstall setuptools pip==22.0 && pip install numpy==1.20.0 setuptools wheel six auditwheel scipy pytest pytest-rerunfailures matplotlib absl-py
-RUN eval "$(pyenv init -)" && pyenv local 3.8.0 && pip3 install --upgrade --force-reinstall setuptools pip==22.0 && pip install numpy==1.20.0 setuptools wheel six auditwheel scipy pytest pytest-rerunfailures matplotlib absl-py
-RUN eval "$(pyenv init -)" && pyenv local 3.9.0 && pip3 install --upgrade --force-reinstall setuptools pip==22.0 && pip install numpy==1.20.0 setuptools wheel six auditwheel scipy pytest pytest-rerunfailures matplotlib absl-py
-RUN eval "$(pyenv init -)" && pyenv local 3.10.0 && pip3 install --upgrade --force-reinstall setuptools pip==22.0 && pip install numpy==1.21.0 setuptools wheel six auditwheel scipy pytest pytest-rerunfailures matplotlib absl-py
+RUN eval "$(pyenv init -)" && pyenv local ${PYTHON_VERSION} && pip3 install --upgrade --force-reinstall setuptools pip==22.0 && pip install numpy==1.21.0 setuptools wheel six auditwheel scipy pytest pytest-rerunfailures matplotlib absl-py
