@@ -95,6 +95,7 @@ echo ""
 
 echo "Building container (${DOCKER_IMG_NAME})..."
 docker build -t ${DOCKER_IMG_NAME} \
+    --build-arg PYTHON_VERSION=$PYTHON_VERSION \
     -f "${DOCKERFILE_PATH}" "${DOCKER_CONTEXT_PATH}"
 
 # Check docker build status
