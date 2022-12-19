@@ -15,6 +15,9 @@
 
 set -eux
 
+pyenv local $PYTHON_VERSION
+python -V
+
 ROCM_TF_FORK_REPO="https://github.com/ROCmSoftwarePlatform/tensorflow-upstream"
 ROCM_TF_FORK_BRANCH="develop-upstream"
 rm -rf /tmp/tensorflow-upstream || true
@@ -28,6 +31,8 @@ then
       git checkout $TENSORFLOW_ROCM_COMMIT
       cd -
 fi
+
+rm -rf dist/*
 
 python3 ./build/build.py --enable_rocm --rocm_path=${ROCM_PATH} --bazel_options=--override_repository=org_tensorflow=/tmp/tensorflow-upstream
 pip3 install --force-reinstall dist/*.whl  # installs jaxlib (includes XLA)
