@@ -69,6 +69,14 @@ def run_test(testmodule, gpu_tokens):
       "HIP_VISIBLE_DEVICES": str(target_gpu),
       "XLA_PYTHON_CLIENT_ALLOCATOR": "default",
   }
+ 
+  #Evolve this in future if there are more tests that need specific
+  #specific env vars
+  if testmodule == "tests/scipy_stats_test.py":
+      env_vars["JAX_ENABLE_X64"] = "1"
+  else:
+      env_vars["JAX_ENABLE_X64"] = "0"
+  
   cmd = ["python3", "-m", "pytest", "--reruns", "3", "-x", testmodule]
   return_code, stderr, stdout = run_shell_command(cmd, env_vars=env_vars)
   with GPU_LOCK:
