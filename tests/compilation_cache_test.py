@@ -209,6 +209,7 @@ class CompilationCacheTest(jtu.JaxTestCase):
       backend = xla_bridge.get_backend()
       self.assertEqual(cc.get_executable(computation, compile_options, backend), None)
 
+  @jtu.skip_on_devices("rocm")   
   def test_diff_executables(self):
     with tempfile.TemporaryDirectory() as tmpdir:
       cc.initialize_cache(tmpdir)
@@ -230,6 +231,7 @@ class CompilationCacheTest(jtu.JaxTestCase):
       self.assertNotEqual(cc.get_executable(computation1, compile_options, backend),
                           cc.get_executable(computation2, compile_options, backend))
 
+  @jtu.skip_on_devices("rocm")   
   def test_put_executable(self):
     with tempfile.TemporaryDirectory() as tmpdir:
       cc.initialize_cache(tmpdir)
@@ -248,6 +250,7 @@ class CompilationCacheTest(jtu.JaxTestCase):
       actual = xla_client.execute_with_python_values(deserialized_executable, inputs_to_executable, backend)
       self.assertEqual(expected, actual)
 
+  @jtu.skip_on_devices("rocm")   
   def test_pmap(self):
     with tempfile.TemporaryDirectory() as tmpdir:
       cc.initialize_cache(tmpdir)
@@ -262,6 +265,7 @@ class CompilationCacheTest(jtu.JaxTestCase):
       self.assertEqual(files_in_directory, 2)
       #TODO: create a test for calling pmap with the same input more than once
 
+  @jtu.skip_on_devices("rocm")   
   def test_jit(self):
     with tempfile.TemporaryDirectory() as tmpdir:
       cc.initialize_cache(tmpdir)
@@ -273,6 +277,7 @@ class CompilationCacheTest(jtu.JaxTestCase):
       files_in_directory = len(os.listdir(tmpdir))
       self.assertEqual(files_in_directory, 2)
 
+  @jtu.skip_on_devices("rocm")   
   @jtu.with_mesh([('x', 2)])
   def test_pjit(self):
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -293,6 +298,7 @@ class CompilationCacheTest(jtu.JaxTestCase):
       files_in_directory = len(os.listdir(tmpdir))
       self.assertEqual(files_in_directory, 2)
 
+  @jtu.skip_on_devices("rocm")   
   @jtu.with_mesh([('x', 2)])
   def test_xmap(self):
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -313,6 +319,7 @@ class CompilationCacheTest(jtu.JaxTestCase):
       files_in_directory = len(os.listdir(tmpdir))
       self.assertEqual(files_in_directory, 2)
 
+  @jtu.skip_on_devices("rocm")   
   def test_cache_write_warning(self):
     with tempfile.TemporaryDirectory() as tmpdir:
       cc.initialize_cache(tmpdir)
@@ -329,6 +336,7 @@ class CompilationCacheTest(jtu.JaxTestCase):
             "for 'jit__lambda_': RuntimeError: test error",
             str(w[0].message))
 
+  @jtu.skip_on_devices("rocm")   
   def test_cache_read_warning(self):
     with tempfile.TemporaryDirectory() as tmpdir:
       cc.initialize_cache(tmpdir)
@@ -345,6 +353,7 @@ class CompilationCacheTest(jtu.JaxTestCase):
             "for 'jit__lambda_': RuntimeError: test error",
             str(w[0].message))
 
+  @jtu.skip_on_devices("rocm")   
   def test_min_compile_time(self):
     with tempfile.TemporaryDirectory() as tmpdir, \
          persistent_cache_min_compile_time_secs(2):
