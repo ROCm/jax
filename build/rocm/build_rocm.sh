@@ -13,23 +13,56 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-set -eux
+# Environment Var Notes
+# XLA_CLONE_DIR	-
+#	Specifies filepath to where XLA repo is cloned. 
+#	NOTE:, if this is set then XLA repo is not cloned. Must clone repo before running this script. 
+#	Also, if this is set then setting XLA_REPO and XLA_BRANCH have no effect.
+# XLA_REPO 
+#	XLA repo to clone from. Default is https://github.com/ROCmSoftwarePlatform/tensorflow-upstream
+# XLA_BRANCH
+#	XLA branch in the XLA repo. Default is develop-upstream-jax
+#
 
-ROCM_TF_FORK_REPO="https://github.com/ROCmSoftwarePlatform/tensorflow-upstream"
-ROCM_TF_FORK_BRANCH="develop-upstream"
-rm -rf /tmp/tensorflow-upstream || true
-git clone -b ${ROCM_TF_FORK_BRANCH} ${ROCM_TF_FORK_REPO} /tmp/tensorflow-upstream
-if [ ! -v TENSORFLOW_ROCM_COMMIT ]; then
-    echo "The TENSORFLOW_ROCM_COMMIT environment variable is not set, using top of branch"
-elif [ ! -z "$TENSORFLOW_ROCM_COMMIT" ]
-then
-      echo "Using tensorflow-rocm at commit: $TENSORFLOW_ROCM_COMMIT"
-      cd /tmp/tensorflow-upstream
-      git checkout $TENSORFLOW_ROCM_COMMIT
-      cd -
+set -eux
+pyenv local $PYTHON_VERSION
+python -V
+
+#If XLA_REPO is not set, then use default
+if [ ! -v XLA_REPO ]; then
+	XLA_REPO="https://github.com/ROCmSoftwarePlatform/tensorflow-upstream"
+	XLA_BRANCH="develop-upstream-jax"
+elif [ -z "$XLA_REPO" ]; then
+	XLA_REPO="https://github.com/ROCmSoftwarePlatform/tensorflow-upstream"
+	XLA_BRANCH="develop-upstream-jax"
 fi
 
+#If XLA_CLONE_PATH is not set, then use default path. 
+#Note, setting XLA_CLONE_PATH makes setting XLA_REPO and XLA_BRANCH a no-op
+#Set this when XLA repository has been already clone. This is useful in CI
+#environments and when doing local development
+if [ ! -v XLA_CLONE_DIR ]; then
+	XLA_CLONE_DIR=/tmp/tensorflow-upstream
+	rm -rf /tmp/tensorflow-upstream || true
+	git clone -b ${XLA_BRANCH} ${XLA_REPO} /tmp/tensorflow-upstream
+elif [ -z "$XLA_CLONE_DIR" ]; then
+	XLA_CLONE_DIR=/tmp/tensorflow-upstream
+	rm -rf /tmp/tensorflow-upstream || true
+	git clone -b ${XLA_BRANCH} ${XLA_REPO} /tmp/tensorflow-upstream
+fi
 
-python3 ./build/build.py --enable_rocm --rocm_path=${ROCM_PATH} --bazel_options=--override_repository=org_tensorflow=/tmp/tensorflow-upstream
-pip3 install --force-reinstall dist/*.whl  # installs jaxlib (includes XLA)
-pip3 install --force-reinstall .  # installs jax
+#python3 ./build/build.py --enable_rocm --rocm_path=${ROCM_PATH} --bazel_options=--override_repository=org_tensorflow=${XLA_CLONE_DIR}
+#pip3 install --force-reinstall dist/*.whl  # installs jaxlib (includes XLA)
+#pip3 install --force-reinstall .  # installs jax
+
+if [ -v JAX_RENAME_WHL ]; then
+	if [ -n "$JAX_RENAME_WHL" ]; then
+		rocm_version=$(cat /opt/rocm/.info/version)
+		rocmv=${rocm_version//./}
+		rocmv=${rocmv:0:3}
+		owhl=$(basename dist/*.whl)
+		nwhl=${owhl:0:12}.$rocmv${owhl:12}
+		echo $nwhl
+		mv dist/$owhl dist/$nwhl
+	fi
+fi
