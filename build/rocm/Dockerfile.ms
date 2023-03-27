@@ -81,19 +81,16 @@ ENV PATH="/root/bin:/root/.local/bin:$PATH"
 
 
 # Install python3.9
-RUN add-apt-repository ppa:deadsnakes/ppa && \
-  apt update && \
-  apt install -y python3.9-dev \
-    python3-pip \
-    python3.9-distutils \
-    python-is-python3
+# Install pyenv with different python versions
+RUN git clone https://github.com/pyenv/pyenv.git /pyenv
 
-RUN update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.9 1
+ENV PYENV_ROOT /pyenv
+ENV PATH $PYENV_ROOT/shims:$PYENV_ROOT/bin:$PATH
 
-RUN pip3 install --upgrade --force-reinstall setuptools pip
+RUN pyenv install $PYTHON_VERSION
 
-RUN pip3 install absl-py numpy==1.20.0 scipy wheel six setuptools pytest pytest-rerunfailures matplotlib
-
+RUN eval "$(pyenv init -)" && pyenv local ${PYTHON_VERSION} && pip3 install --upgrade --force-reinstall setuptools pip==22.0 && pip install numpy==1.21.0 setuptools wheel six auditwheel scipy pytest pytest-rerunfailures matplotlib absl-py
+ 
 ## Get jax and build it with ROCm
 #RUN git clone https://github.com/google/jax.git 
 

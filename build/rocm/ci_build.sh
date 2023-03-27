@@ -117,12 +117,12 @@ echo "Python Version (${PYTHON_VERSION})"
 if [[ "${RUNTIME_FLAG}" -eq 1  ]]; then
   echo "Building (runtime) container (${DOCKER_IMG_NAME}) with Dockerfile($DOCKERFILE_PATH)..."
   docker build --target rt_build --tag ${DOCKER_IMG_NAME} \
-        --build-arg PYTHON_VERSION=$PYTHON_VERSION \
+    --build-arg PYTHON_VERSION=$PYTHON_VERSION \
       -f "${DOCKERFILE_PATH}" "${DOCKER_CONTEXT_PATH}"
 else
   echo "Building (CI) container (${DOCKER_IMG_NAME}) with Dockerfile($DOCKERFILE_PATH)..."
   docker build --target ci_build --tag ${DOCKER_IMG_NAME} \
-        --build-arg PYTHON_VERSION=$PYTHON_VERSION \
+    --build-arg PYTHON_VERSION=$PYTHON_VERSION \
       -f "${DOCKERFILE_PATH}" "${DOCKER_CONTEXT_PATH}"  
 fi
 
