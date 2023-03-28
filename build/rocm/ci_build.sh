@@ -44,7 +44,7 @@ KEEP_IMAGE="--rm"
 KEEP_CONTAINER="--rm"
 POSITIONAL_ARGS=()
 
-RUNTIME_FLAG=0
+RUNTIME_FLAG=1
 
 while [[ $# -gt 0 ]]; do
   case $1 in
