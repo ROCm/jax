@@ -5337,6 +5337,7 @@ class RematTest(jtu.JaxTestCase):
 
     jax.grad(g)(jnp.arange(3.))  # doesn't crash
 
+  @jtu.skip_on_devices("rocm")
   def test_remat_checkpoint_dots_outside_scan(self):
     # see also above test test_remat_checkpoint_dots_inside_scan
     x = jnp.ones((5,))
