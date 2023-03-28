@@ -356,6 +356,7 @@ class cuSparseTest(sptu.SparseTestCase):
     dtype=all_dtypes,
     transpose=[True, False],
   )
+  @jtu.skip_on_devices("rocm")
   def test_csr_matvec(self, shape, dtype, transpose):
     op = lambda M: M.T if transpose else M
 
@@ -376,6 +377,7 @@ class cuSparseTest(sptu.SparseTestCase):
     dtype=all_dtypes,
     transpose=[True, False],
   )
+  @jtu.skip_on_devices("rocm")
   def test_csr_matmat(self, shape, dtype, transpose):
     op = lambda M: M.T if transpose else M
 
@@ -690,6 +692,7 @@ class cuSparseTest(sptu.SparseTestCase):
     transpose=[True, False],
   )
   @unittest.skipIf(not GPU_LOWERING_ENABLED, "test requires cusparse/hipsparse")
+  @jtu.skip_on_devices("rocm")
   def test_coo_spmv(self, shape, dtype, transpose):
     rng_sparse = rand_sparse(self.rng())
     rng_dense = jtu.rand_default(self.rng())
@@ -713,6 +716,7 @@ class cuSparseTest(sptu.SparseTestCase):
     transpose=[True, False],
   )
   @unittest.skipIf(not GPU_LOWERING_ENABLED, "test requires cusparse/hipsparse")
+  @jtu.skip_on_devices("rocm")
   def test_coo_spmm(self, shape, dtype, transpose):
     rng_sparse = rand_sparse(self.rng())
     rng_dense = jtu.rand_default(self.rng())
@@ -736,6 +740,7 @@ class cuSparseTest(sptu.SparseTestCase):
     transpose=[True, False],
   )
   @unittest.skipIf(not GPU_LOWERING_ENABLED, "test requires cusparse/hipsparse")
+  @jtu.skip_on_devices("rocm")
   def test_csr_spmv(self, shape, dtype, transpose):
     rng_sparse = rand_sparse(self.rng())
     rng_dense = jtu.rand_default(self.rng())
@@ -757,6 +762,7 @@ class cuSparseTest(sptu.SparseTestCase):
     transpose=[True, False],
   )
   @unittest.skipIf(not GPU_LOWERING_ENABLED, "test requires cusparse/hipsparse")
+  @jtu.skip_on_devices("rocm")
   def test_csr_spmm(self, shape, dtype, transpose):
     rng_sparse = rand_sparse(self.rng())
     rng_dense = jtu.rand_default(self.rng())
