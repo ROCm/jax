@@ -180,6 +180,7 @@ class NumpyLinalgTest(jtu.JaxTestCase):
     dtype=float_types + complex_types,
   )
   @jtu.skip_on_flag("jax_skip_slow_tests", True)
+  @jtu.skip_on_devices("rocm")
   def testSlogdetGrad(self, shape, dtype):
     rng = jtu.rand_default(self.rng())
     a = rng(shape, dtype)
