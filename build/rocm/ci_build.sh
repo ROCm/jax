@@ -96,7 +96,7 @@ WORKSPACE="${WORKSPACE:-$(upsearch WORKSPACE)}"
 BUILD_TAG="${BUILD_TAG:-jax}"
 
 # Determine the docker image name and BUILD_TAG.
-DOCKER_IMG_NAME="${BUILD_TAG}_${CONTAINER_TYPE}"
+DOCKER_IMG_NAME="${BUILD_TAG}.${CONTAINER_TYPE}"
 
 # Under Jenkins matrix build, the build tag may contain characters such as
 # commas (,) and equal signs (=), which are not valid inside docker image names.
@@ -158,9 +158,8 @@ docker run ${KEEP_IMAGE} --name ${DOCKER_IMG_NAME} --pid=host \
 if [[ "${KEEP_IMAGE}" != "--rm" ]] && [[ $? == "0" ]]; then
   echo "Committing the docker container as ${DOCKER_IMG_NAME}"
   docker stop ${DOCKER_IMG_NAME}
-  docker commit ${DOCKER_IMG_NAME} jax-rocm
+  docker commit ${DOCKER_IMG_NAME} ${DOCKER_IMG_NAME}
   docker rm ${DOCKER_IMG_NAME}    # remove this temp container
-  docker rmi ${DOCKER_IMG_NAME}   # remote this temp image
 fi
 
 echo "Jax-ROCm build was successful!"
