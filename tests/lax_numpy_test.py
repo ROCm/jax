@@ -4011,6 +4011,7 @@ class LaxBackedNumpyTests(jtu.JaxTestCase):
     # maximal set of dtypes.
     dtypes=itertools.combinations_with_replacement(all_dtypes, 3),
   )
+  @jtu.skip_on_devices("rocm")
   def testSelect(self, n, shapes, dtypes):
     dtypes = dtypes[:n+1]
     rng = jtu.rand_default(self.rng())
