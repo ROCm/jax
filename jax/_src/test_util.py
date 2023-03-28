@@ -1142,7 +1142,8 @@ class _LazyDtypes:
 
   @_cached_property
   def all_floating(self):
-    return self.supported([_dtypes.bfloat16, np.float16, np.float32, np.float64])
+    return self.supported([np.float16, np.float32, np.float64])
+    #return self.supported([_dtypes.bfloat16, np.float16, np.float32, np.float64])
 
   @_cached_property
   def integer(self):
