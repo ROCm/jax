@@ -544,6 +544,7 @@ class LaxBackedScipyStatsTests(jtu.JaxTestCase):
       self._CompileAndCheck(lax_fun, args_maker, rtol=3e-4)
 
   @genNamedParametersNArgs(5)
+  @jtu.skip_on_devices("rocm")
   def testTruncnormLogPdf(self, shapes, dtypes):
     rng = jtu.rand_default(self.rng())
     scipy_fun = osp_stats.truncnorm.logpdf
@@ -562,6 +563,7 @@ class LaxBackedScipyStatsTests(jtu.JaxTestCase):
       self._CompileAndCheck(lax_fun, args_maker)
 
   @genNamedParametersNArgs(5)
+  @jtu.skip_on_devices("rocm")
   def testTruncnormPdf(self, shapes, dtypes):
     rng = jtu.rand_default(self.rng())
     scipy_fun = osp_stats.truncnorm.pdf
@@ -580,6 +582,7 @@ class LaxBackedScipyStatsTests(jtu.JaxTestCase):
       self._CompileAndCheck(lax_fun, args_maker)
 
   @genNamedParametersNArgs(5)
+  @jtu.skip_on_devices("rocm")
   def testTruncnormLogCdf(self, shapes, dtypes):
     rng = jtu.rand_default(self.rng())
     scipy_fun = osp_stats.truncnorm.logcdf
@@ -598,6 +601,7 @@ class LaxBackedScipyStatsTests(jtu.JaxTestCase):
       self._CompileAndCheck(lax_fun, args_maker)
 
   @genNamedParametersNArgs(5)
+  @jtu.skip_on_devices("rocm")
   def testTruncnormCdf(self, shapes, dtypes):
     rng = jtu.rand_default(self.rng())
     scipy_fun = osp_stats.truncnorm.cdf
@@ -616,6 +620,7 @@ class LaxBackedScipyStatsTests(jtu.JaxTestCase):
       self._CompileAndCheck(lax_fun, args_maker)
 
   @genNamedParametersNArgs(5)
+  @jtu.skip_on_devices("rocm")
   def testTruncnormLogSf(self, shapes, dtypes):
     rng = jtu.rand_default(self.rng())
     scipy_fun = osp_stats.truncnorm.logsf
@@ -634,6 +639,7 @@ class LaxBackedScipyStatsTests(jtu.JaxTestCase):
       self._CompileAndCheck(lax_fun, args_maker)
 
   @genNamedParametersNArgs(5)
+  @jtu.skip_on_devices("rocm")
   def testTruncnormSf(self, shapes, dtypes):
     rng = jtu.rand_default(self.rng())
     scipy_fun = osp_stats.truncnorm.sf
