@@ -38,7 +38,7 @@ RUN apt-get update --allow-insecure-repositories && DEBIAN_FRONTEND=noninteracti
   python-is-python3 \
   libffi-dev \
   libssl-dev \
-  hipblaslt-devel \
+  hipblaslt-dev \
   wget && \
   apt-get clean && \
   rm -rf /var/lib/apt/lists/*
