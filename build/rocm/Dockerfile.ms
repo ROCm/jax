@@ -38,7 +38,18 @@ RUN apt-get update --allow-insecure-repositories && DEBIAN_FRONTEND=noninteracti
   python-is-python3 \
   libffi-dev \
   libssl-dev \
-  hipblaslt-dev \
+  build-essential \
+  zlib1g-dev \
+  libbz2-dev \
+  libreadline-dev \
+  libsqlite3-dev curl \
+  libncursesw5-dev \
+  xz-utils \
+  tk-dev \
+  libxml2-dev \
+  libxmlsec1-dev \
+  libffi-dev \
+  liblzma-dev \
   wget && \
   apt-get clean && \
   rm -rf /var/lib/apt/lists/*
