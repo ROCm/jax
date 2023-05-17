@@ -32,7 +32,7 @@ if cuda_version and cudnn_version:
 
 rocm_version = os.environ.get("JAX_ROCM_VERSION")
 if rocm_version:
-    project_name = 'jaxlib-rocm'
+    #project_name = 'jaxlib-rocm'
     __version__ += f".{rocm_version.replace('.', '')}"
 
 class BinaryDistribution(Distribution):
