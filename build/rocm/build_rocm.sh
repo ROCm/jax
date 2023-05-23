@@ -25,7 +25,7 @@
 #
 
 set -eux
-pyenv local $PYTHON_VERSION
+#pyenv local $PYTHON_VERSION
 python -V
 
 #If XLA_REPO is not set, then use default
@@ -57,7 +57,7 @@ rocm_version=$(cat /opt/rocm/.info/version | cut -d "-" -f 1)
 export JAX_ROCM_VERSION=${rocm_version//./}
 
 #Build and install wheel
-python3 ./build/build.py --enable_rocm --rocm_path=${ROCM_PATH} --bazel_options=--override_repository=org_tensorflow=${XLA_CLONE_DIR}
+python3 ./build/build.py --enable_rocm --rocm_path=${ROCM_PATH} --bazel_options=--override_repository=xla=${XLA_CLONE_DIR}
 pip3 install --force-reinstall dist/*.whl  # installs jaxlib (includes XLA)
 pip3 install --force-reinstall .  # installs jax
 
