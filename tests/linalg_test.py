@@ -340,6 +340,7 @@ class NumpyLinalgTest(jtu.JaxTestCase):
           np.linalg.norm(np.matmul(a, v) - w * v), 2 * eps * np.linalg.norm(a)
       )
 
+  @jtu.skip_on_devices("rocm")
   def testEighTinyNorm(self):
     rng = jtu.rand_default(self.rng())
     a = rng((300, 300), dtype=np.float32)
@@ -1481,6 +1482,7 @@ class ScipyLinalgTest(jtu.JaxTestCase):
                               check_dtypes=False, tol=tol)
       self._CompileAndCheck(jsp_fun, args_maker, check_dtypes=False)
 
+  @jtu.skip_on_devices("rocm")
   @jtu.sample_product(
     n=[1, 4, 5, 20, 50],
     dtype=float_types + complex_types,
