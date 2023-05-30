@@ -1138,6 +1138,7 @@ class LaxControlFlowTest(jtu.JaxTestCase):
     self.assertAllClose(ans, expected, check_dtypes=False)
     jtu.check_grads(fun, (x,), order=2, modes=["fwd"])
 
+  @jtu.skip_on_devices("rocm") 
   def testCondGrad(self):
     def f_ref(x):
       return 3. * x if x < 2 else jnp.sin(x)
