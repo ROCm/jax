@@ -3615,6 +3615,7 @@ class LaxBackedNumpyTests(jtu.JaxTestCase):
     self._CheckAgainstNumpy(np_op, jnp_op, args_maker)
     self._CompileAndCheck(jnp_op, args_maker)
 
+  @jtu.skip_on_devices("rocm")
   @jtu.sample_product(
     [dict(shape=shape, axis=axis)
       for shape in nonzerodim_shapes
