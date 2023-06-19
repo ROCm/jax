@@ -63,6 +63,6 @@ pip3 install --force-reinstall .  # installs jax
 
 #This is for CI to read without having to start the container again
 if [ -v CI_RUN ]; then
-	pip3 list | grep jaxlib | tr -s ' ' | cut -d " " -f 2 > jax_version_installed 
+	pip3 list | grep jaxlib | tr -s ' ' | cut -d " " -f 2 | cut -d "+" -f 1 > jax_version_installed 
 	cat /opt/rocm/.info/version | cut -d "-" -f 1 > jax_rocm_version
 fi
