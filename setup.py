@@ -63,8 +63,8 @@ setup(
     package_data={'jax': ['py.typed', "*.pyi", "**/*.pyi"]},
     python_requires='>=3.8',
     install_requires=[
-        'ml_dtypes>=0.1.0',
-        'numpy>=1.21',
+        'ml_dtypes>=0.1.0,<0.2.0',
+        'numpy>=1.21,<1.25',
         'opt_einsum',
         'scipy>=1.7',
         # Required by xla_bridge.discover_pjrt_plugins for forwards compat with
