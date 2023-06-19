@@ -32,7 +32,7 @@ if cuda_version and cudnn_version:
 
 rocm_version = os.environ.get("JAX_ROCM_VERSION")
 if rocm_version:
-    __version__ += f".{rocm_version.replace('.', '')}"
+    __version__ += f"+rocm{rocm_version.replace('.', '')}"
 
 class BinaryDistribution(Distribution):
   """This class makes 'bdist_wheel' include an ABI tag on the wheel."""
