@@ -5,7 +5,7 @@ This directory contains files and setup instructions to build and test JAX for R
 
 1.  Install Docker: Follow the [instructions on the docker website](https://docs.docker.com/engine/installation/).
 
-2. Build a runtime JAX-ROCm docker container and keep this image by running the following command. This builds Python 3.9 container
+2. Build a runtime JAX-ROCm docker container and keep this image by running the following command. Note: must pass in Python version. The example below builds Python 3.9 container.
 
     ./build/rocm/ci_build.sh --keep_image --py_version==3.9.0 --runtime bash -c "./build/rocm/build_rocm.sh"
 
@@ -13,15 +13,6 @@ This directory contains files and setup instructions to build and test JAX for R
 ```
 sudo docker run -it --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --entrypoint /bin/bash jax-rocm:latest
 ```
-
-***
-### Build and Test JAX-ROCm in docker for CI jobs
-This folder has all the scripts necessary to build and run tests for JAX-ROCm.
-The following command will build JAX on ROCm and run all the tests inside docker (script should be called from JAX root folder).
-```
-./build/rocm/ci_build.sh
-```
-
 
 ***
 ### JAX ROCm Releases
