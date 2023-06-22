@@ -24,10 +24,11 @@ JAX and Jaxlib wheels for ROCm are available here
 https://github.com/ROCmSoftwarePlatform/jax/releases
 ```
 
-***Note:*** Some earlier jaxlib versions on ROCm were released on PyPi. 
+***Note:*** Some earlier jaxlib versions on ROCm were released on ***PyPi***. 
 ```
 https://pypi.org/project/jaxlib-rocm/#history
 ```
+However, due to strict naming PyPI requirement we had to name our wheels slightly differently. This would then result in Jax/Jaxlib dependent not recognizing jaxlib-rocm wheels and would end up with multiple jaxlib installations and also runtime issues
 
 
 ***
