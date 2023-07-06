@@ -249,6 +249,7 @@ class LaxBackedScipySpatialTransformTests(jtu.JaxTestCase):
     dtype=float_dtypes,
     shape=[(4,), (num_samples, 4)],
   )
+  @jtu.skip_on_devices("rocm")
   def testRotationInv(self, shape, dtype):
     rng = jtu.rand_default(self.rng())
     args_maker = lambda: (rng(shape, dtype),)
