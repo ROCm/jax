@@ -199,6 +199,8 @@ def prepare_wheel(sources_path):
     copy_file(f"__main__/jaxlib/cuda/_sparse.{pyext}", dst_dir=cuda_dir)
   if exists(f"__main__/jaxlib/rocm/_sparse.{pyext}"):
     copy_file(f"__main__/jaxlib/rocm/_sparse.{pyext}", dst_dir=rocm_dir)
+  if exists(f"__main__/jaxlib/rocm/_triton.{pyext}"):
+    copy_file(f"__main__/jaxlib/rocm/_triton.{pyext}", dst_dir=rocm_dir)
 
 
   mlir_dir = os.path.join(jaxlib_dir, "mlir")

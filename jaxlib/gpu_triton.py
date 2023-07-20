@@ -13,18 +13,17 @@
 # limitations under the License.
 from jaxlib import xla_client
 
-try:
-  from .cuda import _triton  # pytype: disable=import-error
-  xla_client.register_custom_call_target(
-      "triton_kernel_call", _triton.get_custom_call(),
-      platform='CUDA')
-  TritonArrayParameter = _triton.TritonArrayParameter
-  TritonKernelCall = _triton.TritonKernelCall
-  TritonAutotunedKernelCall = _triton.TritonAutotunedKernelCall
-  TritonKernel = _triton.TritonKernel
-  create_array_parameter = _triton.create_array_parameter
-  create_scalar_parameter = _triton.create_scalar_parameter
-  get_compute_capability = _triton.get_compute_capability
-  get_custom_call = _triton.get_custom_call
-except ImportError:
-  _triton = None
+#try:
+from .rocm import _triton  # pytype: disable=import-error
+xla_client.register_custom_call_target(
+      "triton_kernel_call", _triton.get_custom_call(),platform='ROCM')
+TritonArrayParameter = _triton.TritonArrayParameter
+TritonKernelCall = _triton.TritonKernelCall
+#TritonAutotunedKernelCall = _triton.TritonAutotunedKernelCall
+TritonKernel = _triton.TritonKernel
+create_array_parameter = _triton.create_array_parameter
+create_scalar_parameter = _triton.create_scalar_parameter
+get_compute_capability = _triton.get_compute_capability
+get_custom_call = _triton.get_custom_call
+#except ImportError:
+#  _triton = None

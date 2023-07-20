@@ -281,6 +281,37 @@ pybind_extension(
     ],
 )
 
+pybind_extension(
+    name = "_triton",
+    srcs = ["//jaxlib/gpu:triton_rocm.cc"],
+    copts = [
+        "-fexceptions",
+        "-fno-strict-aliasing",
+    ],
+    features = ["-use_header_modules"],
+    module_name = "_triton",
+    deps = [
+        ":hip_gpu_kernel_helpers",
+        ":hip_vendor",
+        "@xla//xla/service:custom_call_status",
+        "@local_config_rocm//rocm:rocm_headers",
+        "@com_google_absl//absl/base",
+        "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/cleanup",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/log",
+        "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings:str_format",
+        "@com_google_absl//absl/synchronization",
+        "@pybind11",
+        "@pybind11_abseil//pybind11_abseil:status_casters",
+    ],
+)
+
+
+
 py_library(
     name = "rocm_gpu_support",
     deps = [
@@ -289,5 +320,6 @@ py_library(
         ":_prng",
         ":_solver",
         ":_sparse",
+        ":_triton",
     ],
 )
