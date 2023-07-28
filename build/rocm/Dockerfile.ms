@@ -50,6 +50,7 @@ RUN apt-get update --allow-insecure-repositories && DEBIAN_FRONTEND=noninteracti
   libxmlsec1-dev \
   libffi-dev \
   liblzma-dev \
+  hipblaslt-dev \
   wget && \
   apt-get clean && \
   rm -rf /var/lib/apt/lists/*
