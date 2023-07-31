@@ -2,10 +2,10 @@
 FROM rocm/dev-ubuntu-20.04:5.4-complete as rt_build
 MAINTAINER Rahul Batra<rahbatra@amd.com>
 ################################################################################
-ARG ROCM_DEB_REPO=http://repo.radeon.com/rocm/apt/5.5/
+ARG ROCM_DEB_REPO=http://repo.radeon.com/rocm/apt/5.6/
 ARG ROCM_BUILD_NAME=ubuntu
 ARG ROCM_BUILD_NUM=main
-ARG ROCM_PATH=/opt/rocm-5.5.0
+ARG ROCM_PATH=/opt/rocm-5.6.0
 
 ARG DEBIAN_FRONTEND=noninteractive
 ARG PYTHON_VERSION=3.9.0
