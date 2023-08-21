@@ -292,7 +292,7 @@ def write_bazelrc(*, python_bin_path, remote_build,
       f.write("build --config=rocm\n")
       if not enable_nccl:
         f.write("build --config=nonccl\n")
-
+    f.write("build --config=verbose_logs\n")
 BANNER = r"""
      _   _  __  __
     | | / \ \ \/ /
@@ -535,6 +535,7 @@ def main():
       enable_nccl=args.enable_nccl,
       enable_tpu=args.enable_tpu,
       enable_rocm=args.enable_rocm,
+
   )
 
   if args.configure_only:
@@ -544,13 +545,14 @@ def main():
 
 
   command = ([bazel_path] + args.bazel_startup_options +
-    ["run", "--verbose_failures=true"] +
+    ["run", "--verbose_failures=true", "--subcommands"] +
     ["//jaxlib/tools:build_wheel", "--",
     f"--output_path={output_path}",
     f"--cpu={wheel_cpu}"])
   if args.editable:
     command += ["--editable"]
   print(" ".join(command))
+
   shell(command)
   shell([bazel_path] + args.bazel_startup_options + ["shutdown"])
 

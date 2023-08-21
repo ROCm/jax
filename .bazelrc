@@ -116,6 +116,7 @@ build:macos --config=posix
 
 # Suppress all warning messages.
 build:short_logs --output_filter=DONT_MATCH_ANYTHING
+build:verbose_logs --output_filter=
 
 build:tpu --@xla//xla/python:enable_tpu=true
 build:tpu --define=with_tpu_support=true

@@ -130,6 +130,8 @@ echo ""
 
 echo "Building container (${DOCKER_IMG_NAME})..."
 echo "Python Version (${PYTHON_VERSION})"
+ROCM_DEB_REPO="http://repo.radeon.com/rocm/apt/5.5/" 
+ROCM_PATH="/opt/rocm-5.5.0" 
 if [[ "${RUNTIME_FLAG}" -eq 1  ]]; then
   echo "Building (runtime) container (${DOCKER_IMG_NAME}) with Dockerfile($DOCKERFILE_PATH)..."
   docker build --target rt_build --tag ${DOCKER_IMG_NAME} \
@@ -138,7 +140,7 @@ if [[ "${RUNTIME_FLAG}" -eq 1  ]]; then
 else
   echo "Building (CI) container (${DOCKER_IMG_NAME}) with Dockerfile($DOCKERFILE_PATH)..."
   docker build --target ci_build --tag ${DOCKER_IMG_NAME} \
-        --build-arg PYTHON_VERSION=$PYTHON_VERSION \
+        --build-arg PYTHON_VERSION=$PYTHON_VERSION --build-arg ROCM_DEB_REPO="http://repo.radeon.com/rocm/apt/5.5/" --build-arg ROCM_PATH="/opt/rocm-5.5.0" \
       -f "${DOCKERFILE_PATH}" "${DOCKER_CONTEXT_PATH}"  
 fi
 
