@@ -56,9 +56,15 @@ from jax_triton import triton_lib
 from jax_triton.triton_lib import compile_ttir_to_ptx_inplace
 from jax_triton.triton_lib import get_triton_type
 import numpy as np
+import triton
 from triton._C.libtriton.triton import ir as tl_ir
 from triton.compiler import code_generator as code_gen
 import triton.language as tl
+import triton._C.libtriton.triton as _triton
+from pathlib import Path
+
+from ..triton_lib import write_to_file
+from triton.compiler import compiler as tc
 
 # TODO(sharadmv): enable type checking
 # mypy: ignore-errors
@@ -1658,10 +1664,11 @@ def pallas_call_lowering(
         **compiler_params
     )
   num_warps = compiler_params.get("num_warps", 4)
-  num_stages = compiler_params.get("num_stages", 3)
+  num_stages = compiler_params.get("num_stages", 1)
   if debug:
-    print(jaxpr)
-    print(grid_mapping)
+    write_to_file(str(jaxpr)+str(grid_spec), "dump.jaxpr")
+    #print(jaxpr)
+    #print(grid_mapping)
   compilation_result = compile_jaxpr(
       jaxpr,
       tuple((*in_shapes, *out_shapes)),
@@ -1707,7 +1714,7 @@ def pallas_call_lowering(
   ]
 
   xc.register_custom_call_target(
-      name, triton_kernel_call_lib.get_custom_call(), platform="CUDA"
+      name, triton_kernel_call_lib.get_custom_call(), platform="ROCM"
   )
 
   if triton_params is None:
@@ -1725,4 +1732,4 @@ def pallas_call_lowering(
   )
 
 
-mlir.register_lowering(pallas_call_p, pallas_call_lowering, platform="cuda")
+mlir.register_lowering(pallas_call_p, pallas_call_lowering, platform="ROCM")

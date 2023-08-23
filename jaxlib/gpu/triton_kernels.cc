@@ -27,26 +27,27 @@
 #include "xla/service/custom_call_status.h"
 #include "xla/stream_executor/gpu/asm_compiler.h"
 
-#define CUDA_RETURN_IF_ERROR(expr) JAX_RETURN_IF_ERROR(JAX_AS_STATUS(expr))
+#define HIP_RETURN_IF_ERROR(expr) JAX_RETURN_IF_ERROR(JAX_AS_STATUS(expr))
 
 
 namespace jax::JAX_GPU_NAMESPACE {
 namespace {
 
-constexpr uint32_t kNumThreadsPerWarp = 32;
+constexpr uint32_t kNumThreadsPerWarp = 64;
 constexpr float kBenchmarkTimeMillis = 10.;
 
-struct CuModuleDeleter {
-  void operator()(CUmodule module) { cuModuleUnload(module); }
+struct ROCmModuleDeleter {
+  void operator()(hipModule_t module) { hipModuleUnload(module); }
 };
 
-using OwnedCUmodule =
-    std::unique_ptr<std::remove_pointer_t<CUmodule>, CuModuleDeleter>;
+using OwnedROCmmodule =
+    std::unique_ptr<std::remove_pointer_t<hipModule_t>, ROCmModuleDeleter>;
 
 absl::StatusOr<ModuleImage*> GetModuleImage(std::string kernel_name,
                                             uint32_t shared_mem_bytes,
                                             std::string_view ptx,
                                             int compute_capability) {
+  LOG(WARNING) << "RB: GetModuleImage";
   auto key =
       std::make_tuple(kernel_name, shared_mem_bytes, ptx, compute_capability);
 
@@ -75,27 +76,28 @@ absl::StatusOr<ModuleImage*> GetModuleImage(std::string kernel_name,
   return it2->second.get();
 }
 
-absl::StatusOr<float> Benchmark(CUstream stream, KernelCall& kernel_call,
+absl::StatusOr<float> Benchmark(hipStream_t stream, KernelCall& kernel_call,
                                 void** buffers, int num_iterations) {
-  CUevent start, stop;
-  CUDA_RETURN_IF_ERROR(cuEventCreate(&start, /*Flags=*/CU_EVENT_DEFAULT));
-  CUDA_RETURN_IF_ERROR(cuEventCreate(&stop, /*Flags=*/CU_EVENT_DEFAULT));
+  hipEvent_t start, stop;
+  HIP_RETURN_IF_ERROR(hipEventCreateWithFlags(&start, /*Flags=*/hipEventDefault));
+  HIP_RETURN_IF_ERROR(hipEventCreateWithFlags(&stop, /*Flags=*/hipEventDefault));
+  std::cout << "RB: Benchmark" << std::endl;
   JAX_RETURN_IF_ERROR(kernel_call.Launch(stream, buffers));  // Warm-up.
-  CUDA_RETURN_IF_ERROR(cuEventRecord(start, stream));
+  HIP_RETURN_IF_ERROR(hipEventRecord(start, stream));
   for (int i = 0; i < num_iterations; ++i) {
     JAX_RETURN_IF_ERROR(kernel_call.Launch(stream, buffers));
   }
-  CUDA_RETURN_IF_ERROR(cuEventRecord(stop, stream));
-  CUDA_RETURN_IF_ERROR(cuEventSynchronize(stop));
+  HIP_RETURN_IF_ERROR(hipEventRecord(stop, stream));
+  HIP_RETURN_IF_ERROR(hipEventSynchronize(stop));
   float elapsed_ms;
-  CUDA_RETURN_IF_ERROR(cuEventElapsedTime(&elapsed_ms, start, stop));
-  CUDA_RETURN_IF_ERROR(cuEventDestroy(start));
-  CUDA_RETURN_IF_ERROR(cuEventDestroy(stop));
+  HIP_RETURN_IF_ERROR(hipEventElapsedTime(&elapsed_ms, start, stop));
+  HIP_RETURN_IF_ERROR(hipEventDestroy(start));
+  HIP_RETURN_IF_ERROR(hipEventDestroy(stop));
   return elapsed_ms;
 }
 
 absl::StatusOr<KernelCall*> GetKernelCall(absl::string_view opaque,
-                                          CUstream stream, void** buffers) {
+                                          hipStream_t stream, void** buffers) {
   static absl::Mutex mutex;
   static auto& kernel_calls =
       *new absl::flat_hash_map<std::string, std::unique_ptr<KernelCall>>
@@ -107,10 +109,13 @@ absl::StatusOr<KernelCall*> GetKernelCall(absl::string_view opaque,
 
   // The opaque data is a zlib compressed protobuf.
   JAX_ASSIGN_OR_RETURN(std::string serialized, ZlibUncompress(opaque));
+  //JAX_ASSIGN_OR_RETURN(std::string serialized, opaque);
 
   jax_triton::TritonAnyKernelCall proto;
+  std::cout << "RB: Triton.cc " << opaque << std::endl;
+  std::cout << "RB: Triton.cc " << serialized<< std::endl;
   if (!proto.ParseFromString(serialized)) {
-    return absl::InvalidArgumentError("Failed to parse serialized data.");
+    return absl::InvalidArgumentError("RB: Failed to parse serialized data.");
   }
 
   std::unique_ptr<KernelCall> kernel_call;
@@ -148,25 +153,25 @@ class ModuleImage {
         module_image_(std::move(module_image)),
         shared_mem_bytes_(shared_mem_bytes) {}
 
-  absl::StatusOr<CUfunction> GetFunctionForContext(CUcontext context) {
+  absl::StatusOr<hipFunction_t> GetFunctionForContext(hipStream_t stream) {
     absl::MutexLock lock(&mutex_);
-    auto it = functions_.find(context);
-    if (ABSL_PREDICT_TRUE(it != functions_.end())) {
-      return it->second;
-    }
+    //auto it = functions_.find(context);
+    //if (ABSL_PREDICT_TRUE(it != functions_.end())) {
+    //  return it->second;
+    //}
 
-    CUDA_RETURN_IF_ERROR(cuCtxPushCurrent(context));
-    absl::Cleanup ctx_restorer = [] { cuCtxPopCurrent(nullptr); };
+    //HIP_RETURN_IF_ERROR(cuCtxPushCurrent(context));
+    //absl::Cleanup ctx_restorer = [] { cuCtxPopCurrent(nullptr); };
 
-    CUmodule module;
-    CUDA_RETURN_IF_ERROR(cuModuleLoadData(&module, module_image_.data()));
-    modules_.push_back(OwnedCUmodule(module, CuModuleDeleter()));
+    hipModule_t module;
+    HIP_RETURN_IF_ERROR(hipModuleLoadData(&module, module_image_.data()));
+    modules_.push_back(OwnedROCmmodule(module, ROCmModuleDeleter()));
 
-    CUfunction function;
-    CUDA_RETURN_IF_ERROR(
-        cuModuleGetFunction(&function, module, kernel_name_.c_str()));
-    auto [_, success] = functions_.insert({context, function});
-    CHECK(success);
+    hipFunction_t function;
+    HIP_RETURN_IF_ERROR(
+        hipModuleGetFunction(&function, module, kernel_name_.c_str()));
+    //auto [_, success] = functions_.insert({context, function});
+    //CHECK(success);
 
     // The maximum permitted static shared memory allocation in CUDA is 48kB,
     // but we can expose more to the kernel using dynamic shared memory.
@@ -176,12 +181,13 @@ class ModuleImage {
     }
 
     // Set up dynamic shared memory.
-    CUdevice device;
-    CUDA_RETURN_IF_ERROR(cuCtxGetDevice(&device));
+    hipDevice_t device;
+    int device_id = hipGetStreamDeviceId(stream);
+    HIP_RETURN_IF_ERROR(hipDeviceGet(&device, device_id));
 
     int shared_optin;
-    CUDA_RETURN_IF_ERROR(cuDeviceGetAttribute(
-        &shared_optin, CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_BLOCK_OPTIN,
+    HIP_RETURN_IF_ERROR(hipDeviceGetAttribute(
+        &shared_optin, hipDeviceAttributeSharedMemPerBlockOptin,
         device));
 
     if (shared_mem_bytes_ > shared_optin) {
@@ -190,17 +196,17 @@ class ModuleImage {
     }
 
     if (shared_optin > kMaxStaticSharedMemBytes) {
-      CUDA_RETURN_IF_ERROR(
-          cuFuncSetCacheConfig(function, CU_FUNC_CACHE_PREFER_SHARED));
+      HIP_RETURN_IF_ERROR(
+         hipFuncSetCacheConfig(function, hipFuncCachePreferShared));
       int shared_total;
-      CUDA_RETURN_IF_ERROR(cuDeviceGetAttribute(
+      HIP_RETURN_IF_ERROR(hipDeviceGetAttribute(
           &shared_total,
-          CU_DEVICE_ATTRIBUTE_MAX_SHARED_MEMORY_PER_MULTIPROCESSOR, device));
+          hipDeviceAttributeMaxBlocksPerMultiProcessor, device));
       int shared_static;
-      CUDA_RETURN_IF_ERROR(cuFuncGetAttribute(
-          &shared_static, CU_FUNC_ATTRIBUTE_SHARED_SIZE_BYTES, function));
-      CUDA_RETURN_IF_ERROR(cuFuncSetAttribute(
-          function, CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES,
+      HIP_RETURN_IF_ERROR(hipFuncGetAttribute(
+          &shared_static, HIP_FUNC_ATTRIBUTE_SHARED_SIZE_BYTES, function));
+      HIP_RETURN_IF_ERROR(hipFuncSetAttribute(
+          function, hipFuncAttributeMaxDynamicSharedMemorySize,
           shared_optin - shared_static));
     }
     return function;
@@ -212,8 +218,8 @@ class ModuleImage {
   uint32_t shared_mem_bytes_;
 
   absl::Mutex mutex_;
-  std::vector<OwnedCUmodule> modules_ ABSL_GUARDED_BY(mutex_);
-  absl::flat_hash_map<CUcontext, CUfunction> functions_ ABSL_GUARDED_BY(mutex_);
+  std::vector<OwnedROCmmodule> modules_ ABSL_GUARDED_BY(mutex_);
+  //absl::flat_hash_map<CUcontext, CUfunction> functions_ ABSL_GUARDED_BY(mutex_);
 };
 
 Kernel::Kernel(std::string kernel_name, uint32_t num_warps,
@@ -226,18 +232,21 @@ Kernel::Kernel(std::string kernel_name, uint32_t num_warps,
       ttir_(std::move(ttir)),
       compute_capability_(compute_capability) {}
 
-absl::Status Kernel::Launch(CUstream stream, uint32_t grid[3], void** params) {
+absl::Status Kernel::Launch(hipStream_t stream, uint32_t grid[3], void** params) 
+{
+  LOG(INFO) << "RB: Launch";
+  VLOG(2) << "RB: Launch";
   if (ABSL_PREDICT_FALSE(module_image_ == nullptr)) {
     JAX_ASSIGN_OR_RETURN(module_image_,
                          GetModuleImage(kernel_name_, shared_mem_bytes_, ptx_,
                                         compute_capability_));
   }
 
-  CUcontext context;
-  CUDA_RETURN_IF_ERROR(cuStreamGetCtx(stream, &context));
-  JAX_ASSIGN_OR_RETURN(CUfunction kernel,
-                       module_image_->GetFunctionForContext(context));
-  return JAX_AS_STATUS(cuLaunchKernel(
+  //CUcontext context;
+  //HIP_RETURN_IF_ERROR(cuStreamGetCtx(stream, &context));
+  JAX_ASSIGN_OR_RETURN(hipFunction_t kernel,
+                       module_image_->GetFunctionForContext(stream));
+  return JAX_AS_STATUS(hipModuleLaunchKernel(
       kernel, grid[0], grid[1], grid[2], block_dim_x_,
       /*blockDimY=*/1, /*blockDimZ=*/1, shared_mem_bytes_, stream, params,
       /*extra=*/nullptr));
@@ -329,7 +338,9 @@ KernelCall::KernelCall(Kernel kernel, uint32_t grid_0, uint32_t grid_1,
       grid_{grid_0, grid_1, grid_2},
       parameters_(std::move(parameters)) {}
 
-absl::Status KernelCall::Launch(CUstream stream, void** buffers) {
+absl::Status KernelCall::Launch(hipStream_t stream, void** buffers) {
+  VLOG(2) << "RB: Launch";
+  LOG(WARNING) << "RB: Launch";
   std::vector<void*> params;
   params.reserve(parameters_.size());
   for (size_t i = 0; i < parameters_.size(); ++i) {
@@ -337,18 +348,18 @@ absl::Status KernelCall::Launch(CUstream stream, void** buffers) {
     if (std::holds_alternative<Parameter::Array>(param.value)) {
       const auto& array = std::get<Parameter::Array>(param.value);
       void*& ptr = *(buffers++);
-      auto cu_ptr = reinterpret_cast<CUdeviceptr>(ptr);
+      auto cu_ptr = reinterpret_cast<hipDeviceptr_t>(ptr);
 
       if (ABSL_PREDICT_FALSE((array.ptr_divisibility != 0) &&
-                             (cu_ptr % array.ptr_divisibility != 0))) {
+                             ((size_t)cu_ptr % array.ptr_divisibility != 0))) {
         return absl::InvalidArgumentError(
             absl::StrFormat("Parameter %zu (%p) is not divisible by %d.", i,
                             ptr, array.ptr_divisibility));
       }
 
       if (array.bytes_to_zero > 0) {
-        CUDA_RETURN_IF_ERROR(
-            cuMemsetD8Async(cu_ptr, 0, array.bytes_to_zero, stream));
+        HIP_RETURN_IF_ERROR(
+            hipMemsetD8Async(cu_ptr, 0, array.bytes_to_zero, stream));
       }
       params.push_back(&ptr);
     } else {
@@ -433,12 +444,12 @@ jax_triton::TritonAutotunedKernelCall AutotunedKernelCall::ToProto() const {
 }
 
 /*static*/ absl::StatusOr<KernelCall> AutotunedKernelCall::Autotune(
-    AutotunedKernelCall kernel_call, CUstream stream, void** buffers) {
+    AutotunedKernelCall kernel_call, hipStream_t stream, void** buffers) {
   // Ensure a valid context for driver calls that don't take the stream.
-  CUcontext context;
-  CUDA_RETURN_IF_ERROR(cuStreamGetCtx(stream, &context));
-  CUDA_RETURN_IF_ERROR(cuCtxPushCurrent(context));
-  absl::Cleanup ctx_restorer = [] { cuCtxPopCurrent(nullptr); };
+  //CUcontext context;
+  //HIP_RETURN_IF_ERROR(cuStreamGetCtx(stream, &context));
+  //HIP_RETURN_IF_ERROR(cuCtxPushCurrent(context));
+  //absl::Cleanup ctx_restorer = [] { cuCtxPopCurrent(nullptr); };
 
   // If an input aliases with an output, it will get overwritten during the
   // kernel execution. If the kernel is called repeatedly, as we do during
@@ -448,8 +459,8 @@ jax_triton::TritonAutotunedKernelCall AutotunedKernelCall::ToProto() const {
   for (auto [input_idx, output_idx, size] : kernel_call.input_output_aliases_) {
     if (buffers[input_idx] == buffers[output_idx]) {
       std::vector<uint8_t> input_copy(size);
-      CUDA_RETURN_IF_ERROR(cuMemcpyDtoHAsync(
-          input_copy.data(), reinterpret_cast<CUdeviceptr>(buffers[input_idx]),
+      HIP_RETURN_IF_ERROR(hipMemcpyDtoHAsync(
+          input_copy.data(), reinterpret_cast<hipDeviceptr_t>(buffers[input_idx]),
           size, stream));
       input_copies[input_idx] = std::move(input_copy);
     }
@@ -495,18 +506,19 @@ jax_triton::TritonAutotunedKernelCall AutotunedKernelCall::ToProto() const {
 
   // Restore aliased inputs to their original values.
   for (auto [input_idx, _, size] : kernel_call.input_output_aliases_) {
-    CUDA_RETURN_IF_ERROR(
-        cuMemcpyHtoDAsync(reinterpret_cast<CUdeviceptr>(buffers[input_idx]),
+    HIP_RETURN_IF_ERROR(
+        hipMemcpyHtoDAsync(reinterpret_cast<hipDeviceptr_t>(buffers[input_idx]),
                           input_copies[input_idx].data(), size, stream));
   }
   // Synchronize stream to ensure copies are complete before the host copy
   // is deleted.
-  CUDA_RETURN_IF_ERROR(cuStreamSynchronize(stream));
+  HIP_RETURN_IF_ERROR(hipStreamSynchronize(stream));
   return std::move(kernel_call.configs_[0].kernel_call);
 }
 
-void TritonKernelCall(CUstream stream, void** buffers, const char* opaque,
+void TritonKernelCall(hipStream_t stream, void** buffers, const char* opaque,
                       size_t opaque_len, XlaCustomCallStatus* status) {
+  LOG(INFO) << "RB: TritonKernelCall Enter";
   absl::Status result = [=] {
     JAX_ASSIGN_OR_RETURN(
         KernelCall * kernel_call,
@@ -516,7 +528,8 @@ void TritonKernelCall(CUstream stream, void** buffers, const char* opaque,
   if (!result.ok()) {
     absl::string_view msg = result.message();
     XlaCustomCallStatusSetFailure(status, msg.data(), msg.length());
-  }
+  }  
+  LOG(INFO) << "RB: TritonKernelCall Exit";
 }
 
 absl::StatusOr<std::string> ZlibUncompress(absl::string_view compressed) {
