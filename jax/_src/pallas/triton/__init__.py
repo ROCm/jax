@@ -14,7 +14,9 @@
 
 """Contains Triton-specific pallas modules."""
 
+print("RB: pallas->triton->init")
 from jax._src.pallas.triton import lowering
+print("RB: pallas->triton->init Done")
 from jax._src.lib import gpu_triton as triton_kernel_call_lib
 
 get_compute_capability = triton_kernel_call_lib.get_compute_capability
