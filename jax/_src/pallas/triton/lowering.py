@@ -21,6 +21,7 @@ import operator
 from typing import Any, Dict, Sequence, Tuple
 import zlib
 
+#print("RB: pallas->triton->lowering ENTER")
 import jax
 from jax import lax
 from jax import tree_util
@@ -53,14 +54,28 @@ from jax.interpreters import mlir
 from jax.interpreters import partial_eval as pe
 from jax.lib import xla_client as xc
 import jax.numpy as jnp
+#print("RB: pallas->triton->lowering Enter 10")
 from jax_triton import triton_lib
 from jax_triton.triton_lib import compile_ttir_to_ptx_inplace
 from jax_triton.triton_lib import get_triton_type
+#print("RB: pallas->triton->lowering Enter 15")
 import numpy as np
+import triton
 from triton._C.libtriton.triton import ir as tl_ir
 from triton.compiler import code_generator as code_gen
+#print("RB: pallas->triton->lowering Enter 20")
 import triton.language as tl
+#print("RB: pallas->triton->lowering Enter 21")
+import triton._C.libtriton.triton as _triton
+#print("RB: pallas->triton->lowering Enter 22")
+from pathlib import Path
+#print("RB: pallas->triton->lowering Enter 23")
 
+from jax_triton.triton_lib import write_to_file
+#print("RB: pallas->triton->lowering Enter 24")
+from triton.compiler import compiler as tc
+
+#print("RB: pallas->triton->lowering Enter Done")
 # TODO(sharadmv): enable type checking
 # mypy: ignore-errors
 
@@ -1598,7 +1613,7 @@ def compile_jaxpr(
       dump=debug,
   )
   return TritonCompilationResult(
-      name, ttir, ptx, shared_mem_bytes, compute_capability, lowering_result
+      name, ttir, Path(ptx[1]).read_bytes(), shared_mem_bytes, compute_capability, lowering_result
   )
 
 
@@ -1632,11 +1647,12 @@ def pallas_call_lowering(
         grid_mapping=grid_mapping,
         **compiler_params
     )
-  num_warps = compiler_params.get("num_warps", 4)
-  num_stages = compiler_params.get("num_stages", 3)
+  num_warps = compiler_params.get("num_warps", 1)
+  num_stages = compiler_params.get("num_stages", 1)
   if debug:
-    print(jaxpr)
-    print(grid_mapping)
+    #print(jaxpr)
+    #print(grid_mapping)
+    write_to_file(str(jaxpr)+str(grid_spec), "dump.jaxpr")
   compilation_result = compile_jaxpr(
       jaxpr,
       tuple((*in_shapes, *out_shapes)),
@@ -1682,7 +1698,7 @@ def pallas_call_lowering(
   ]
 
   xc.register_custom_call_target(
-      name, triton_kernel_call_lib.get_custom_call(), platform="CUDA"
+      name, triton_kernel_call_lib.get_custom_call(), platform="ROCM"
   )
 
   if triton_params is None:
@@ -1703,4 +1719,5 @@ def pallas_call_lowering(
   )
 
 
-mlir.register_lowering(pallas_call_p, pallas_call_lowering, platform="cuda")
+#print("RB: pallas->triton->lowering EXIT")
+mlir.register_lowering(pallas_call_p, pallas_call_lowering, platform="rocm")

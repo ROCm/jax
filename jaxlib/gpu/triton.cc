@@ -17,7 +17,7 @@
 #include "jaxlib/kernel_pybind11_helpers.h"
 #include "pybind11_abseil/status_casters.h"  // IWYU pragma: keep
 
-#define CUDA_RETURN_IF_ERROR(expr) JAX_RETURN_IF_ERROR(JAX_AS_STATUS(expr))
+#define HIP_RETURN_IF_ERROR(expr) JAX_RETURN_IF_ERROR(JAX_AS_STATUS(expr))
 
 
 namespace py = pybind11;
@@ -119,11 +119,11 @@ PYBIND11_MODULE(_triton, m) {
 
   m.def("get_compute_capability", [](int device) -> absl::StatusOr<int> {
     int major, minor;
-    CUDA_RETURN_IF_ERROR(cuInit(device));
-    CUDA_RETURN_IF_ERROR(cuDeviceGetAttribute(
-        &major, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, device));
-    CUDA_RETURN_IF_ERROR(cuDeviceGetAttribute(
-        &minor, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR, device));
+    HIP_RETURN_IF_ERROR(hipInit(device));
+    HIP_RETURN_IF_ERROR(hipDeviceGetAttribute(
+        &major, hipDeviceAttributeComputeCapabilityMajor, device));
+    HIP_RETURN_IF_ERROR(hipDeviceGetAttribute(
+        &minor, hipDeviceAttributeComputeCapabilityMinor, device));
     return major * 10 + minor;
   });
 
