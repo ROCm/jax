@@ -202,6 +202,8 @@ def prepare_wheel(sources_path, *, cpu):
     build_utils.copy_file(f"__main__/jaxlib/cuda/_sparse.{pyext}", dst_dir=cuda_dir, runfiles=r)
   if exists(f"__main__/jaxlib/rocm/_sparse.{pyext}"):
     build_utils.copy_file(f"__main__/jaxlib/rocm/_sparse.{pyext}", dst_dir=rocm_dir, runfiles=r)
+  if exists(f"__main__/jaxlib/rocm/_triton.{pyext}"):
+    build_utils.copy_file(f"__main__/jaxlib/rocm/_triton.{pyext}", dst_dir=rocm_dir, runfiles=r)
 
   mosaic_dir = os.path.join(jaxlib_dir, "mosaic")
   mosaic_python_dir = os.path.join(mosaic_dir, "python")

@@ -123,7 +123,6 @@ def mha_forward_kernel(
   acc = acc.astype(o_ref.dtype)
   pl.store(o_ref, (pl.dslice(start_q * block_q, block_q), pl.dslice(None)), acc)
 
-
 def segment_mask(
     q_segment_ids: jax.Array,
     kv_segment_ids: jax.Array,
@@ -163,8 +162,8 @@ def mha(
     segment_ids: jnp.ndarray | None,
     sm_scale: float = 1.0,
     causal: bool = False,
-    block_q: int = 128,
-    block_k: int = 128,
+    block_q: int = 64,
+    block_k: int = 64,
     backward_pass_impl: str = "triton",
     num_warps: Optional[int] = None,
     num_stages: int = 2,

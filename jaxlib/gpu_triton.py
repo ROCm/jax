@@ -15,10 +15,10 @@
 from jaxlib import xla_client
 
 try:
-  from .cuda import _triton  # pytype: disable=import-error
+  from .rocm import _triton  # pytype: disable=import-error
   xla_client.register_custom_call_target(
       "triton_kernel_call", _triton.get_custom_call(),
-      platform='CUDA')
+      platform='ROCM')
   TritonKernelCall = _triton.TritonKernelCall
   TritonAutotunedKernelCall = _triton.TritonAutotunedKernelCall
   TritonKernel = _triton.TritonKernel
