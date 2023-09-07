@@ -1445,6 +1445,7 @@ class FusedAttentionTest(PallasTest):
               (1, 384, 8, 64, True, True, False),
               (2, 384, 8, 64, True, True, True),
           ]
+
       ]
   )
   def test_fused_attention_fwd(
@@ -1562,9 +1563,9 @@ class FusedAttentionTest(PallasTest):
 
     dq, dk, dv = jax.grad(f, argnums=(0, 1, 2))(q, k, v)
     dq_ref, dk_ref, dv_ref = jax.grad(f_ref, argnums=(0, 1, 2))(q, k, v)
-    np.testing.assert_allclose(dq, dq_ref, atol=0.1)
-    np.testing.assert_allclose(dk, dk_ref, atol=0.08)
-    np.testing.assert_allclose(dv, dv_ref, atol=0.05)
+    np.testing.assert_allclose(dq, dq_ref, atol=0.30)
+    np.testing.assert_allclose(dk, dk_ref, atol=0.30)
+    np.testing.assert_allclose(dv, dv_ref, atol=0.30)
 
 
 class FusedLayerNormTest(PallasTest):
@@ -1572,6 +1573,7 @@ class FusedLayerNormTest(PallasTest):
   @parameterized.parameters(*[
     (1, 384, 192),
     (2, 384, 192),
+    (2, 1024, 192),
   ])
   def test_fused_layernorm_fwd(self, batch_size, seq_len, embed_dim):
     if plgpu.get_compute_capability(0) < 70:

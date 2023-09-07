@@ -1646,12 +1646,12 @@ def pallas_call_lowering(
         grid_mapping=grid_mapping,
         **compiler_params
     )
-  num_warps = compiler_params.get("num_warps", 1)
+  num_warps = compiler_params.get("num_warps", 4)
   num_stages = compiler_params.get("num_stages", 1)
   if debug:
-    #print(jaxpr)
-    #print(grid_mapping)
-    write_to_file(str(jaxpr)+str(grid_spec), "dump.jaxpr")
+    print(jaxpr)
+    print(grid_mapping)
+    write_to_file(str(jaxpr)+str(grid_mapping), "dump.jaxpr")
   compilation_result = compile_jaxpr(
       jaxpr,
       tuple((*in_shapes, *out_shapes)),
