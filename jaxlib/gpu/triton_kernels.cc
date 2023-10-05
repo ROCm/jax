@@ -152,25 +152,37 @@ class ModuleImage {
         module_image_(std::move(module_image)),
         shared_mem_bytes_(shared_mem_bytes) {}
 
-  absl::StatusOr<hipFunction_t> GetFunctionForContext(hipStream_t stream) {
+  absl::StatusOr<hipFunction_t> GetFunctionForContext(hipCtx_t context) {
     absl::MutexLock lock(&mutex_);
-    //auto it = functions_.find(context);
-    //if (ABSL_PREDICT_TRUE(it != functions_.end())) {
-    //  return it->second;
-    //}
+    auto it = functions_.find(context);
+    if (ABSL_PREDICT_TRUE(it != functions_.end())) {
+      return it->second;
+    }
 
-    //HIP_RETURN_IF_ERROR(cuCtxPushCurrent(context));
-    //absl::Cleanup ctx_restorer = [] { cuCtxPopCurrent(nullptr); };
+    hipJitOption opt[] = {hipJitOptionErrorLogBufferSizeBytes,
+                          hipJitOptionErrorLogBuffer,
+                          hipJitOptionInfoLogBufferSizeBytes,
+                          hipJitOptionInfoLogBuffer, hipJitOptionLogVerbose
+                          };
+    const unsigned int errbufsize = 8192;
+    const unsigned int logbufsize = 8192;
+    char _err[errbufsize];
+    char _log[logbufsize];
+    void *optval[] = {(void *)(uintptr_t)errbufsize, (void *)_err,
+                      (void *)(uintptr_t)logbufsize, (void *)_log, (void *)1};
+    HIP_RETURN_IF_ERROR(hipCtxPushCurrent(context));
+    absl::Cleanup ctx_restorer = [] { hipCtxPopCurrent(nullptr); };
 
     hipModule_t module;
-    HIP_RETURN_IF_ERROR(hipModuleLoadData(&module, module_image_.data()));
+    //HIP_RETURN_IF_ERROR(hipModuleLoadData(&module, module_image_.data()));
+    HIP_RETURN_IF_ERROR(hipModuleLoadDataEx(&module, module_image_.data(), 5, opt, optval));
     modules_.push_back(OwnedROCmmodule(module, ROCmModuleDeleter()));
 
     hipFunction_t function;
     HIP_RETURN_IF_ERROR(
         hipModuleGetFunction(&function, module, kernel_name_.c_str()));
-    //auto [_, success] = functions_.insert({context, function});
-    //CHECK(success);
+    auto [_, success] = functions_.insert({context, function});
+    CHECK(success);
 
     // The maximum permitted static shared memory allocation in CUDA is 48kB,
     // but we can expose more to the kernel using dynamic shared memory.
@@ -181,8 +193,8 @@ class ModuleImage {
 
     // Set up dynamic shared memory.
     hipDevice_t device;
-    int device_id = hipGetStreamDeviceId(stream);
-    HIP_RETURN_IF_ERROR(hipDeviceGet(&device, device_id));
+    //int device_id = hipGetStreamDeviceId(stream);
+    HIP_RETURN_IF_ERROR(hipCtxGetDevice(&device));
 
     int shared_optin;
     HIP_RETURN_IF_ERROR(hipDeviceGetAttribute(
@@ -218,7 +230,7 @@ class ModuleImage {
 
   absl::Mutex mutex_;
   std::vector<OwnedROCmmodule> modules_ ABSL_GUARDED_BY(mutex_);
-  //absl::flat_hash_map<CUcontext, CUfunction> functions_ ABSL_GUARDED_BY(mutex_);
+  absl::flat_hash_map<hipCtx_t, hipFunction_t> functions_ ABSL_GUARDED_BY(mutex_);
 };
 
 Kernel::Kernel(std::string kernel_name, uint32_t num_warps,
@@ -240,8 +252,13 @@ absl::Status Kernel::Launch(hipStream_t stream, uint32_t grid[3], void** params)
 
   //CUcontext context;
   //HIP_RETURN_IF_ERROR(cuStreamGetCtx(stream, &context));
+  hipCtx_t context;
+  hipDevice_t device;
+  int device_id = hipGetStreamDeviceId(stream);
+  HIP_RETURN_IF_ERROR(hipDeviceGet(&device, device_id));
+  HIP_RETURN_IF_ERROR(hipDevicePrimaryCtxRetain(&context, device));
   JAX_ASSIGN_OR_RETURN(hipFunction_t kernel,
-                       module_image_->GetFunctionForContext(stream));
+                       module_image_->GetFunctionForContext(context));
   return JAX_AS_STATUS(hipModuleLaunchKernel(
       kernel, grid[0], grid[1], grid[2], block_dim_x_,
       /*blockDimY=*/1, /*blockDimZ=*/1, shared_mem_bytes_, stream, params,
