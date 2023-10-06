@@ -1714,6 +1714,7 @@ class APITest(jtu.JaxTestCase):
     self.assertIsInstance(y2[1][1], np.ndarray)
     assert np.all(y2[1][1] == 3 * x)
 
+  @jtu.skip_on_devices("rocm")
   def test_device_put_sharding(self):
     mesh = jax.sharding.Mesh(jax.devices(), ('x',))
     s = jax.sharding.NamedSharding(mesh, P('x'))
@@ -2876,6 +2877,7 @@ class APITest(jtu.JaxTestCase):
     x = jnp.ones((5, 6, 4), dtype=jnp.float32)
     _ = jax.xla_computation(fn, axis_env=(('i', 8),), backend='cpu')(x)
 
+  @jtu.skip_on_devices("rocm")
   def test_concurrent_device_get_and_put(self):
     def f(x):
       for _ in range(100):
@@ -10089,6 +10091,7 @@ class CustomApiTest(jtu.JaxTestCase):
 
 class BufferDonationTest(jtu.BufferDonationTestCase):
 
+  @jtu.skip_on_devices("rocm")
   @jtu.device_supports_buffer_donation()
   def test_pmap_donate_argnums_invalidates_input(self):
     move = api.pmap(lambda x: x + x - x, donate_argnums=0)

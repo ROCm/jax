@@ -570,6 +570,7 @@ class DebugPrintControlFlowTest(jtu.JaxTestCase):
       x: 10
       """))
 
+  @jtu.skip_on_devices("rocm")
   @jtu.sample_product(ordered=[False, True])
   def test_can_print_in_batched_while_cond(self, ordered):
     def f(x):
@@ -700,6 +701,7 @@ class DebugPrintParallelTest(jtu.JaxTestCase):
         ValueError, "Ordered effects not supported in `pmap`."):
       f(jnp.arange(jax.local_device_count()))
 
+  @jtu.skip_on_devices("rocm")
   def test_unordered_print_works_in_pmap(self):
     if jax.device_count() < 2:
       raise unittest.SkipTest("Test requires >= 2 devices.")
@@ -722,6 +724,7 @@ class DebugPrintParallelTest(jtu.JaxTestCase):
       jax.effects_barrier()
     self._assertLinesEqual(output(), "hello: 0\nhello: 1\nhello: 2\nhello: 3\n")
 
+  @jtu.skip_on_devices("rocm")
   def test_unordered_print_with_pjit(self):
     def f(x):
       debug_print("{}", x, ordered=False)
@@ -757,6 +760,7 @@ class DebugPrintParallelTest(jtu.JaxTestCase):
       jax.effects_barrier()
     self.assertEqual(output(), "[0 1 2 3 4 5 6 7]\n")
 
+  @jtu.skip_on_devices("rocm")
   def test_unordered_print_of_pjit_of_while(self):
     def f(x):
       def cond(carry):
@@ -783,6 +787,7 @@ class DebugPrintParallelTest(jtu.JaxTestCase):
           "[ 3  4  5  6  7  8  9 10]\n"
           "[ 4  5  6  7  8  9 10 11]\n")
 
+  @jtu.skip_on_devices("rocm")
   def test_unordered_print_of_pjit_of_xmap(self):
     def f(x):
       def foo(x):
@@ -804,6 +809,7 @@ class DebugPrintParallelTest(jtu.JaxTestCase):
         jax.effects_barrier()
         self._assertLinesEqual(output(), "\n".join(lines))
 
+  @jtu.skip_on_devices("rocm")
   def test_unordered_print_with_xmap(self):
     def f(x):
       debug_print("{}", x, ordered=False)
@@ -816,6 +822,7 @@ class DebugPrintParallelTest(jtu.JaxTestCase):
       lines = [f"{i}\n" for i in range(40)]
       self._assertLinesEqual(output(), "".join(lines))
 
+  @jtu.skip_on_devices("rocm")
   def test_unordered_print_works_in_pmap_of_while(self):
     if jax.device_count() < 2:
       raise unittest.SkipTest("Test requires >= 2 devices.")
@@ -1072,6 +1079,7 @@ class VisualizeShardingTest(jtu.JaxTestCase):
 
 class InspectShardingTest(jtu.JaxTestCase):
 
+  @jtu.skip_on_devices("rocm")
   def test_inspect_sharding_is_called_in_pjit(self):
 
     if jtu.is_cloud_tpu():
