@@ -617,6 +617,7 @@ class JaxExportTest(jtu.JaxTestCase):
     res = export.call_exported(exp)(x)
     self.assertAllClose(res, _testing_multi_platform_fun_expected(x))
 
+  @jtu.skip_on_devices("rocm")
   def test_multi_platform_nested(self):
     if jtu.test_device_matches(["tpu"]):
       # The outer export is not applicable to TPU
