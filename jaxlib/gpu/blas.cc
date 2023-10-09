@@ -18,23 +18,23 @@ limitations under the License.
 #include <utility>
 #include <vector>
 
-#include "nanobind/nanobind.h"
-#include "nanobind/stl/pair.h"
+#include "pybind11/numpy.h"
+#include "pybind11/pybind11.h"
+#include "pybind11/stl.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/strings/str_format.h"
 #include "jaxlib/gpu/blas_kernels.h"
 #include "jaxlib/gpu/vendor.h"
-#include "jaxlib/kernel_nanobind_helpers.h"
-#include "tsl/python/lib/core/numpy.h"
+#include "jaxlib/kernel_pybind11_helpers.h"
 
 namespace jax {
 namespace JAX_GPU_NAMESPACE {
 namespace {
 
-namespace nb = nanobind;
+namespace py = pybind11;
 
 // Converts a NumPy dtype to a Type.
-BlasType DtypeToBlasType(const dtype& np_type) {
+BlasType DtypeToBlasType(const py::dtype& np_type) {
   static auto* types = new absl::flat_hash_map<std::pair<char, int>, BlasType>({
       {{'f', 4}, BlasType::F32},
       {{'f', 8}, BlasType::F64},
@@ -43,15 +43,14 @@ BlasType DtypeToBlasType(const dtype& np_type) {
   });
   auto it = types->find({np_type.kind(), np_type.itemsize()});
   if (it == types->end()) {
-    nb::str repr = nb::repr(np_type);
     throw std::invalid_argument(
-        absl::StrFormat("Unsupported dtype %s", repr.c_str()));
+        absl::StrFormat("Unsupported dtype %s", py::repr(np_type)));
   }
   return it->second;
 }
 
 // Returns the descriptor for a GetrfBatched operation.
-std::pair<size_t, nb::bytes> BuildGetrfBatchedDescriptor(const dtype& dtype,
+std::pair<size_t, py::bytes> BuildGetrfBatchedDescriptor(const py::dtype& dtype,
                                                          int b, int n) {
   BlasType type = DtypeToBlasType(dtype);
   size_t size = b * sizeof(void*);
@@ -59,23 +58,21 @@ std::pair<size_t, nb::bytes> BuildGetrfBatchedDescriptor(const dtype& dtype,
 }
 
 // Returns the descriptor for a GetrfBatched operation.
-std::pair<size_t, nb::bytes> BuildGeqrfBatchedDescriptor(const dtype& dtype,
+std::pair<size_t, py::bytes> BuildGeqrfBatchedDescriptor(const py::dtype& dtype,
                                                          int b, int m, int n) {
   BlasType type = DtypeToBlasType(dtype);
   size_t size = b * sizeof(void*);
   return {size, PackDescriptor(GeqrfBatchedDescriptor{type, b, m, n})};
 }
 
-nb::dict Registrations() {
-  nb::dict dict;
+py::dict Registrations() {
+  py::dict dict;
   dict[JAX_GPU_PREFIX "blas_getrf_batched"] = EncapsulateFunction(GetrfBatched);
   dict[JAX_GPU_PREFIX "blas_geqrf_batched"] = EncapsulateFunction(GeqrfBatched);
   return dict;
 }
 
-NB_MODULE(_blas, m) {
-  tsl::ImportNumpy();
-
+PYBIND11_MODULE(_blas, m) {
   m.def("registrations", &Registrations);
   m.def("build_getrf_batched_descriptor", &BuildGetrfBatchedDescriptor);
   m.def("build_geqrf_batched_descriptor", &BuildGeqrfBatchedDescriptor);

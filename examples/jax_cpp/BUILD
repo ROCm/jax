@@ -30,7 +30,7 @@ cc_binary(
         "@xla//xla/pjrt:tfrt_cpu_pjrt_client",
         "@xla//xla/service:hlo_proto_cc",
         "@xla//xla/tools:hlo_module_loader",
-        "@tsl//tsl/platform:logging",
-        "@tsl//tsl/platform:platform_port",
+        "@tsl///platform:logging",
+        "@tsl///platform:platform_port",
     ],
 )

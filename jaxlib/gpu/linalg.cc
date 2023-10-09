@@ -13,16 +13,14 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#include "nanobind/nanobind.h"
+#include "pybind11/pybind11.h"
 #include "jaxlib/gpu/gpu_kernel_helpers.h"
 #include "jaxlib/gpu/lu_pivot_kernels.h"
-#include "jaxlib/kernel_nanobind_helpers.h"
+#include "jaxlib/kernel_pybind11_helpers.h"
 
 namespace jax {
 namespace JAX_GPU_NAMESPACE {
 namespace {
-
-namespace nb = nanobind;
 
 std::string BuildLuPivotsToPermutationDescriptor(
     std::int64_t batch_size, std::int32_t pivot_size,
@@ -31,21 +29,21 @@ std::string BuildLuPivotsToPermutationDescriptor(
       batch_size, pivot_size, permutation_size});
 }
 
-nb::dict Registrations() {
-  nb::dict dict;
+pybind11::dict Registrations() {
+  pybind11::dict dict;
   dict[JAX_GPU_PREFIX "_lu_pivots_to_permutation"] =
       EncapsulateFunction(LuPivotsToPermutation);
   return dict;
 }
 
-NB_MODULE(_linalg, m) {
+PYBIND11_MODULE(_linalg, m) {
   m.def("registrations", &Registrations);
   m.def("lu_pivots_to_permutation_descriptor",
         [](std::int64_t batch_size, std::int32_t pivot_size,
            std::int32_t permutation_size) {
           std::string result = BuildLuPivotsToPermutationDescriptor(
               batch_size, pivot_size, permutation_size);
-          return nb::bytes(result.data(), result.size());
+          return pybind11::bytes(result);
         });
 }
 
