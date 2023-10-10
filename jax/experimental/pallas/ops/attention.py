@@ -161,11 +161,11 @@ def mha(
     segment_ids: jnp.ndarray | None,
     sm_scale: float = 1.0,
     causal: bool = False,
-    block_q: int = 64,
-    block_k: int = 64,
+    block_q: int = 128,
+    block_k: int = 128,
     backward_pass_impl: str = "triton",
     num_warps: Optional[int] = None,
-    num_stages: int = 2,
+    num_stages: int = 1,
     grid=None,
     interpret: bool = False,
     debug: bool = False,
@@ -333,7 +333,7 @@ def _preprocess_backward(out, do, l, block_q: int,
         pl.BlockSpec(lambda _, j, k: (j, k, 0), (None, None, seq_len)),
       ],
       num_warps=4,
-      num_stages=3,
+      num_stages=1,
       out_shape=out_shape,
       debug=debug,
       interpret=interpret,
@@ -448,7 +448,8 @@ def _mha_backward(sm_scale: float, causal: bool, block_q: int, block_k: int,
   q, k, v, segment_ids, out, l, m = res
 
   batch_size, seq_len, num_heads, head_dim = q.shape
-  block_q = min(block_q, seq_len)
+  # We run out of shared memory with 128 x 128 blocks for bwd kernel
+  block_q = min(block_q, 64, seq_len)
   block_k = min(block_k, seq_len)
   do_scaled, delta = _preprocess_backward(out, do, l, block_q, debug, interpret)
 
