@@ -550,7 +550,7 @@ class cuSparseTest(sptu.SparseTestCase):
   @unittest.skipIf(
       not sptu.GPU_LOWERING_ENABLED, "test requires cusparse/hipsparse"
   )
-  @unittest.skipIf(not GPU_LOWERING_ENABLED, "test requires cusparse/hipsparse")
+  #@unittest.skipIf(not GPU_LOWERING_ENABLED, "test requires cusparse/hipsparse")
   @jtu.skip_on_devices("rocm")
   def test_coo_spmv(self, shape, dtype, transpose):
     rng_sparse = sptu.rand_sparse(self.rng())
@@ -577,7 +577,7 @@ class cuSparseTest(sptu.SparseTestCase):
   @unittest.skipIf(
       not sptu.GPU_LOWERING_ENABLED, "test requires cusparse/hipsparse"
   )
-  @unittest.skipIf(not GPU_LOWERING_ENABLED, "test requires cusparse/hipsparse")
+  #@unittest.skipIf(not GPU_LOWERING_ENABLED, "test requires cusparse/hipsparse")
   @jtu.skip_on_devices("rocm")
   def test_coo_spmm(self, shape, dtype, transpose):
     rng_sparse = sptu.rand_sparse(self.rng())
@@ -604,7 +604,7 @@ class cuSparseTest(sptu.SparseTestCase):
   @unittest.skipIf(
       not sptu.GPU_LOWERING_ENABLED, "test requires cusparse/hipsparse"
   )
-  @unittest.skipIf(not GPU_LOWERING_ENABLED, "test requires cusparse/hipsparse")
+  #@unittest.skipIf(not GPU_LOWERING_ENABLED, "test requires cusparse/hipsparse")
   @jtu.skip_on_devices("rocm")
   def test_csr_spmv(self, shape, dtype, transpose):
     rng_sparse = sptu.rand_sparse(self.rng())
@@ -629,7 +629,7 @@ class cuSparseTest(sptu.SparseTestCase):
   @unittest.skipIf(
       not sptu.GPU_LOWERING_ENABLED, "test requires cusparse/hipsparse"
   )
-  @unittest.skipIf(not GPU_LOWERING_ENABLED, "test requires cusparse/hipsparse")
+  #@unittest.skipIf(not GPU_LOWERING_ENABLED, "test requires cusparse/hipsparse")
   @jtu.skip_on_devices("rocm")
   def test_csr_spmm(self, shape, dtype, transpose):
     rng_sparse = sptu.rand_sparse(self.rng())
