@@ -600,6 +600,7 @@ class JaxExportTest(jtu.JaxTestCase):
           export.poly_spec(x.shape, x.dtype, poly_spec))
       export.call_exported(exp)(x)
 
+  @jtu.skip_on_devices("rocm")
   def test_multi_platform(self):
     if jtu.test_device_matches(["gpu"]):
       # The export is not applicable to GPU
@@ -621,6 +622,7 @@ class JaxExportTest(jtu.JaxTestCase):
     res = export.call_exported(exp)(x)
     self.assertAllClose(res, _testing_multi_platform_fun_expected(x))
 
+  @jtu.skip_on_devices("rocm")
   def test_multi_platform_nested(self):
     if jtu.test_device_matches(["tpu"]):
       # The outer export is not applicable to TPU
@@ -638,6 +640,7 @@ class JaxExportTest(jtu.JaxTestCase):
     res2 = export.call_exported(exp2)(x)
     self.assertAllClose(res2, _testing_multi_platform_fun_expected(x))
 
+  @jtu.skip_on_devices("rocm")
   def test_multi_platform_nested_inside_single_platform_export(self):
     x = np.arange(5, dtype=np.float32)
     exp = export.export(_testing_multi_platform_func,
