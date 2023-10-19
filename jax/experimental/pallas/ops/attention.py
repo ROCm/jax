@@ -39,6 +39,7 @@ def mha_forward_kernel(
     block_q: int,
     block_d: int,
     block_k: int,
+    preload_v: bool,
 ):
   seq_len = q_ref.shape[0]
   start_q = pl.program_id(0)
@@ -54,6 +55,7 @@ def mha_forward_kernel(
   # read, compute, and write all in 2d chunks. 1 element ~= 1 CUDA thread index.
   # q tile has shape [block_q, block_d], block_d == head_dim.
   q = pl.load(q_ref, (pl.dslice(start_q * block_q, block_q), pl.dslice(None)))
+  q = (q * sm_scale * 1.44269504).astype(q_ref)
   q_segment_ids = (
       None
       if segment_ids_ref is None
@@ -67,6 +69,8 @@ def mha_forward_kernel(
     acc, m_prev, l_prev = carry
 
     k = pl.load(k_ref, (pl.dslice(start_k * block_k, block_k), slice(None)))
+    if preload_v:
+      v = pl.load(v_ref, (pl.dslice(start_k * block_k, block_k), slice(None)))
     kv_segment_ids = (
         None
         if segment_ids_ref is None
@@ -74,8 +78,6 @@ def mha_forward_kernel(
     )
     qk = jnp.zeros([block_q, block_k], dtype=jnp.float32)
     qk += pl.dot(q, k.T)   # [block_q, block_k]
-    if sm_scale != 1.:
-      qk *= sm_scale # [block_q, block_k]
 
     # Bring closer to XLA:GPU numerics.
     qk = qk.astype(q_ref.dtype)
@@ -94,18 +96,16 @@ def mha_forward_kernel(
         )
       # Apply mask to qk.
       qk = jnp.where(mask, qk, DEFAULT_MASK_VALUE)
-    m_curr = jnp.maximum(jnp.max(qk, axis=1), m_prev)
-    l_prev *= jnp.exp(m_prev - m_curr)
-    p = jnp.exp(qk - m_curr[:, None])
-    l_curr = jnp.sum(p, axis=1) + l_prev
-
-    l_rcp = 1. / l_curr
-    p = p * l_rcp[:, None]
-    acc *= (l_prev * l_rcp)[:, None]
-    p = p.astype(jnp.float16)
-
-    v = pl.load(v_ref, (pl.dslice(start_k * block_k, block_k), pl.dslice(block_d)))
-    acc = acc + pl.dot(p.astype(v.dtype), v)
+    m_i_new = jnp.maximum(m_prev, jnp.max(qk, axis=1))
+    alpha = jnp.exp2(m_prev - m_i_new)
+    p = jnp.exp2(qk - m_i_new[:, None])
+    l_curr = l_prev * alpha + jnp.sum(p, 1)
+    m_curr = m_i_new
+    acc_scale = l_prev * 0 + alpha
+    acc *= acc_scale[:, None]
+    if not preload_v:
+      v = pl.load(v_ref, (pl.dslice(start_k * block_k, block_k), slice(None)))
+    acc += pl.dot(p.astype(jnp.float16), v)
     return acc, m_curr, l_curr
   if causal:
     # Ceildiv (`pl.cdiv` and `//` do not work due to type of start_q)
@@ -115,10 +115,11 @@ def mha_forward_kernel(
   acc, m_i, l_i = lax.fori_loop(0, upper_bound, body,
                                 (acc, m_i, l_i))
 
+  acc = acc / l_i[:, None]
+
   if residual_refs:
     l_ref, m_ref = residual_refs
-    pl.store(l_ref, (pl.ds(start_q * block_q, block_q),), l_i)
-    pl.store(m_ref, (pl.ds(start_q * block_q, block_q),), m_i)
+    pl.store(l_ref, (pl.ds(start_q * block_q, block_q),), m_i + jnp.log2(l_i))
   # Write output to dram.
   acc = acc.astype(o_ref.dtype)
   pl.store(o_ref, (pl.dslice(start_q * block_q, block_q), pl.dslice(None)), acc)
@@ -162,11 +163,11 @@ def mha(
     segment_ids: jnp.ndarray | None,
     sm_scale: float = 1.0,
     causal: bool = False,
-    block_q: int = 64,
+    block_q: int = 128,
     block_k: int = 64,
     backward_pass_impl: str = "triton",
     num_warps: Optional[int] = None,
-    num_stages: int = 2,
+    num_stages: int = 1,
     grid=None,
     interpret: bool = False,
     debug: bool = False,
@@ -179,6 +180,7 @@ def mha(
   grid_ = grid
   if grid_ is None:
     grid_ = (pl.cdiv(seq_len, block_q), batch_size, num_heads)
+  preload_v = True if head_dim <= 64 else False
 
   num_warps_ = num_warps
   if num_warps_ is None:
@@ -186,7 +188,7 @@ def mha(
   kernel = functools.partial(mha_forward_kernel, sm_scale=sm_scale,
                              block_q=block_q, block_k=block_k,
                              block_d=head_dim,
-                             causal=causal)
+                             causal=causal, preload_v=preload_v)
 
   in_specs = [
       pl.BlockSpec(
@@ -245,13 +247,14 @@ def _mha_forward(
   grid_ = grid
   if grid_ is None:
     grid_ = (pl.cdiv(seq_len, block_q), batch_size, num_heads)
+  preload_v = True if head_dim <= 64 else False
 
   num_warps_ = num_warps
   if num_warps_ is None:
     num_warps_ = 4 if head_dim <= 64 else 8
   kernel = functools.partial(mha_forward_kernel, sm_scale=sm_scale,
                              causal=causal, block_q=block_q, block_k=block_k,
-                             block_d=head_dim)
+                             block_d=head_dim, preload_v=preload_v)
   out_shape = [
       jax.ShapeDtypeStruct(shape=q.shape, dtype=q.dtype), # out
       jax.ShapeDtypeStruct(shape=(batch_size, num_heads, seq_len), # l
