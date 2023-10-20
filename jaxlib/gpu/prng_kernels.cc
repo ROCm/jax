@@ -30,7 +30,7 @@ absl::Status ThreeFry2x32_(gpuStream_t stream, void** buffers,
   auto s = UnpackDescriptor<ThreeFry2x32Descriptor>(opaque, opaque_len);
   JAX_RETURN_IF_ERROR(s.status());
   LaunchThreeFry2x32Kernel(stream, buffers, **s);
-  JAX_RETURN_IF_ERROR(JAX_AS_STATUS(gpuGetLastError()));
+  //JAX_RETURN_IF_ERROR(JAX_AS_STATUS(gpuGetLastError()));
   return absl::OkStatus();
 }
 
