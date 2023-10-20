@@ -58,8 +58,9 @@ export JAX_ROCM_VERSION=${rocm_version//./}
 
 #Build and install wheel
 rocm_base_dir="/opt/$(ls /opt | grep -E 'rocm-[0-9]+\.[0-9]+\.[0-9](-[0-9]+)?')"
-gcn_arch_name=gfx941
+gcn_arch_name="$(rocminfo | grep gfx | head -n 1 | awk '{print $2}')"
 echo "rocm_base_dir: $rocm_base_dir"
+echo "gcn_arch_name: $gcn_arch_name"
 python3 ./build/build.py \
         --enable_rocm \
         --rocm_path=$rocm_base_dir \
