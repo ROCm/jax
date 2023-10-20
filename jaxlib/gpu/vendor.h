@@ -294,9 +294,9 @@ typedef cusparseDnVecDescr_t gpusparseDnVecDescr_t;
 #elif defined(JAX_GPU_HIP)
 
 #include "rocm/include/hip/hip_runtime_api.h"
-#include "rocm/include/hipblas.h"
-#include "rocm/include/hipsolver.h"
-#include "rocm/include/hipsparse.h"
+#include "rocm/include/hipblas/hipblas.h"
+#include "rocm/include/hipsolver/hipsolver.h"
+#include "rocm/include/hipsparse/hipsparse.h"
 
 #define JAX_GPU_NAMESPACE hip
 #define JAX_GPU_PREFIX "hip"

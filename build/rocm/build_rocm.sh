@@ -57,7 +57,14 @@ rocm_version=$(cat /opt/rocm/.info/version | cut -d "-" -f 1)
 export JAX_ROCM_VERSION=${rocm_version//./}
 
 #Build and install wheel
-python3 ./build/build.py --enable_rocm --rocm_path=${ROCM_PATH} --bazel_options=--override_repository=xla=${XLA_CLONE_DIR}
+rocm_base_dir="/opt/$(ls /opt | grep -E 'rocm-[0-9]+\.[0-9]+\.[0-9](-[0-9]+)?')"
+gcn_arch_name=gfx941
+echo "rocm_base_dir: $rocm_base_dir"
+python3 ./build/build.py \
+        --enable_rocm \
+        --rocm_path=$rocm_base_dir \
+        --rocm_amdgpu_targets=$gcn_arch_name \
+        --bazel_options=--override_repository=xla=${XLA_CLONE_DIR}
 
 JAX_RELEASE=1 python -m build
 #pip3 install --force-reinstall .  # installs jax
