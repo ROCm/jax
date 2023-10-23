@@ -74,7 +74,7 @@ ENV PATH="$ROCM_PATH/bin:${PATH}"
 ENV PATH="$OPENCL_ROOT/bin:${PATH}"
 
 # Add target file to help determine which device(s) to build for
-RUN bash -c 'echo -e "gfx900\ngfx906\ngfx908\ngfx90a\ngfx940\ngfx941\ngfx1030" >> ${ROCM_PATH}/bin/target.lst'
+RUN bash -c 'echo -e "gfx900\ngfx906\ngfx908\ngfx90a\ngfx940\ngfx941\ngfx942\ngfx1030" >> ${ROCM_PATH}/bin/target.lst'
 
 # Need to explicitly create the $ROCM_PATH/.info/version file to workaround what seems to be a bazel bug
 # The env vars being set via --action_env in .bazelrc and .tf_configure.bazelrc files are sometimes
