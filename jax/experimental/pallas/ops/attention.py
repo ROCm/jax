@@ -105,7 +105,7 @@ def mha_forward_kernel(
     acc *= acc_scale[:, None]
     if not preload_v:
       v = pl.load(v_ref, (pl.dslice(start_k * block_k, block_k), slice(None)))
-    acc += pl.dot(p.astype(jnp.float16), v)
+    acc += pl.dot(p.astype(jnp.bfloat16), v)
     return acc, m_curr, l_curr
   if causal:
     # Ceildiv (`pl.cdiv` and `//` do not work due to type of start_q)
