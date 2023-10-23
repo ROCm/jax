@@ -433,7 +433,7 @@ def main():
       help="A comma-separated list of CUDA compute capabilities to support.")
   parser.add_argument(
       "--rocm_amdgpu_targets",
-      default="gfx900,gfx906,gfx908,gfx90a,gfx940,gfx941,gfx1030",
+      default="gfx900,gfx906,gfx908,gfx90a,gfx940,gfx941,gfx942,gfx1030",
       help="A comma-separated list of ROCm amdgpu targets to support.")
   parser.add_argument(
       "--rocm_path",
