@@ -749,6 +749,7 @@ def _compute_pointers_from_indices(
     nd_indexer: NDIndexer,
     array_shape: Tuple[int, ...],
     builder: tl_ir.builder,
+    transpose = False,
 ) -> tl.core.tensor:
   if block_info is None:
     full_shape = array_shape
@@ -820,9 +821,10 @@ def _compute_pointers_from_indices(
       )
     else:
       for _ in range(num_left_expand_dims):
-        ptr_dim_offset = tl.semantic.expand_dims(ptr_dim_offset, 0, builder)
+        ndim = len(ptr_dim_offset.shape) if transpose else 0
+        ptr_dim_offset = tl.semantic.expand_dims(ptr_dim_offset, ndim, builder)
       for _ in range(num_right_expand_dims):
-        ndim = len(ptr_dim_offset.shape)
+        ndim = 0 if transpose else len(ptr_dim_offset.shape)
         ptr_dim_offset = tl.semantic.expand_dims(ptr_dim_offset, ndim, builder)
     if start_offset is not None:
       ptr_dim_offset = ptr_dim_offset.__add__(start_offset, _builder=builder)
@@ -832,6 +834,8 @@ def _compute_pointers_from_indices(
       () if not index.type.is_block() else tuple(index.type.get_block_shapes())
       for index in bcast_indices
   ]
+  if transpose:
+    indexer_shape = (indexer_shape[1], indexer_shape[0])
   bcast_indices = [
       tl.core.broadcast_to(
           index, map(tl.constexpr, indexer_shape), _builder=builder
@@ -889,6 +893,7 @@ def _masked_load_lowering_rule(
     ptr,
     *args,
     args_tree,
+    trans,
     masked,
     eviction_policy,
     cache_modifier,
@@ -896,12 +901,20 @@ def _masked_load_lowering_rule(
 ):
   ref_block_info, *_ = ctx.block_infos
   idx, *mask_other = tree_util.tree_unflatten(args_tree, args)
+  # This was previously already swapped when we call the load primitive,
+  # so it is the correct order. However, we want to compute indices normal
+  # and transpose them when we broadcast and add to create the 2D pointers.
+  # So, we swap these back here, compute everything as normal until we get
+  # to the computing the final 2D pointers at the very end of the
+  # compute_pointers_from_indices() call.
+  if trans:
+    idx = NDIndexer((idx.indices[1], idx.indices[0]), idx.shape, idx.int_indexer_shape)
   avals_in = ctx.avals_in
   if not isinstance(ptr.type, tl.pointer_type):
     assert len(avals_in) == 1
     return ptr
   ptr = _compute_pointers_from_indices(
-      ptr, ref_block_info, idx, avals_in[0].shape, ctx.builder
+      ptr, ref_block_info, idx, avals_in[0].shape, ctx.builder, trans
   )
   mask, other = None, None
   if masked:
