@@ -198,6 +198,8 @@ class ModuleImage {
 
     // The maximum permitted static shared memory allocation in CUDA is 48kB,
     // but we can expose more to the kernel using dynamic shared memory.
+    // However, on ROCm, shared memory size is 64KB by default. There is no
+    // dynamic shared memory
     constexpr int kMaxStaticSharedMemBytes = 49152;
     if (shared_mem_bytes_ <= kMaxStaticSharedMemBytes) {
       return function;
@@ -218,11 +220,10 @@ class ModuleImage {
           shared_mem_bytes_, shared_optin));
     }
 
+    #ifdef JAX_GPU_CUDA  
     if (shared_optin > kMaxStaticSharedMemBytes) {
-      #ifdef JAX_GPU_CUDA  
         GPU_RETURN_IF_ERROR(
           gpuFuncSetCacheConfig(function, CU_FUNC_CACHE_PREFER_SHARED));
-      #endif
       int shared_total;
       GPU_RETURN_IF_ERROR(gpuDeviceGetAttribute(
           &shared_total,
@@ -230,12 +231,11 @@ class ModuleImage {
       int shared_static;
       GPU_RETURN_IF_ERROR(gpuFuncGetAttribute(
           &shared_static, GPU_FUNC_ATTRIBUTE_SHARED_SIZE_BYTES, function));
-      #ifdef JAX_GPU_CUDA
         GPU_RETURN_IF_ERROR(gpuFuncSetAttribute(
           function, GPU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES,
           shared_optin - shared_static));
-      #endif
     }
+    #endif
     return function;
   }
 
