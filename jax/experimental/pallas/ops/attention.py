@@ -118,7 +118,7 @@ def mha_forward_kernel(
   acc = acc / l_i[:, None]
 
   if residual_refs:
-    l_ref, m_ref = residual_refs
+    l_ref, _ = residual_refs
     pl.store(l_ref, (pl.ds(start_q * block_q, block_q),), m_i + jnp.log2(l_i))
   # Write output to dram.
   acc = acc.astype(o_ref.dtype)
@@ -299,8 +299,7 @@ def _mha_forward(
   )(q, k, v, segment_ids)
   return out, (q, k, v, segment_ids, out, l, m)
 
-
-def _preprocess_backward_kernel(out_ref, dout_ref, l_ref,
+def _preprocess_backward_kernel(out_ref, dout_ref,
                                 new_dout_ref, delta_ref, *,
                                 block_q: int):
   pid_m = pl.program_id(0)
@@ -309,9 +308,7 @@ def _preprocess_backward_kernel(out_ref, dout_ref, l_ref,
   # load
   o = pl.load(out_ref, (off_m, slice(None))).astype(jnp.float32)
   do = pl.load(dout_ref, (off_m, slice(None))).astype(jnp.float32)
-  denom = pl.load(l_ref, (off_m,)).astype(jnp.float32)
   # compute
-  do = do / denom[:, None]
   delta = jnp.sum(o * do, axis=1)
   # write-back
   pl.store(new_dout_ref, (off_m, slice(None)),
@@ -331,18 +328,17 @@ def _preprocess_backward(out, do, l, block_q: int,
       in_specs=[
         pl.BlockSpec(lambda _, j, k: (j, 0, k, 0), (None, seq_len, None, head_dim)),
         pl.BlockSpec(lambda _, j, k: (j, 0, k, 0), (None, seq_len, None, head_dim)),
-        pl.BlockSpec(lambda _, j, k: (j, k, 0), (None, None, seq_len)),
       ],
       out_specs=[
         pl.BlockSpec(lambda _, j, k: (j, 0, k, 0), (None, seq_len, None, head_dim)),
         pl.BlockSpec(lambda _, j, k: (j, k, 0), (None, None, seq_len)),
       ],
       num_warps=4,
-      num_stages=3,
+      num_stages=1,
       out_shape=out_shape,
       debug=debug,
       interpret=interpret,
-      name="mha_preprocess_backward")(out, do, l)
+      name="mha_preprocess_backward")(out, do)
   return do_scaled, delta
 
 
@@ -369,8 +365,9 @@ def mha_backward_kernel(
     block_d: int,
     block_k: int,
 ):
-  del out_ref, l_ref  # Not needed
+  del out_ref, m_ref  # Not needed
   seq_len = q_ref.shape[0]
+  qk_scale = sm_scale * 1.44269504
 
   def outer_loop(start_k, _):
 
@@ -391,8 +388,6 @@ def mha_backward_kernel(
       qk = pl.dot(q, k.T)
       qk = qk.astype(q_ref.dtype)
       qk = qk.astype(jnp.float32)
-      if sm_scale != 1.0:
-        qk *= sm_scale
 
       q_segment_ids = (
           None
@@ -415,16 +410,14 @@ def mha_backward_kernel(
           )
         qk = jnp.where(mask, qk, DEFAULT_MASK_VALUE)
 
-      m = pl.load(m_ref, (pl.ds(start_q * block_q, block_q),))
-      p = jnp.exp(qk - m[:, None])
+      l = pl.load(l_ref, (pl.ds(start_q * block_q, block_q),))
+      p = jnp.exp2(qk * qk_scale - l[:, None])
       do = pl.load(do_scaled_ref, (pl.ds(start_q * block_q, block_q), slice(None)))
       dv = dv + pl.dot(p.astype(do.dtype).T, do)
       di = pl.load(delta_ref, (pl.ds(start_q * block_q, block_q),))
       dp = jnp.zeros((block_q, block_k), dtype=jnp.float32) - di[:, None]
       dp = dp + pl.dot(do, v.T)
-      ds = p * dp
-      if sm_scale != 1.0:
-        ds = ds * sm_scale
+      ds = p * dp * sm_scale
       dk = dk + pl.dot(ds.astype(q_ref.dtype).T, q)
       dq = pl.load(dq_ref, (pl.ds(start_q * block_q, block_q),
                             slice(None)), eviction_policy="evict_last")
@@ -443,6 +436,101 @@ def mha_backward_kernel(
     pl.store(dk_ref, (pl.ds(start_k * block_k, block_k),
                       slice(None)), dk.astype(dk_ref.dtype))
   lax.fori_loop(0, pl.cdiv(seq_len, block_k), outer_loop, None)
+
+def mha_backward_kernel_dq(
+    # Inputs
+    q_ref, k_ref, v_ref, out_ref, do_scaled_ref,
+    l_ref, m_ref, delta_ref,
+    # Outputs
+    dq_ref,
+    *, sm_scale: float, causal: bool,
+    block_q: int, block_d: int, block_k: int
+):
+  del out_ref, m_ref  # Not needed
+  seq_len = q_ref.shape[0]
+  start_q = pl.program_id(2)
+  q = pl.load(q_ref, (pl.ds(start_q * block_q, block_q), slice(None)))
+  qk_scale = 1.44269504 * sm_scale
+  q = (q * qk_scale).astype(q_ref.dtype)
+  span_q = start_q * block_q + jnp.arange(block_q)
+  l = pl.load(l_ref, (pl.ds(start_q * block_q, block_q),))
+  do = pl.load(do_scaled_ref, (pl.ds(start_q * block_q, block_q), slice(None)))
+  di = pl.load(delta_ref, (pl.ds(start_q * block_q, block_q),))
+  dq = jnp.zeros([block_q, block_d], dtype=jnp.float32)
+
+  def inner_loop(start_k, dq):
+    span_k = start_k * block_k + jnp.arange(block_k)
+    kT = pl.load(k_ref, (pl.ds(start_k * block_k, block_k), slice(None)), trans=True)
+    vT = pl.load(v_ref, (pl.ds(start_k * block_k, block_k), slice(None)),trans=True)
+
+    qk = pl.dot(q, kT)
+    if causal:
+      qk = jnp.where(span_q[:, None] >= span_k[None, :], qk, float('-inf'))
+    p = jnp.exp2(qk - l[:, None])
+    dp = jnp.zeros((block_q, block_k), dtype=jnp.float32) - di[:, None]
+    dp = dp + pl.dot(do, vT)
+    ds = p * dp
+    dq = dq + pl.dot(ds.astype(kT.dtype), kT.T).astype(dq.dtype)
+    return dq
+  if causal:
+    upper_bound = lax.div(start_q * block_q, block_k) + 1
+  else:
+    upper_bound = pl.cdiv(seq_len, block_k)
+  dq = lax.fori_loop(0, upper_bound, inner_loop, dq)
+  dq_f16 = (dq * sm_scale).astype(jnp.float16)
+  pl.store(dq_ref, (pl.ds(start_q * block_q, block_q),
+                        slice(None)), dq_f16, eviction_policy="evict_last")
+
+
+def mha_backward_kernel_dkv(
+    # Inputs
+    q_ref, k_ref, v_ref, out_ref, do_scaled_ref,
+    l_ref, m_ref, delta_ref,
+    # Outputs
+    dk_ref, dv_ref,
+    *, sm_scale: float, causal: bool,
+    block_q: int, block_d: int, block_k: int
+):
+  del out_ref, m_ref  # Not needed
+  seq_len = q_ref.shape[0]
+  start_k = pl.program_id(2)
+
+  dv = jnp.zeros([block_k, block_d], dtype=jnp.float32)
+  dk = jnp.zeros([block_k, block_d], dtype=jnp.float32)
+  qk_scale = 1.44269504 * sm_scale
+  kT = pl.load(k_ref, (pl.ds(start_k * block_k, block_k), slice(None)), trans=True)
+  kT = (kT * qk_scale).astype(k_ref.dtype)
+  vT = pl.load(v_ref, (pl.ds(start_k * block_k, block_k), slice(None)), trans=True)
+  span_k = start_k * block_k + jnp.arange(block_k)
+
+  def inner_loop(start_q, carry):
+    dv, dk = carry
+    q = pl.load(q_ref, (pl.ds(start_q * block_q, block_q), slice(None)))
+    do = pl.load(do_scaled_ref, (pl.ds(start_q * block_q, block_q), slice(None)))
+    l = pl.load(l_ref, (pl.ds(start_q * block_q, block_q),))
+    qk = pl.dot(q, kT)
+    if causal:
+      span_q = start_q * block_q + jnp.arange(block_q)
+      qk = jnp.where(span_q[:, None] >= span_k[None, :], qk, float('-inf'))
+    p = jnp.exp2(qk - l[:, None])
+    dv = dv + pl.dot(p.astype(do.dtype).T, do)
+    di = pl.load(delta_ref, (pl.ds(start_q * block_q, block_q),))
+    dp = jnp.zeros((block_q, block_k), dtype=jnp.float32) - di[:, None]
+    dp = dp + pl.dot(do, vT)
+    ds = p * dp
+    dk = dk + pl.dot(ds.astype(q_ref.dtype).T, q)
+    return dv, dk
+  if causal:
+    lower_bound = lax.div(start_k * block_k, block_q)
+  else:
+    lower_bound = 0
+  dv, dk = lax.fori_loop(lower_bound, pl.cdiv(seq_len, block_q), inner_loop,
+                           (dv, dk))
+  pl.store(dv_ref, (pl.ds(start_k * block_k, block_k),
+                      slice(None)), dv.astype(dv_ref.dtype))
+  dk *= sm_scale
+  pl.store(dk_ref, (pl.ds(start_k * block_k, block_k),
+                      slice(None)), dk.astype(dk_ref.dtype))
 
 
 def _mha_backward(sm_scale: float, causal: bool, block_q: int, block_k: int,
@@ -536,6 +624,66 @@ def _mha_backward(sm_scale: float, causal: bool, block_q: int, block_k: int,
         num_stages=1,
         input_output_aliases=input_output_aliases,
     )(q, k, v, segment_ids, out, do_scaled, l, m, delta, dq)
+  elif backward_pass_impl == "triton_split":
+    out_shapes_q = jax.ShapeDtypeStruct(shape=q.shape, dtype=q.dtype)
+
+    block_q = 128
+    grid_q = (batch_size, num_heads, pl.cdiv(seq_len, block_q))
+    num_warps = 4
+    dq = pl.pallas_call(
+        functools.partial(mha_backward_kernel_dq, block_q=block_q, block_d=head_dim,
+                          block_k=block_k, sm_scale=sm_scale, causal=causal),
+        grid=grid_q,
+        out_shape=out_shapes_q,
+        in_specs=[
+          pl.BlockSpec(lambda j, k, _: (j, 0, k, 0), (None, seq_len, None, head_dim)),
+          pl.BlockSpec(lambda j, k, _: (j, 0, k, 0), (None, seq_len, None, head_dim)),
+          pl.BlockSpec(lambda j, k, _: (j, 0, k, 0), (None, seq_len, None, head_dim)),
+          pl.BlockSpec(lambda j, k, _: (j, 0, k, 0), (None, seq_len, None, head_dim)),
+          pl.BlockSpec(lambda j, k, _: (j, 0, k, 0), (None, seq_len, None, head_dim)),
+          pl.BlockSpec(lambda j, k, _: (j, k, 0), (None, None, seq_len)),
+          pl.BlockSpec(lambda j, k, _: (j, k, 0), (None, None, seq_len)),
+          pl.BlockSpec(lambda j, k, _: (j, k, 0), (None, None, seq_len)),
+        ],
+        out_specs= pl.BlockSpec(
+            lambda j, k, _: (j, 0, k, 0), (None, seq_len, None, head_dim)
+        ),
+        name="mha_backward_q",
+        debug=debug,
+        interpret=interpret,
+        num_warps=num_warps,
+        num_stages=1)(q, k, v, out, do_scaled, l, m, delta)
+
+    block_q = 64
+    grid_kv = (1, batch_size * num_heads, pl.cdiv(seq_len, block_k))
+    out_shapes_kv = [
+      jax.ShapeDtypeStruct(k.shape, k.dtype),
+      jax.ShapeDtypeStruct(v.shape, v.dtype),
+    ]
+    dk, dv = pl.pallas_call(
+        functools.partial(mha_backward_kernel_dkv, block_q=block_q, block_d=head_dim,
+                          block_k=block_k, sm_scale=sm_scale, causal=causal),
+        grid=grid_kv,
+        out_shape=out_shapes_kv,
+        in_specs=[
+          pl.BlockSpec(lambda j, k, _: (j, 0, k, 0), (None, seq_len, None, head_dim)),
+          pl.BlockSpec(lambda j, k, _: (j, 0, k, 0), (None, seq_len, None, head_dim)),
+          pl.BlockSpec(lambda j, k, _: (j, 0, k, 0), (None, seq_len, None, head_dim)),
+          pl.BlockSpec(lambda j, k, _: (j, 0, k, 0), (None, seq_len, None, head_dim)),
+          pl.BlockSpec(lambda j, k, _: (j, 0, k, 0), (None, seq_len, None, head_dim)),
+          pl.BlockSpec(lambda j, k, _: (j, k, 0), (None, None, seq_len)),
+          pl.BlockSpec(lambda j, k, _: (j, k, 0), (None, None, seq_len)),
+          pl.BlockSpec(lambda j, k, _: (j, k, 0), (None, None, seq_len)),
+        ],
+        out_specs=[
+          pl.BlockSpec(lambda j, k, _: (j, 0, k, 0), (None, seq_len, None, head_dim)),
+          pl.BlockSpec(lambda j, k, _: (j, 0, k, 0), (None, seq_len, None, head_dim)),
+        ],
+        name="mha_backward_kv",
+        debug=debug,
+        interpret=interpret,
+        num_warps=num_warps,
+        num_stages=1)(q, k, v, out, do_scaled, l, m, delta)
   else:
     raise ValueError(f"Invalid backward pass implementation: {backward_pass_impl}")
   return dq.astype(q.dtype), dk, dv, None
