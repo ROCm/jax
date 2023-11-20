@@ -115,7 +115,7 @@ jobs:
           ls /tmp/workspace/logs/output-from-nodes/
           python .github/workflows/cat_slurm_logs.py /tmp/workspace/logs/output-from-nodes/*.txt --outfile=parsed-logs.txt
       - name: Report failures
-        uses: actions/github-script@v6
+        uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
