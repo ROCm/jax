@@ -190,6 +190,30 @@ def _process_grid_to_3d_grid(builder, grid_mapping: GridMapping):
   assert len(out_indices) == len(grid_mapping.grid)
   return new_grid, out_indices
 
+def get_amdgpu_arch_fulldetails():
+    # print("get_amdgpu_arch_fulldetails")
+    """
+    get the amdgpu fulll ISA details for compiling:
+    i.e., arch_triple: amdgcn-amd-amdhsa; arch_name: gfx906; arch_features: sramecc+:xnack-
+    """
+    try:
+        # TODO: package rocm.cc with Triton
+        rocm_path_dir = os.getenv("ROCM_PATH", default="/opt/rocm")
+        rocminfo = subprocess.check_output(rocm_path_dir + '/bin/rocminfo').decode()
+        gfx_arch_details = re.search('amd.*', rocminfo).group(0).strip().split('--')
+        arch_triple = gfx_arch_details[0]
+        arch_name_features = gfx_arch_details[1].split(':')
+        arch_name = arch_name_features[0]
+        arch_features = ""
+
+        # overwrite if provided by user
+        gfx_arch = os.environ.get('MI_GPU_ARCH', arch_name)
+        if gfx_arch is None:
+            raise RuntimeError('gfx_arch is None (not specified)')
+
+        return {"gfx_triple": arch_triple, "gfx_arch": gfx_arch, "gfx_features": arch_features}
+    except BaseException:
+        return None
 
 def lower_jaxpr_to_triton_module(
     jaxpr: jax_core.Jaxpr, in_shapes, grid_mapping: GridMapping, name: str,
@@ -203,11 +227,12 @@ def lower_jaxpr_to_triton_module(
   # which is fine when we have multiple of the same GPU but this won't work in
   # general.
   device = 0
-  builder.target = tc.CudaTargetDescriptor(
-      capability=triton_kernel_call_lib.get_compute_capability(device),
-      num_warps=num_warps,
-      enable_fp_fusion=True
-  )
+  #builder.target = tc.CudaTargetDescriptor(
+  #    capability=triton_kernel_call_lib.get_compute_capability(device),
+  #    num_warps=num_warps,
+  #    enable_fp_fusion=True
+  #)
+  builder.target = get_amdgpu_arch_fulldetails()
   module = builder.create_module()
   in_avals = [var.aval for var in jaxpr.invars]
   triton_types = [get_triton_type(x) for x in in_avals]
