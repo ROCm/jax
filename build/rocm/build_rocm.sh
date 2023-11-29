@@ -53,7 +53,7 @@ fi
 
 #Export JAX_ROCM_VERSION so that it is appened in the wheel name
 export JAXLIB_RELEASE=1
-rocm_version=$(cat /opt/rocm/.info/version | cut -d "-" -f 1)
+rocm_version=$(cat /opt/rocm-6.0.0-12944/.info/version | cut -d "-" -f 1)
 export JAX_ROCM_VERSION=${rocm_version//./}
 
 #Build and install wheel
@@ -67,7 +67,7 @@ python3 ./build/build.py \
         --rocm_amdgpu_targets=$gcn_arch_name \
         --bazel_options=--override_repository=xla=${XLA_CLONE_DIR}
 
-JAX_RELEASE=1 python -m build
+JAX_RELEASE=1 python3 -m build
 #pip3 install --force-reinstall .  # installs jax
 pip3 install --force-reinstall dist/*.whl  # installs jaxlib (includes XLA)
 

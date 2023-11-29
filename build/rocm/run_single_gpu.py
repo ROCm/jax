@@ -94,7 +94,7 @@ def run_parallel(all_testmodules, p):
 
 
 def find_num_gpus():
-  cmd = ["lspci|grep 'controller'|grep 'AMD/ATI'|wc -l"]
+  cmd = ["lspci|grep 'accelerators:'|grep 'AMD/ATI'|wc -l"]
   _, _, stdout = run_shell_command(cmd, shell=True)
   return int(stdout)
 
