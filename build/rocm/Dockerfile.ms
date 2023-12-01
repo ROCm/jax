@@ -6,7 +6,6 @@ MAINTAINER Rahul Batra<rahbatra@amd.com>
 ARG ROCM_BUILD_NAME=ubuntu
 ARG ROCM_BUILD_NUM=main
 ARG ROCM_PATH=/opt/rocm-5.7.0
-
 ARG DEBIAN_FRONTEND=noninteractive
 ARG PYTHON_VERSION=3.10.0
 ENV HOME /root/
