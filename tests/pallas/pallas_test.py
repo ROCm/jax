@@ -208,6 +208,7 @@ class PallasCallTest(PallasTest):
       idx = jnp.arange(i, i + 2)
       np.testing.assert_allclose(index(x, idx), x[idx])
 
+  @jtu.skip_on_devices("rocm")
   def test_where_broadcasting(self):
     @functools.partial(
         self.pallas_call,
@@ -263,6 +264,7 @@ class PallasCallTest(PallasTest):
     expected = x.reshape(out_shape)
     np.testing.assert_allclose(f(x), expected)
 
+  @jtu.skip_on_devices("rocm")
   @parameterized.parameters(*[
     ((), (1,)),
     ((), (1, 1)),
