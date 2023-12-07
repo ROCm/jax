@@ -1549,7 +1549,8 @@ def pallas_call_lowering(
   )
   #Triton returns a tuple for ROCm. We just want file path to be passed
   if ctx.module_context.platforms[0] == 'rocm':
-      compilation_result.ptx = compilation_result.ptx[1]
+      if len(compilation_result.ptx) == 2:
+          compilation_result.ptx = compilation_result.ptx[1]
 
   if debug:
     compilation_result.lowering_result.module.dump()
