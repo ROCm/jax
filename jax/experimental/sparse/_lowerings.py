@@ -54,7 +54,7 @@ def _coo_spmv_abstract_eval(data, row, col, x, *, transpose, shape):
 
 def _coo_spmv_gpu_lowering(ctx, data, row, col, x, *, transpose, shape):
   data_aval, row_aval, _, x_aval = ctx.avals_in
-  return [gpu_sparse.cuda_coo_matvec(
+  return [gpu_sparse.rocm_coo_matvec(
             data, row, col, x,
             shape=shape,
             transpose=transpose,
@@ -97,7 +97,7 @@ def _coo_spmm_abstract_eval(data, row, col, x, *, transpose, shape):
 
 def _coo_spmm_gpu_lowering(ctx, data, row, col, x, *, transpose, shape):
   data_aval, row_aval, _, x_aval = ctx.avals_in
-  return [gpu_sparse.cuda_coo_matmat(
+  return [gpu_sparse.rocm_coo_matmat(
             data, row, col, x,
             shape=shape,
             transpose=transpose,
@@ -139,7 +139,7 @@ def _csr_spmv_abstract_eval(data, indices, indptr, x, *, transpose, shape):
 
 def _csr_spmv_gpu_lowering(ctx, data, indices, indptr, x, *, transpose, shape):
   data_aval, indices_aval, _, x_aval = ctx.avals_in
-  return [gpu_sparse.cuda_csr_matvec(
+  return [gpu_sparse.rocm_csr_matvec(
             data, indices, indptr, x,
             shape=shape,
             transpose=transpose,
@@ -182,7 +182,7 @@ def _csr_spmm_abstract_eval(data, indices, indptr, x, *, transpose, shape):
 
 def _csr_spmm_gpu_lowering(ctx, data, indices, indptr, x, *, transpose, shape):
   data_aval, indices_aval, _, x_aval = ctx.avals_in
-  return [gpu_sparse.cuda_csr_matmat(
+  return [gpu_sparse.rocm_csr_matmat(
             data, indices, indptr, x,
             shape=shape,
             transpose=transpose,
