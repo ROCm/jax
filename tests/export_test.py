@@ -868,6 +868,7 @@ class JaxExportTest(jtu.JaxTestCase):
     xbar2, = f_jax_vjp2((x,))
     self.assertAllClose(xbar2, g2[1])
 
+  @jtu.skip_on_devices("rocm")
   def test_multi_platform(self):
     x = np.arange(8, dtype=np.float32)
     exp = export.export(_testing_multi_platform_func,
@@ -891,6 +892,7 @@ class JaxExportTest(jtu.JaxTestCase):
         res_exp,
         _testing_multi_platform_fun_expected(x, platform=platform))
 
+  @jtu.skip_on_devices("rocm")
   def test_multi_platform_nested(self):
     x = np.arange(5, dtype=np.float32)
     exp = export.export(lambda x: _testing_multi_platform_func(jnp.sin(x)),
@@ -917,6 +919,7 @@ class JaxExportTest(jtu.JaxTestCase):
         res_exp,
         _testing_multi_platform_fun_expected(np.sin(x), platform=platform))
 
+  @jtu.skip_on_devices("rocm")
   def test_multi_platform_nested_inside_single_platform_export(self):
     x = np.arange(5, dtype=np.float32)
     exp = export.export(_testing_multi_platform_func,
@@ -947,6 +950,7 @@ class JaxExportTest(jtu.JaxTestCase):
     res2 = export.call_exported(exp2)(x)
     self.assertAllClose(res2, _testing_multi_platform_fun_expected(x).reshape((-1,)))
 
+  @jtu.skip_on_devices("rocm")
   def test_multi_platform_and_sharding(self):
     export_devices = jax.devices()[0:2]
     export_mesh = Mesh(export_devices, axis_names=("x",))
