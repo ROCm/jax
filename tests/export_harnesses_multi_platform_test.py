@@ -91,6 +91,7 @@ class PrimitiveTest(jtu.JaxTestCase):
       message=("Using reduced precision for gradient of reduce-window min/max "
                "operator to work around missing XLA support for pair-reductions")
   )
+  @jtu.skip_on_devices("rocm")
   @jtu.skip_on_flag("jax_skip_slow_tests", True)
   def test_prim(self, harness: test_harnesses.Harness):
     if (jtu.device_under_test() == "gpu"
@@ -167,6 +168,7 @@ class PrimitiveTest(jtu.JaxTestCase):
       self.assertAllClose(native_res, exported_res, atol=tol, rtol=tol)
       # TODO(necula): Check HLO equivalence for the ultimate test.
 
+  @jtu.skip_on_devices("rocm")
   def test_psum_scatter(self):
     f = jax.jit(jax.pmap(lambda x: lax.psum_scatter(x, 'i'),
                          axis_name='i',
@@ -177,6 +179,7 @@ class PrimitiveTest(jtu.JaxTestCase):
     self.export_and_compare_to_native(f, x)
 
   # The lowering rule for all_gather has special cases for bool.
+  @jtu.skip_on_devices("rocm")
   @jtu.parameterized_filterable(
     kwargs=[
       dict(dtype=dtype)
