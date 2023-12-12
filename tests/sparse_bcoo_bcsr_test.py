@@ -1942,6 +1942,7 @@ class BCSRTest(sptu.SparseTestCase):
       ],
       dtype=all_dtypes,
   )
+  @jtu.skip_on_devices("rocm")
   def test_bcsr_concatenate(self, shape, dtype, n_batch, n_dense, dimension):
     sprng = sptu.rand_bcoo(self.rng(), n_batch=n_batch, n_dense=n_dense)
     args_maker = lambda: [[sprng(shape, dtype) for i in range(3)]]
