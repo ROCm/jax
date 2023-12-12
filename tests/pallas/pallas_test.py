@@ -313,6 +313,8 @@ class PallasCallTest(PallasTest):
       if block_size_m <= m and block_size_n <= n and block_size_k <= k
     ])
   def test_matmul(self, m, n, k, dtype, bm, bn, bk, gm):
+    if self.INTERPRET and jtu.test_device_matches(["rocm"]) and dtype == "float16":
+      raise unittest.SkipTest("Interpreter matmul test with float16 skipped on ROCm")
     if not self.check_gpu_capability_at_least(70):
       raise unittest.SkipTest(
           "Matmul only works on GPUs with capability >= sm70")
@@ -340,6 +342,8 @@ class PallasCallTest(PallasTest):
       if block_size_m <= m and block_size_n <= n and block_size_k <= k
     ])
   def test_matmul_block_spec(self, m, n, k, dtype, bm, bn, bk):
+    if self.INTERPRET and jtu.test_device_matches(["rocm"]) and dtype == "float16":
+      raise unittest.SkipTest("Interpreter matmul test with float16 skipped on ROCm")
     if not self.check_gpu_capability_at_least(70):
       raise unittest.SkipTest(
           "Matmul only works on GPUs with capability >= sm70")
@@ -360,6 +364,9 @@ class PallasCallTest(PallasTest):
       for dtype in ["float32", "float16"]
   ))
   def test_dot(self, size, dtype):
+    if self.INTERPRET and jtu.test_device_matches(["rocm"]) and dtype == "float16":
+      raise unittest.SkipTest("Interpreter dot test with float16 skipped on ROCm")
+
     if not self.check_gpu_capability_at_least(70):
       raise unittest.SkipTest(
           "Matmul only works on GPUs with capability >= sm70")
