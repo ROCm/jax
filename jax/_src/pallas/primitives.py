@@ -408,13 +408,16 @@ def _swap_discharge_rule(in_avals, out_avals, *args_flat, args_tree, **_):
 state_discharge.register_discharge_rule(swap_p)(_swap_discharge_rule)
 
 
-def load(x_ref, idx, *, mask=None, other=None, cache_modifier="",
+def load(x_ref, idx, trans, *, mask=None, other=None, cache_modifier="",
          eviction_policy="", volatile=False):
   idx = NDIndexer.from_indices_shape(idx, x_ref.shape)
+  if trans:
+    idx = NDIndexer((idx.indices[1], idx.indices[0]), idx.shape, idx.int_indexer_shape)
   args_flat, args_tree = tree_util.tree_flatten((x_ref, idx, mask, other))
   return load_p.bind(
       *args_flat,
       args_tree=args_tree,
+      trans=trans,
       cache_modifier=cache_modifier,
       eviction_policy=eviction_policy,
       is_volatile=volatile,

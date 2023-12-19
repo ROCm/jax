@@ -68,7 +68,7 @@ def mha_forward_kernel(
   def body(start_k, carry):
     acc, m_prev, l_prev = carry
 
-    k = pl.load(k_ref, (pl.dslice(start_k * block_k, block_k), slice(None)))
+    kT = pl.load(k_ref, (pl.dslice(start_k * block_k, block_k), slice(None)), trans=True)
     if preload_v:
       v = pl.load(v_ref, (pl.dslice(start_k * block_k, block_k), slice(None)))
     kv_segment_ids = (
@@ -77,7 +77,7 @@ def mha_forward_kernel(
         else pl.load(segment_ids_ref, (pl.dslice(start_k * block_k, block_k),))
     )
     qk = jnp.zeros([block_q, block_k], dtype=jnp.float32)
-    qk += pl.dot(q, k.T)   # [block_q, block_k]
+    qk += pl.dot(q, kT)   # [block_q, block_k]
 
     # Bring closer to XLA:GPU numerics.
     qk = qk.astype(q_ref.dtype)
@@ -105,7 +105,7 @@ def mha_forward_kernel(
     acc *= acc_scale[:, None]
     if not preload_v:
       v = pl.load(v_ref, (pl.dslice(start_k * block_k, block_k), slice(None)))
-    acc += pl.dot(p.astype(jnp.bfloat16), v)
+    acc += pl.dot(p.astype(v_ref.dtype), v)
     return acc, m_curr, l_curr
   if causal:
     # Ceildiv (`pl.cdiv` and `//` do not work due to type of start_q)

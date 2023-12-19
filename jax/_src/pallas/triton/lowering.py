@@ -602,6 +602,7 @@ def _compute_pointers_from_indices(
     nd_indexer: NDIndexer,
     array_shape: Tuple[int, ...],
     builder: tl_ir.builder,
+    transpose = False,
 ) -> tl.core.tensor:
   if block_info is None:
     full_shape = array_shape
@@ -675,7 +676,7 @@ def _compute_pointers_from_indices(
       for _ in range(num_left_expand_dims):
         ptr_dim_offset = tl.semantic.expand_dims(ptr_dim_offset, 0, builder)
       for _ in range(num_right_expand_dims):
-        ndim = len(ptr_dim_offset.shape)
+        ndim = 0 if tranpose else len(ptr_dim_offset.shape)
         ptr_dim_offset = tl.semantic.expand_dims(ptr_dim_offset, ndim, builder)
     if start_offset is not None:
       ptr_dim_offset = ptr_dim_offset.__add__(start_offset, _builder=builder)
@@ -685,6 +686,8 @@ def _compute_pointers_from_indices(
       () if not index.type.is_block() else tuple(index.type.get_block_shapes())
       for index in bcast_indices
   ]
+  if transpose:
+    indexer_shape = (indexer_shape[1], indexer_shape[0])
   bcast_indices = [
       tl.core.broadcast_to(
           index, map(tl.constexpr, indexer_shape), _builder=builder
@@ -747,16 +750,26 @@ def _masked_load_lowering_rule(
     ctx: TritonLoweringRuleContext,
     *args_flat,
     args_tree,
+    trans,
     eviction_policy,
     cache_modifier,
     is_volatile,
 ):
   ptr, idx, mask, other = args_tree.unflatten(args_flat)
-  if not isinstance(ptr.type, tl.pointer_type):
+  # This was previously already swapped when we call the load primitive,
+  # so it is the correct order. However, we want to compute indices normal
+  # and transpose them when we broadcast and add to create the 2D pointers.
+  # So, we swap these back here, compute everything as normal until we get
+  # to the computing the final 2D pointers at the very end of the
+  # compute_pointers_from_indices() call.
+  if trans:
+    idx = NDIndexer((idx.indices[1], idx.indices[0]), idx.shape, idx.int_indexer_shape
+  if
+  not isinstance(ptr.type, tl.pointer_type):
     assert len(ctx.avals_in) == 1
     return ptr
   ptr = _compute_pointers_from_indices(
-      ptr, ctx.block_infos[0], idx, ctx.avals_in[0].shape, ctx.builder
+      ptr, ctx.block_infos[0], idx, ctx.avals_in[0].shape, ctx.builder, trans
   )
   val = tl.load(
       ptr,
