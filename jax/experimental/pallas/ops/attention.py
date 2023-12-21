@@ -166,7 +166,7 @@ def mha(
     causal: bool = False,
     block_q: int = 128,
     block_k: int = 64,
-    backward_pass_impl: str = "triton",
+    backward_pass_impl: str = "triton_split",
     num_warps: Optional[int] = None,
     num_stages: int = 1,
     grid=None,
@@ -477,7 +477,7 @@ def mha_backward_kernel_dq(
   else:
     upper_bound = pl.cdiv(seq_len, block_k)
   dq = lax.fori_loop(0, upper_bound, inner_loop, dq)
-  dq_f16 = (dq * sm_scale).astype(jnp.float16)
+  dq_f16 = (dq * sm_scale).astype(dq_ref.dtype)
   pl.store(dq_ref, (pl.ds(start_q * block_q, block_q),
                         slice(None)), dq_f16, eviction_policy="evict_last")
 
