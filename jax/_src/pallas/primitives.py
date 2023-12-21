@@ -408,7 +408,7 @@ def _swap_discharge_rule(in_avals, out_avals, *args_flat, args_tree, **_):
 state_discharge.register_discharge_rule(swap_p)(_swap_discharge_rule)
 
 
-def load(x_ref, idx, trans, *, mask=None, other=None, cache_modifier="",
+def load(x_ref, idx, trans=False, *, mask=None, other=None, cache_modifier="",
          eviction_policy="", volatile=False):
   idx = NDIndexer.from_indices_shape(idx, x_ref.shape)
   if trans:

@@ -674,9 +674,10 @@ def _compute_pointers_from_indices(
       )
     else:
       for _ in range(num_left_expand_dims):
-        ptr_dim_offset = tl.semantic.expand_dims(ptr_dim_offset, 0, builder)
+        ndim = len(ptr_dim_offset.shape) if transpose else 0
+        ptr_dim_offset = tl.semantic.expand_dims(ptr_dim_offset, ndim, builder)
       for _ in range(num_right_expand_dims):
-        ndim = 0 if tranpose else len(ptr_dim_offset.shape)
+        ndim = 0 if transpose else len(ptr_dim_offset.shape)
         ptr_dim_offset = tl.semantic.expand_dims(ptr_dim_offset, ndim, builder)
     if start_offset is not None:
       ptr_dim_offset = ptr_dim_offset.__add__(start_offset, _builder=builder)
@@ -736,6 +737,7 @@ def _get_lowering_rule(
   return _masked_load_lowering_rule(
       ctx,
       *args_flat,
+      trans=False,
       args_tree=args_tree,
       eviction_policy=None,
       cache_modifier=None,
@@ -763,9 +765,8 @@ def _masked_load_lowering_rule(
   # to the computing the final 2D pointers at the very end of the
   # compute_pointers_from_indices() call.
   if trans:
-    idx = NDIndexer((idx.indices[1], idx.indices[0]), idx.shape, idx.int_indexer_shape
-  if
-  not isinstance(ptr.type, tl.pointer_type):
+    idx = NDIndexer((idx.indices[1], idx.indices[0]), idx.shape, idx.int_indexer_shape)
+  if not isinstance(ptr.type, tl.pointer_type):
     assert len(ctx.avals_in) == 1
     return ptr
   ptr = _compute_pointers_from_indices(
