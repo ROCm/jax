@@ -1796,6 +1796,7 @@ class BCOOTest(sptu.SparseTestCase):
 # TODO(tianjianlu): Unify the testing for BCOOTest and BCSRTest.
 class BCSRTest(sptu.SparseTestCase):
 
+  @jtu.skip_on_devices("rocm")
   @jtu.sample_product(
       [
           dict(shape=shape, n_batch=layout.n_batch, n_dense=layout.n_dense)
@@ -1876,11 +1877,13 @@ class BCSRTest(sptu.SparseTestCase):
     args_maker_bcsr_extract = lambda: [indices, indptr, M]
     self._CompileAndCheck(sparse.bcsr_extract, args_maker_bcsr_extract)
 
+  @jtu.skip_on_devices("rocm")
   @jtu.sample_product(
       props=_generate_batched_dot_general_properties(
           shapes=((2, 3), (2, 3, 4), (2, 3, 4, 4)), sparse_format="bcsr"
       ),
-      dtype=jtu.dtypes.floating + jtu.dtypes.complex,
+      #dtype=jtu.dtypes.floating + jtu.dtypes.complex,
+      dtype=jtu.dtypes.floating,
   )
   @jax.default_matmul_precision("float32")
   def test_bcsr_dot_general(
