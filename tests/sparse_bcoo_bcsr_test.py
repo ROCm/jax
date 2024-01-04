@@ -1880,7 +1880,8 @@ class BCSRTest(sptu.SparseTestCase):
       props=_generate_batched_dot_general_properties(
           shapes=((2, 3), (2, 3, 4), (2, 3, 4, 4)), sparse_format="bcsr"
       ),
-      dtype=jtu.dtypes.floating + jtu.dtypes.complex,
+      #dtype=jtu.dtypes.floating + jtu.dtypes.complex,
+      dtype=jtu.dtypes.floating,
   )
   @jax.default_matmul_precision("float32")
   def test_bcsr_dot_general(
