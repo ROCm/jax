@@ -26,7 +26,7 @@
 #
 # COMMAND: Command to be executed in the docker container
 #
-# ROCM_DEB_REPO_VERSION: ROCm debian repo version
+# ROCM_VERSION: ROCm repo version
 #
 # ROCM_PATH: ROCM path in the docker container
 #
