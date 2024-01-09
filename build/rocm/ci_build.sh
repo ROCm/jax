@@ -61,6 +61,14 @@ RUNTIME_FLAG=0
 
 while [[ $# -gt 0 ]]; do
   case $1 in
+    --xla_repo)
+      XLA_REPO="$2"
+      shift 2
+      ;;
+    --xla_branch)
+      XLA_BRANCH="$2"
+      shift 2
+      ;;
     --rocm_job)
       ROCM_BUILD_JOB="$2"
       shift 2
