@@ -57,13 +57,18 @@ CUSTOM_INSTALL=""
 #ROCM_PATH="/opt/rocm-5.6.0"
 POSITIONAL_ARGS=()
 
-ROCM_BUILD_NAME="compute-rocm-dkms-no-npi-hipclang" #to be parameterized
-ROCM_BUILD_NUM="13256" #to be parameterized
-
 RUNTIME_FLAG=0
 
 while [[ $# -gt 0 ]]; do
   case $1 in
+    --rocm_job)
+      ROCM_BUILD_JOB="$2"
+      shift 2
+      ;;
+    --rocm_build)
+      ROCM_BUILD_NUM="$2"
+      shift 2
+      ;;
     --py_version)
       PYTHON_VERSION="$2"
       shift 2
@@ -147,11 +152,11 @@ if [[ "${RUNTIME_FLAG}" -eq 1  ]]; then
       -f "${DOCKERFILE_PATH}" "${DOCKER_CONTEXT_PATH}"
 else
   echo "Building (CI) container (${DOCKER_IMG_NAME}) with Dockerfile($DOCKERFILE_PATH)..."
-  AMDGPU_CORE=$(curl http://rocm-ci.amd.com/job/$ROCM_BUILD_NAME/$ROCM_BUILD_NUM/artifact/amdgpu_kernel_info.txt)
+  AMDGPU_CORE=$(curl http://rocm-ci.amd.com/job/$ROCM_BUILD_JOB/$ROCM_BUILD_NUM/artifact/amdgpu_kernel_info.txt)
   docker build --target ci_build --tag ${DOCKER_IMG_NAME} \
         --build-arg PYTHON_VERSION=$PYTHON_VERSION \
         --build-arg ROCM_DEB_REPO="http://compute-artifactory.amd.com/artifactory/list/amdgpu-deb/amd-nonfree-radeon_20.04-1_all.deb" \
-        --build-arg ROCM_BUILD_NAME=$ROCM_BUILD_NAME \
+        --build-arg ROCM_BUILD_JOB=$ROCM_BUILD_JOB \
         --build-arg ROCM_BUILD_NUM=$ROCM_BUILD_NUM \
         --build-arg AMDGPU_CORE=$AMDGPU_CORE \
         --build-arg ROCM_VERSION=$ROCM_VERSION \
