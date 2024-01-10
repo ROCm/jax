@@ -84,8 +84,8 @@ RUN apt-get update --allow-insecure-repositories && DEBIAN_FRONTEND=noninteracti
 RUN apt-get update
 RUN apt-get install -y software-properties-common
 
-RUN apt update && apt install -y wget && wget http://artifactory-cdn.amd.com/artifactory/list/amdgpu-deb/amdgpu-install-internal_6.1-20.04-1_all.deb \
-    && apt install -y ./amdgpu-install-internal_6.1-20.04-1_all.deb && apt update
+RUN apt update && apt install -y wget && wget http://artifactory-cdn.amd.com/artifactory/list/amdgpu-deb/amdgpu-install-internal_6.0-20.04-1_all.deb \
+    && apt install -y ./amdgpu-install-internal_6.0-20.04-1_all.deb && apt update
 RUN amdgpu-repo --amdgpu-build=${AMDGPU_CORE} --rocm-build=${ROCM_BUILD_JOB}/${ROCM_BUILD_NUM} \
     && amdgpu-install --no-dkms --usecase=rocm -y
 RUN apt install -y rocm-dev rocm-libs
