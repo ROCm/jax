@@ -38,7 +38,7 @@ RUN eval "$(pyenv init -)" && pyenv local ${PYTHON_VERSION} && pip3 install --up
 ARG BASE_DOCKER=ubuntu:20.04
 FROM $BASE_DOCKER as ci_build
 ################################################################################
-ARG ROCM_BUILD_NAME=ubuntu
+ARG ROCM_BUILD_JOB=ubuntu
 ARG ROCM_BUILD_NUM=main
 ARG AMDGPU_CORE=""
 ARG ROCM_VERSION=""
