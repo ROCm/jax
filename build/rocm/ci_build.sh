@@ -69,6 +69,10 @@ while [[ $# -gt 0 ]]; do
       XLA_BRANCH="$2"
       shift 2
       ;;
+    --xla_dir)
+      XLA_CLONE_DIR="$2"
+      shift 2
+      ;;
     --rocm_job)
       ROCM_BUILD_JOB="$2"
       shift 2
