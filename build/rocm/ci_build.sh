@@ -133,7 +133,12 @@ function upsearch (){
 }
 
 # Set up WORKSPACE. 
-WORKSPACE="${WORKSPACE:-$(upsearch WORKSPACE)}"
+if [ ${RUNTIME_FLAG} -eq 0 ]; then
+  WORKSPACE=${WORKSPACE}/jax
+else
+  WORKSPACE="${WORKSPACE:-$(upsearch WORKSPACE)}"
+fi
+
 BUILD_TAG="${BUILD_TAG:-jax}"
 
 # Determine the docker image name and BUILD_TAG.
