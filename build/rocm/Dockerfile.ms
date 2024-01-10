@@ -42,7 +42,8 @@ ARG ROCM_BUILD_JOB=ubuntu
 ARG ROCM_BUILD_NUM=main
 ARG AMDGPU_CORE=""
 ARG ROCM_VERSION=""
-ARG ROCM_PATH=/opt/rocm-${ROCM_VERSION}-${ROCM_BUILD_NUM}
+# ARG ROCM_PATH=/opt/rocm-${ROCM_VERSION}-${ROCM_BUILD_NUM}
+ARG ROCM_PATH=/opt/rocm-${ROCM_VERSION}
 ENV ROCM_PATH=${ROCM_PATH}
 ARG PYTHON_VERSION=3.9.0
 COPY UTC* /usr/share/zoneinfo/UTC
@@ -98,7 +99,6 @@ ENV PATH="$ROCM_PATH/bin:${PATH}"
 ENV PATH="$OPENCL_ROOT/bin:${PATH}"
 
 # Add target file to help determine which device(s) to build for
-RUN bash -c 'ls -l /opt'
 RUN bash -c 'echo -e "gfx900\ngfx906\ngfx908\ngfx90a\ngfx940\ngfx941\ngfx942\ngfx1030\ngfx1100" >> ${ROCM_PATH}/bin/target.lst'
 
 # Need to explicitly create the $ROCM_PATH/.info/version file to workaround what seems to be a bazel bug
