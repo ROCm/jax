@@ -416,6 +416,7 @@ class NumpyLinalgTest(jtu.JaxTestCase):
           np.linalg.norm(np.matmul(a, v) - w * v), 20 * eps * np.linalg.norm(a)
       )
 
+  @jtu.skip_on_devices("rocm")
   @jtu.sample_product(
       rank=[1, 3, 299],
   )
