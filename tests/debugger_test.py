@@ -352,6 +352,7 @@ class CliDebuggerTest(jtu.JaxTestCase):
     jax.effects_barrier()
     self.assertRegex(stdout.getvalue(), expected)
 
+  @jtu.skip_on_devices("rocm")
   def test_can_limit_num_frames(self):
     stdin, stdout = make_fake_stdin_stdout(["u", "p x", "c"])
 
