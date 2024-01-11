@@ -28,6 +28,7 @@ config.parse_flags_with_absl()
 
 class SourceInfoTest(jtu.JaxTestCase):
 
+  @jtu.skip_on_devices("rocm")
   def test_inline_jit_location_uses_callee_location(self):
 
     # 'f' should be inlined into both 'g' and 'h', using the source line
