@@ -170,6 +170,7 @@ if [[ "${RUNTIME_FLAG}" -eq 1  ]]; then
 else
   echo "Building (CI) container (${DOCKER_IMG_NAME}) with Dockerfile($DOCKERFILE_PATH)..."
   AMDGPU_CORE=$(curl http://rocm-ci.amd.com/job/$ROCM_BUILD_JOB/$ROCM_BUILD_NUM/artifact/amdgpu_kernel_info.txt)
+  ROCM_MAJ_MIN=$(cut -d '.' -f -2 <<< $ROCM_VERSION)
   DOCKER_BUILDKIT=1 docker build --target ci_build --tag ${DOCKER_IMG_NAME} \
         --build-arg PYTHON_VERSION=$PYTHON_VERSION \
         --build-arg ROCM_DEB_REPO="http://compute-artifactory.amd.com/artifactory/list/amdgpu-deb/amd-nonfree-radeon_20.04-1_all.deb" \
@@ -177,6 +178,7 @@ else
         --build-arg ROCM_BUILD_NUM=$ROCM_BUILD_NUM \
         --build-arg AMDGPU_CORE=$AMDGPU_CORE \
         --build-arg ROCM_VERSION=$ROCM_VERSION \
+        --build-arg ROCM_MAJ_MIN=$ROCM_MAJ_MIN \
       -f "${DOCKERFILE_PATH}" "${DOCKER_CONTEXT_PATH}"   
 fi
 
