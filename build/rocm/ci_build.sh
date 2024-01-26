@@ -58,6 +58,7 @@ CUSTOM_INSTALL=""
 POSITIONAL_ARGS=()
 
 RUNTIME_FLAG=0
+WHL_ONLY_BUILD=0
 
 while [[ $# -gt 0 ]]; do
   case $1 in
@@ -106,6 +107,10 @@ while [[ $# -gt 0 ]]; do
       ROCM_VERSION="$2"
       shift 2
       ;;
+    --whl_only)
+    WHL_ONLY_BUILD="1"
+    shift 1
+    ;;
     #--rocm_path)
     #  ROCM_PATH="$2"
     #  shift 2
@@ -173,7 +178,6 @@ else
   ROCM_MAJ_MIN=$(cut -d '.' -f -2 <<< $ROCM_VERSION)
   DOCKER_BUILDKIT=1 docker build --target ci_build --tag ${DOCKER_IMG_NAME} \
         --build-arg PYTHON_VERSION=$PYTHON_VERSION \
-        --build-arg ROCM_DEB_REPO="http://compute-artifactory.amd.com/artifactory/list/amdgpu-deb/amd-nonfree-radeon_20.04-1_all.deb" \
         --build-arg ROCM_BUILD_JOB=$ROCM_BUILD_JOB \
         --build-arg ROCM_BUILD_NUM=$ROCM_BUILD_NUM \
         --build-arg AMDGPU_CORE=$AMDGPU_CORE \
@@ -187,35 +191,38 @@ if [[ $? != "0" ]]; then
   die "ERROR: docker build failed. Dockerfile is at ${DOCKERFILE_PATH}"
 fi
 
-# Run the command inside the container.
-echo "Running '${POSITIONAL_ARGS[*]}' inside ${DOCKER_IMG_NAME}..."
+if [ ${WHL_ONLY_BUILD} -eq 0 ]; then
+  # Run the command inside the container.
+  echo "Running '${POSITIONAL_ARGS[*]}' inside ${DOCKER_IMG_NAME}..."
 
-export XLA_REPO="${XLA_REPO:-}"
-export XLA_BRANCH="${XLA_BRANCH:-}"
-export XLA_CLONE_DIR="${XLA_CLONE_DIR:-}"
-export JAX_RENAME_WHL="${XLA_CLONE_DIR:-}"
+  export XLA_REPO="${XLA_REPO:-}"
+  export XLA_BRANCH="${XLA_BRANCH:-}"
+  export XLA_CLONE_DIR="${XLA_CLONE_DIR:-}"
+  export JAX_RENAME_WHL="${XLA_CLONE_DIR:-}"
 
-if [ ! -z ${XLA_CLONE_DIR} ]; then
-	ROCM_EXTRA_PARAMS=${ROCM_EXTRA_PARAMS}" -v ${XLA_CLONE_DIR}:${XLA_CLONE_DIR}"
+  if [ ! -z ${XLA_CLONE_DIR} ]; then
+    ROCM_EXTRA_PARAMS=${ROCM_EXTRA_PARAMS}" -v ${XLA_CLONE_DIR}:${XLA_CLONE_DIR}"
+  fi
+
+  docker run ${KEEP_IMAGE} --name ${DOCKER_IMG_NAME} --pid=host --privileged \
+    -v ${WORKSPACE}:/workspace \
+    -w /workspace \
+    -e XLA_REPO=${XLA_REPO} \
+    -e XLA_BRANCH=${XLA_BRANCH} \
+    -e XLA_CLONE_DIR=${XLA_CLONE_DIR} \
+    -e PYTHON_VERSION=$PYTHON_VERSION \
+    -e CI_RUN=1 \
+    ${ROCM_EXTRA_PARAMS} \
+    "${DOCKER_IMG_NAME}" \
+    ${POSITIONAL_ARGS[@]}
+
+  if [[ "${KEEP_IMAGE}" != "--rm" ]] && [[ $? == "0" ]]; then
+    echo "Committing the docker container as ${DOCKER_IMG_NAME}"
+    docker stop ${DOCKER_IMG_NAME}
+    docker commit ${DOCKER_IMG_NAME} ${DOCKER_IMG_NAME}
+    docker rm ${DOCKER_IMG_NAME}    # remove this temp container
+  fi
+  echo "Jax-ROCm wheel and docker build was successful!"
+else
+  echo "Jax-ROCm wheel build was successful!"
 fi
-
-docker run ${KEEP_IMAGE} --name ${DOCKER_IMG_NAME} --pid=host --privileged \
-  -v ${WORKSPACE}:/workspace \
-  -w /workspace \
-  -e XLA_REPO=${XLA_REPO} \
-  -e XLA_BRANCH=${XLA_BRANCH} \
-  -e XLA_CLONE_DIR=${XLA_CLONE_DIR} \
-  -e PYTHON_VERSION=$PYTHON_VERSION \
-  -e CI_RUN=1 \
-  ${ROCM_EXTRA_PARAMS} \
-  "${DOCKER_IMG_NAME}" \
-  ${POSITIONAL_ARGS[@]}
-
-if [[ "${KEEP_IMAGE}" != "--rm" ]] && [[ $? == "0" ]]; then
-  echo "Committing the docker container as ${DOCKER_IMG_NAME}"
-  docker stop ${DOCKER_IMG_NAME}
-  docker commit ${DOCKER_IMG_NAME} ${DOCKER_IMG_NAME}
-  docker rm ${DOCKER_IMG_NAME}    # remove this temp container
-fi
-
-echo "Jax-ROCm build was successful!"
