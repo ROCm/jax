@@ -82,7 +82,7 @@ jobs:
         python -m pip install --upgrade pip wheel
         echo "::set-output name=dir::$(pip cache dir)"
     - name: pip cache
-      uses: actions/cache@v3
+      uses: actions/cache@v4
       with:
         path: ${{ steps.pip-cache.outputs.dir }}
         key: ${{ runner.os }}-pip-${{ hashFiles('**/setup.py', '**/requirements.txt', '**/test-requirements.txt') }}
@@ -139,7 +139,7 @@ jobs:
         python -m pip install --upgrade pip wheel
         echo "::set-output name=dir::$(pip cache dir)"
     - name: pip cache
-      uses: actions/cache@v3
+      uses: actions/cache@v4
       with:
         path: ${{ steps.pip-cache.outputs.dir }}
         key: ${{ runner.os }}-pip-${{ hashFiles('**/setup.py', '**/requirements.txt', '**/test-requirements.txt') }}
