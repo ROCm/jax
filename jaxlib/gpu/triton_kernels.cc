@@ -522,12 +522,12 @@ jax_triton::TritonAutotunedKernelCall AutotunedKernelCall::ToProto() const {
   //GPU_RETURN_IF_ERROR(gpuCtxPushCurrent(context));
   //absl::Cleanup ctx_restorer = [] { gpuCtxPopCurrent(nullptr); };
 
-  gpustreamCaptureMode_t capture_mode = CU_STREAM_CAPTURE_MODE_RELAXED;
+  gpustreamCaptureMode_t capture_mode = GPU_STREAM_CAPTURE_MODE_RELAXED;
   GPU_RETURN_IF_ERROR(gpuThreadExchangeStreamCaptureMode(&capture_mode));
 
   // Need a side stream so as not to interfere with graph capture.
   gpuStream_t stream;
-  GPU_RETURN_IF_ERROR(gpuStreamCreate(&stream, CU_STREAM_NON_BLOCKING));
+  GPU_RETURN_IF_ERROR(gpuStreamCreate(&stream, GPU_STREAM_NON_BLOCKING));
 
   // If an input aliases with an output, it will get overwritten during the
   // kernel execution. If the kernel is called repeatedly, as we do during
