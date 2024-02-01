@@ -138,7 +138,7 @@ class PrimitiveTest(jtu.JaxTestCase):
     logging.info("Using devices %s", [str(d) for d in devices])
     # lowering_platforms uses "cuda" instead of "gpu"
     lowering_platforms: list[str] = [
-        p if p != "gpu" else "cuda"
+        p if p != "gpu" else "rocm"
         for p in ("cpu", "gpu", "tpu")
         if p not in unimplemented_platforms
     ]
