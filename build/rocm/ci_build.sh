@@ -107,6 +107,10 @@ while [[ $# -gt 0 ]]; do
       ROCM_VERSION="$2"
       shift 2
       ;;
+    --distro)
+      DISTRO="$2"
+      shift 2
+      ;;
     --whl_only)
     WHL_ONLY_BUILD="1"
     shift 1
@@ -140,11 +144,13 @@ function upsearch (){
 # Set up WORKSPACE. 
 if [ ${RUNTIME_FLAG} -eq 0 ]; then
   WORKSPACE=${WORKSPACE}/jax
+  JAX_VERSION=$(cut -d 'v' -f 2 <<< $XLA_BRANCH)
+  JAX_COMMIT=$(git -C $WORKSPACE rev-parse --short HEAD)
+  BUILD_TAG="compute-artifactory.amd.com:5000/rocm-plus-docker/framework/${ROCM_BUILD_JOB}:${ROCM_BUILD_NUM}_${DISTRO}_${PYTHON_VERSION}_${JAX_VERSION}_${JAX_COMMIT}"
 else
   WORKSPACE="${WORKSPACE:-$(upsearch WORKSPACE)}"
+  BUILD_TAG="${BUILD_TAG:-jax}"
 fi
-
-BUILD_TAG="${BUILD_TAG:-jax}"
 
 # Determine the docker image name and BUILD_TAG.
 DOCKER_IMG_NAME="${BUILD_TAG}.${CONTAINER_TYPE}"
@@ -177,6 +183,7 @@ else
   AMDGPU_CORE=$(curl http://rocm-ci.amd.com/job/$ROCM_BUILD_JOB/$ROCM_BUILD_NUM/artifact/amdgpu_kernel_info.txt)
   ROCM_MAJ_MIN=$(cut -d '.' -f -2 <<< $ROCM_VERSION)
   DOCKER_BUILDKIT=1 docker build --target ci_build --tag ${DOCKER_IMG_NAME} \
+        --build-arg DISTRO=$DISTRO \
         --build-arg PYTHON_VERSION=$PYTHON_VERSION \
         --build-arg ROCM_BUILD_JOB=$ROCM_BUILD_JOB \
         --build-arg ROCM_BUILD_NUM=$ROCM_BUILD_NUM \
@@ -191,38 +198,34 @@ if [[ $? != "0" ]]; then
   die "ERROR: docker build failed. Dockerfile is at ${DOCKERFILE_PATH}"
 fi
 
-if [ ${WHL_ONLY_BUILD} -eq 0 ]; then
-  # Run the command inside the container.
-  echo "Running '${POSITIONAL_ARGS[*]}' inside ${DOCKER_IMG_NAME}..."
+# Run the command inside the container.
+echo "Running '${POSITIONAL_ARGS[*]}' inside ${DOCKER_IMG_NAME}..."
 
-  export XLA_REPO="${XLA_REPO:-}"
-  export XLA_BRANCH="${XLA_BRANCH:-}"
-  export XLA_CLONE_DIR="${XLA_CLONE_DIR:-}"
-  export JAX_RENAME_WHL="${XLA_CLONE_DIR:-}"
+export XLA_REPO="${XLA_REPO:-}"
+export XLA_BRANCH="${XLA_BRANCH:-}"
+export XLA_CLONE_DIR="${XLA_CLONE_DIR:-}"
+export JAX_RENAME_WHL="${XLA_CLONE_DIR:-}"
 
-  if [ ! -z ${XLA_CLONE_DIR} ]; then
-    ROCM_EXTRA_PARAMS=${ROCM_EXTRA_PARAMS}" -v ${XLA_CLONE_DIR}:${XLA_CLONE_DIR}"
-  fi
-
-  docker run ${KEEP_IMAGE} --name ${DOCKER_IMG_NAME} --pid=host --privileged \
-    -v ${WORKSPACE}:/workspace \
-    -w /workspace \
-    -e XLA_REPO=${XLA_REPO} \
-    -e XLA_BRANCH=${XLA_BRANCH} \
-    -e XLA_CLONE_DIR=${XLA_CLONE_DIR} \
-    -e PYTHON_VERSION=$PYTHON_VERSION \
-    -e CI_RUN=1 \
-    ${ROCM_EXTRA_PARAMS} \
-    "${DOCKER_IMG_NAME}" \
-    ${POSITIONAL_ARGS[@]}
-
-  if [[ "${KEEP_IMAGE}" != "--rm" ]] && [[ $? == "0" ]]; then
-    echo "Committing the docker container as ${DOCKER_IMG_NAME}"
-    docker stop ${DOCKER_IMG_NAME}
-    docker commit ${DOCKER_IMG_NAME} ${DOCKER_IMG_NAME}
-    docker rm ${DOCKER_IMG_NAME}    # remove this temp container
-  fi
-  echo "Jax-ROCm wheel and docker build was successful!"
-else
-  echo "Jax-ROCm wheel build was successful!"
+if [ ! -z ${XLA_CLONE_DIR} ]; then
+  ROCM_EXTRA_PARAMS=${ROCM_EXTRA_PARAMS}" -v ${XLA_CLONE_DIR}:${XLA_CLONE_DIR}"
 fi
+
+docker run ${KEEP_IMAGE} --name ${DOCKER_IMG_NAME} --pid=host --privileged \
+  -v ${WORKSPACE}:/workspace \
+  -w /workspace \
+  -e XLA_REPO=${XLA_REPO} \
+  -e XLA_BRANCH=${XLA_BRANCH} \
+  -e XLA_CLONE_DIR=${XLA_CLONE_DIR} \
+  -e PYTHON_VERSION=$PYTHON_VERSION \
+  -e CI_RUN=1 \
+  ${ROCM_EXTRA_PARAMS} \
+  "${DOCKER_IMG_NAME}" \
+  ${POSITIONAL_ARGS[@]}
+
+if [[ "${KEEP_IMAGE}" != "--rm" ]] && [[ $? == "0" ]]; then
+  echo "Committing the docker container as ${DOCKER_IMG_NAME}"
+  docker stop ${DOCKER_IMG_NAME}
+  docker commit ${DOCKER_IMG_NAME} ${DOCKER_IMG_NAME}
+  docker rm ${DOCKER_IMG_NAME}    # remove this temp container
+fi
+  echo "Jax-ROCm wheel and docker build was successful!"
