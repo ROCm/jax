@@ -144,7 +144,7 @@ function upsearch (){
 # Set up WORKSPACE. 
 if [ ${RUNTIME_FLAG} -eq 0 ]; then
   WORKSPACE=${WORKSPACE}/jax
-  JAX_VERSION=$(cut -d 'v' -f 2 <<< $XLA_BRANCH)
+  JAX_VERSION=$(cut -d '-' -f 3 | cut -d 'v' -f 2 <<< $XLA_BRANCH)
   JAX_COMMIT=$(git -C $WORKSPACE rev-parse --short HEAD)
   BUILD_TAG="compute-artifactory.amd.com:5000/rocm-plus-docker/framework/${ROCM_BUILD_JOB}:${ROCM_BUILD_NUM}_${DISTRO}_${PYTHON_VERSION}_${JAX_VERSION}_${JAX_COMMIT}"
 else
