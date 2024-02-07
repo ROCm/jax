@@ -211,7 +211,13 @@ if [ ! -z ${XLA_CLONE_DIR} ]; then
   ROCM_EXTRA_PARAMS=${ROCM_EXTRA_PARAMS}" -v ${XLA_CLONE_DIR}:${XLA_CLONE_DIR}"
 fi
 
-docker run ${KEEP_IMAGE} --pid=host --privileged \
+if [ ${RUNTIME_FLAG} -eq 0 ]; then
+  DOCKER_NAME="CI_DOCKER"
+else
+  DOCKER_NAME=${DOCKER_IMG_NAME}
+fi
+
+docker run ${KEEP_IMAGE} --name ${DOCKER_NAME} --pid=host --privileged \
   -v ${WORKSPACE}:/workspace \
   -w /workspace \
   -e XLA_REPO=${XLA_REPO} \
@@ -225,8 +231,8 @@ docker run ${KEEP_IMAGE} --pid=host --privileged \
 
 if [[ "${KEEP_IMAGE}" != "--rm" ]] && [[ $? == "0" ]]; then
   echo "Committing the docker container as ${DOCKER_IMG_NAME}"
-  docker stop ${DOCKER_IMG_NAME}
-  docker commit ${DOCKER_IMG_NAME} ${DOCKER_IMG_NAME}
-  docker rm ${DOCKER_IMG_NAME}    # remove this temp container
+  docker stop ${DOCKER_NAME}
+  docker commit ${DOCKER_NAME} ${DOCKER_IMG_NAME}
+  docker rm ${DOCKER_NAME}    # remove this temp container
 fi
   echo "Jax-ROCm wheel and docker build was successful!"
