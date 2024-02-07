@@ -210,7 +210,7 @@ if [ ! -z ${XLA_CLONE_DIR} ]; then
   ROCM_EXTRA_PARAMS=${ROCM_EXTRA_PARAMS}" -v ${XLA_CLONE_DIR}:${XLA_CLONE_DIR}"
 fi
 
-docker run ${KEEP_IMAGE} ${DOCKER_IMG_NAME} --pid=host --privileged \
+docker run ${KEEP_IMAGE} --pid=host --privileged \
   -v ${WORKSPACE}:/workspace \
   -w /workspace \
   -e XLA_REPO=${XLA_REPO} \
