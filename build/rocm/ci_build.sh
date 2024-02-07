@@ -147,6 +147,7 @@ if [ ${RUNTIME_FLAG} -eq 0 ]; then
   JAX_VERSION=$(cut -d '-' -f 3 | cut -d 'v' -f 2 <<< $XLA_BRANCH)
   JAX_COMMIT=$(git -C $WORKSPACE rev-parse --short HEAD)
   BUILD_TAG="compute-artifactory.amd.com:5000/rocm-plus-docker/framework/compute-rocm-dkms-no-npi-hipclang:${ROCM_BUILD_NUM}_${DISTRO}_py${PYTHON_VERSION}_jax${JAX_VERSION}_${JAX_COMMIT}"
+  export $BUILD_TAG
 else
   WORKSPACE="${WORKSPACE:-$(upsearch WORKSPACE)}"
   BUILD_TAG="${BUILD_TAG:-jax}"
