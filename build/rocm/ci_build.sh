@@ -147,7 +147,6 @@ if [ ${RUNTIME_FLAG} -eq 0 ]; then
   JAX_VERSION=$(cut -d '-' -f 3 | cut -d 'v' -f 2 <<< $XLA_BRANCH)
   JAX_COMMIT=$(git -C $WORKSPACE rev-parse --short HEAD)
   BUILD_TAG="compute-artifactory.amd.com:5000/rocm-plus-docker/framework/compute-rocm-dkms-no-npi-hipclang:${ROCM_BUILD_NUM}_${DISTRO}_py${PYTHON_VERSION}_jax${JAX_VERSION}_${JAX_COMMIT}"
-  echo $BUILD_TAG > "buildTag.txt"
 else
   WORKSPACE="${WORKSPACE:-$(upsearch WORKSPACE)}"
   BUILD_TAG="${BUILD_TAG:-jax}"
@@ -162,6 +161,8 @@ DOCKER_IMG_NAME=$(echo "${DOCKER_IMG_NAME}" | sed -e 's/=/_/g' -e 's/,/-/g')
 
 # Convert to all lower-case, as per requirement of Docker image names
 DOCKER_IMG_NAME=$(echo "${DOCKER_IMG_NAME}" | tr '[:upper:]' '[:lower:]')
+
+echo $DOCKER_IMG_NAME > "buildTag.txt"
 
 # Print arguments.
 echo "WORKSPACE: ${WORKSPACE}"
