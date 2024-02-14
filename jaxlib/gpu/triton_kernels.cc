@@ -84,7 +84,7 @@ absl::StatusOr<ModuleImage*> GetModuleImage(std::string kernel_name,
 
 #ifdef JAX_GPU_HIP //For HIP/ROCM just read the hsaco file
   std::string result_blob;
-  std::string fname{ptx}; 
+  std::string fname{ptx};
   TF_RETURN_IF_ERROR(
       tsl::ReadFileToString(tsl::Env::Default(), fname, &result_blob));
   std::vector<uint8_t> module_image(result_blob.begin(), result_blob.end());
@@ -98,11 +98,13 @@ absl::StatusOr<ModuleImage*> GetModuleImage(std::string kernel_name,
                                      stream_executor::GpuAsmOpts{}));
 #endif
 
+  std::cout << __func__ << "RB: Reached Here" << std::endl;
   auto [it2, success] = module_images.insert(
       {std::move(key),
        std::make_unique<ModuleImage>(
            std::move(kernel_name), std::move(module_image), shared_mem_bytes)});
   CHECK(success);
+  std::cout << __func__  << "RB: Reached End" << std::endl;
   return it2->second.get();
 }
 
@@ -186,19 +188,23 @@ class ModuleImage {
       return it->second;
     }
 
+    std::cout << __func__ << "RB: 1" << std::endl;
     GPU_RETURN_IF_ERROR(gpuCtxPushCurrent(context));
     absl::Cleanup ctx_restorer = [] { gpuCtxPopCurrent(nullptr); };
 
+  std::cout << __func__ << "RB: 2" << std::endl;
     gpuModule_t module;
     GPU_RETURN_IF_ERROR(gpuModuleLoadData(&module, module_image_.data()));
     modules_.push_back(OwnedGPUmodule(module, gpuModuleDeleter()));
 
+  std::cout << __func__ << "RB: 3" << std::endl;
     gpuFunction_t function;
     GPU_RETURN_IF_ERROR(
         gpuModuleGetFunction(&function, module, kernel_name_.c_str()));
     auto [_, success] = functions_.insert({context, function});
     CHECK(success);
 
+  std::cout << __func__ << "RB: 4" << std::endl;
     // The maximum permitted static shared memory allocation in CUDA is 48kB,
     // but we can expose more to the kernel using dynamic shared memory.
     constexpr int kMaxStaticSharedMemBytes = 49152;
@@ -272,14 +278,17 @@ absl::Status Kernel::Launch(gpuStream_t stream, uint32_t grid[3],
                                         compute_capability_));
   }
 
+  std::cout << __func__ << "RB: 1" << std::endl;
   gpuContext_t context;
 #ifdef JAX_GPU_HIP
   int device_id = gpuGetStreamDeviceId(stream);
   gpuDevice_t device;
   GPU_RETURN_IF_ERROR(gpuDeviceGet(&device, device_id));
   GPU_RETURN_IF_ERROR(gpuDevicePrimaryCtxRetain(&context, device));
+  std::cout << __func__ << "RB: 2" << std::endl;
   JAX_ASSIGN_OR_RETURN(gpuFunction_t kernel,
                        module_image_->GetFunctionForContext(context));
+  std::cout << __func__ << "RB: 3" << std::endl;
   return JAX_AS_STATUS(gpuLaunchKernel(
       kernel, grid[0], grid[1], grid[2], block_dim_x_,
       /*blockDimY=*/1, /*blockDimZ=*/1, shared_mem_bytes_, stream, params,
