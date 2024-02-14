@@ -79,7 +79,7 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     --rocm_build)
-      ROCM_BUILD_NUM="$2"
+      LKG_BUILD_NUM="$2"
       shift 2
       ;;
     --py_version)
@@ -146,7 +146,7 @@ if [ ${RUNTIME_FLAG} -eq 0 ]; then
   WORKSPACE=${WORKSPACE}/jax
   JAX_VERSION=$(cut -d '-' -f 3 | cut -d 'v' -f 2 <<< $XLA_BRANCH)
   JAX_COMMIT=$(git -C $WORKSPACE rev-parse --short HEAD)
-  BUILD_TAG="compute-artifactory.amd.com:5000/rocm-plus-docker/framework/compute-rocm-dkms-no-npi-hipclang:${ROCM_BUILD_NUM}_${DISTRO}_py${PYTHON_VERSION}_jax${JAX_VERSION}_${JAX_COMMIT}"
+  BUILD_TAG="compute-artifactory.amd.com:5000/rocm-plus-docker/framework/compute-rocm-dkms-no-npi-hipclang:${LKG_BUILD_NUM}_${DISTRO}_py${PYTHON_VERSION}_jax${JAX_VERSION}_${JAX_COMMIT}"
 else
   WORKSPACE="${WORKSPACE:-$(upsearch WORKSPACE)}"
   BUILD_TAG="${BUILD_TAG:-jax}"
@@ -182,13 +182,13 @@ if [[ "${RUNTIME_FLAG}" -eq 1  ]]; then
       -f "${DOCKERFILE_PATH}" "${DOCKER_CONTEXT_PATH}"
 else
   echo "Building (CI) container (${DOCKER_IMG_NAME}) with Dockerfile($DOCKERFILE_PATH)..."
-  AMDGPU_CORE=$(curl http://rocm-ci.amd.com/job/$ROCM_BUILD_JOB/$ROCM_BUILD_NUM/artifact/amdgpu_kernel_info.txt)
+  AMDGPU_CORE=$(curl http://rocm-ci.amd.com/job/$ROCM_BUILD_JOB/$LKG_BUILD_NUM/artifact/amdgpu_kernel_info.txt)
   ROCM_MAJ_MIN=$(cut -d '.' -f -2 <<< $ROCM_VERSION)
   DOCKER_BUILDKIT=1 docker build --target ci_build --tag ${DOCKER_IMG_NAME} \
         --build-arg DISTRO=$DISTRO \
         --build-arg PYTHON_VERSION=$PYTHON_VERSION \
         --build-arg ROCM_BUILD_JOB=$ROCM_BUILD_JOB \
-        --build-arg ROCM_BUILD_NUM=$ROCM_BUILD_NUM \
+        --build-arg LKG_BUILD_NUM=$LKG_BUILD_NUM \
         --build-arg AMDGPU_CORE=$AMDGPU_CORE \
         --build-arg ROCM_VERSION=$ROCM_VERSION \
         --build-arg ROCM_MAJ_MIN=$ROCM_MAJ_MIN \

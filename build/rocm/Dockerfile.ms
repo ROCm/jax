@@ -39,11 +39,11 @@ ARG BASE_DOCKER=ubuntu:20.04
 FROM $BASE_DOCKER as ci_build
 ################################################################################
 ARG ROCM_BUILD_JOB=ubuntu
-ARG ROCM_BUILD_NUM=main
+ARG LKG_BUILD_NUM=main
 ARG AMDGPU_CORE=""
 ARG ROCM_VERSION=""
 ARG ROCM_MAJ_MIN=""
-ARG ROCM_PATH=/opt/rocm-${ROCM_VERSION}-${ROCM_BUILD_NUM}
+ARG ROCM_PATH=/opt/rocm-${ROCM_VERSION}-${LKG_BUILD_NUM}
 ENV ROCM_PATH=${ROCM_PATH}
 ARG PYTHON_VERSION=3.9.0
 COPY UTC* /usr/share/zoneinfo/UTC
@@ -87,7 +87,7 @@ RUN apt-get install -y software-properties-common
 
 RUN apt update && apt install -y wget && wget http://artifactory-cdn.amd.com/artifactory/list/amdgpu-deb/amdgpu-install-internal_${ROCM_MAJ_MIN}-20.04-1_all.deb \
     && apt install -y ./amdgpu-install-internal_${ROCM_MAJ_MIN}-20.04-1_all.deb && apt update
-RUN amdgpu-repo --amdgpu-build=${AMDGPU_CORE} --rocm-build=${ROCM_BUILD_JOB}/${ROCM_BUILD_NUM} \
+RUN amdgpu-repo --amdgpu-build=${AMDGPU_CORE} --rocm-build=${ROCM_BUILD_JOB}/${LKG_BUILD_NUM} \
     && amdgpu-install --no-dkms --usecase=rocm -y
 RUN apt install -y rocm-dev rocm-libs
 
