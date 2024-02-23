@@ -43,8 +43,8 @@ ARG LKG_BUILD_NUM=main
 ARG AMDGPU_CORE=""
 ARG ROCM_VERSION=""
 ARG ROCM_MAJ_MIN=""
-# ARG ROCM_PATH=/opt/rocm-${ROCM_VERSION}
-# ENV ROCM_PATH=${ROCM_PATH}
+ARG ROCM_PATH=/opt/rocm-${ROCM_VERSION}
+ENV ROCM_PATH=${ROCM_PATH}
 ARG PYTHON_VERSION=3.9.0
 COPY UTC* /usr/share/zoneinfo/UTC
 RUN ln -sf /usr/share/zoneinfo/UTC /etc/localtime ; echo 'UTC' > /etc/timezone
@@ -99,7 +99,11 @@ ENV PATH="$ROCM_PATH/bin:${PATH}"
 ENV PATH="$OPENCL_ROOT/bin:${PATH}"
 
 # Add target file to help determine which device(s) to build for
-RUN bash -c 'echo -e "gfx900\ngfx906\ngfx908\ngfx90a\ngfx940\ngfx941\ngfx942\ngfx1030\ngfx1100" >> ${ROCM_PATH}/bin/target.lst'
+RUN bash -c 'if [ ${ROCM_BUILD_JOB} = "compute-rocm-dkms-no-npi-hipclang" ]; then \
+  echo -e "gfx900\ngfx906\ngfx908\ngfx90a\ngfx940\ngfx941\ngfx942\ngfx1030\ngfx1100" >> ${ROCM_PATH}/bin/target.lst \
+else \
+  echo -e "gfx900\ngfx906\ngfx908\ngfx90a\ngfx940\ngfx941\ngfx942\ngfx1030\ngfx1100" >> ${ROCM_PATH}-${LKG_BUILD_NUM}/bin/target.lst \
+fi'
 
 # Need to explicitly create the $ROCM_PATH/.info/version file to workaround what seems to be a bazel bug
 # The env vars being set via --action_env in .bazelrc and .tf_configure.bazelrc files are sometimes
