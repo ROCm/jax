@@ -154,6 +154,12 @@ else
   DOCKER_IMG_NAME="${BUILD_TAG}.${CONTAINER_TYPE}"
 fi
 
+if [ ${ROCM_BUILD_JOB} = "compute-rocm-dkms-no-npi-hipclang" ]; then
+  ROCM_PATH="/opt/rocm-${ROCM_VERSION}-${LKG_BUILD_NUM}"
+else
+  ROCM_PATH="/opt/rocm-${ROCM_VERSION}"
+fi
+
 # Under Jenkins matrix build, the build tag may contain characters such as
 # commas (,) and equal signs (=), which are not valid inside docker image names.
 DOCKER_IMG_NAME=$(echo "${DOCKER_IMG_NAME}" | sed -e 's/=/_/g' -e 's/,/-/g')
@@ -191,6 +197,7 @@ else
         --build-arg AMDGPU_CORE=$AMDGPU_CORE \
         --build-arg ROCM_VERSION=$ROCM_VERSION \
         --build-arg ROCM_MAJ_MIN=$ROCM_MAJ_MIN \
+        --build-arg ROCM_PATH=$ROCM_PATH \
       -f "${DOCKERFILE_PATH}" "${DOCKER_CONTEXT_PATH}"   
 fi
 
@@ -220,6 +227,7 @@ fi
 docker run ${KEEP_IMAGE} --name ${DOCKER_NAME} --pid=host --privileged \
   -v ${WORKSPACE}:/workspace \
   -w /workspace \
+  -e ROCM_PATH=$ROCM_PATH \
   -e XLA_REPO=${XLA_REPO} \
   -e XLA_BRANCH=${XLA_BRANCH} \
   -e XLA_CLONE_DIR=${XLA_CLONE_DIR} \
