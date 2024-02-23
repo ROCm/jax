@@ -146,14 +146,13 @@ if [ ${RUNTIME_FLAG} -eq 0 ]; then
   WORKSPACE=${WORKSPACE}/jax
   JAX_VERSION=$(cut -d '-' -f 3 | cut -d 'v' -f 2 <<< $XLA_BRANCH)
   JAX_COMMIT=$(git -C $WORKSPACE rev-parse --short HEAD)
-  BUILD_TAG="compute-artifactory.amd.com:5000/rocm-plus-docker/framework/compute-rocm-dkms-no-npi-hipclang:${LKG_BUILD_NUM}_${DISTRO}_py${PYTHON_VERSION}_jax${JAX_VERSION}_${JAX_COMMIT}"
+  BUILD_TAG="compute-artifactory.amd.com:5000/rocm-plus-docker/framework/${ROCM_BUILD_JOB}:${LKG_BUILD_NUM}_${DISTRO}_py${PYTHON_VERSION}_jax${JAX_VERSION}_${JAX_COMMIT}"
+  DOCKER_IMG_NAME="${BUILD_TAG}"
 else
   WORKSPACE="${WORKSPACE:-$(upsearch WORKSPACE)}"
   BUILD_TAG="${BUILD_TAG:-jax}"
+  DOCKER_IMG_NAME="${BUILD_TAG}.${CONTAINER_TYPE}"
 fi
-
-# Determine the docker image name and BUILD_TAG.
-DOCKER_IMG_NAME="${BUILD_TAG}.${CONTAINER_TYPE}"
 
 # Under Jenkins matrix build, the build tag may contain characters such as
 # commas (,) and equal signs (=), which are not valid inside docker image names.
