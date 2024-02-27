@@ -226,7 +226,7 @@ fi
 
 DOCKER_CHECK=$(docker ps -l --filter "name=${DOCKER_NAME}" | wc -l)
 
-if [ "${DOCKER_CHECK}" > 1 ]; then 
+if [ "${DOCKER_CHECK}" -gt 1 ]; then 
 	echo "${DOCKER_NAME} already exists, removing old instace..." 
   docker rm ${DOCKER_NAME}
 fi
