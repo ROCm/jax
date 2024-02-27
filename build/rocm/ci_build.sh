@@ -224,7 +224,7 @@ else
   DOCKER_NAME=${DOCKER_IMG_NAME}
 fi
 
-if docker ps -l | grep ${DOCKER_NAME}; then 
+if [[ $(docker ps -l | grep CI_DOCKER) != '' ]]; then 
 	echo "CI_DOCKER already exists, removing old instace..." 
   docker rm ${DOCKER_NAME}
 fi
