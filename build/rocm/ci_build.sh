@@ -224,6 +224,8 @@ else
   DOCKER_NAME=${DOCKER_IMG_NAME}
 fi
 
+docker rm ${DOCKER_NAME}    #remove and residual container with same name
+
 docker run ${KEEP_IMAGE} --name ${DOCKER_NAME} --pid=host --privileged --entrypoint "/bin/bash" \
   -v ${WORKSPACE}:/workspace \
   -w /workspace \
