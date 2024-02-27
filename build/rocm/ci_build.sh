@@ -224,7 +224,10 @@ else
   DOCKER_NAME=${DOCKER_IMG_NAME}
 fi
 
-docker rm ${DOCKER_NAME}    #remove and residual container with same name
+if [[ $(docker ps -l | grep CI_DOCKER) ]]; then 
+	echo "CI_DOCKER already exists, removing old instace..." 
+  docker rm ${DOCKER_NAME}
+fi
 
 docker run ${KEEP_IMAGE} --name ${DOCKER_NAME} --pid=host --privileged --entrypoint "/bin/bash" \
   -v ${WORKSPACE}:/workspace \
