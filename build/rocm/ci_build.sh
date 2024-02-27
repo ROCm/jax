@@ -224,10 +224,10 @@ else
   DOCKER_NAME=${DOCKER_IMG_NAME}
 fi
 
-DOCKER_CHECK=$(docker ps -l --filter "name=${DOCKER_NAME}")
-echo "here is docker check: ${DOCKER_CHECK}"
+# DOCKER_CHECK=$(docker ps -l --filter "name=${DOCKER_NAME}")
+# echo "here is docker check: ${DOCKER_CHECK}"
 
-if [[ "${DOCKER_CHECK}" != '' ]]; then 
+if docker ps -l | grep -q ${DOCKER_NAME} || true; then 
 	echo "CI_DOCKER already exists, removing old instace..." 
   docker rm ${DOCKER_NAME}
 fi
