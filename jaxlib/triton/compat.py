@@ -28,7 +28,8 @@ from jaxlib.mlir import ir
 from jaxlib.mlir.dialects import arith as arith_dialect
 from jaxlib.mlir.dialects import math as math_dialect
 import numpy as np
-import triton.backends.nvidia.compiler as cb
+#import triton.backends.nvidia.compiler as cb
+import triton.backends.amd.compiler as bc
 import triton.language as tl
 
 from . import dialect as tt_dialect
@@ -51,10 +52,10 @@ class builder:
   def current(cls) -> "builder":
     return _tls.builder
 
-  def __init__(self, cuda_options: cb.CUDAOptions):
+  def __init__(self, options: bc.HIPOptions):
     self.context = new_ir_context()
     self.loc = ir.Location.unknown(self.context)
-    self.options = cuda_options
+    self.options = options
 
   def __enter__(self):
     _tls.builder = self

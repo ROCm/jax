@@ -61,7 +61,9 @@ import jax.numpy as jnp
 from jax_triton import triton_lib
 from jax_triton.triton_lib import compile_ttir_to_ptx_inplace
 import numpy as np
-import triton.backends.nvidia.compiler as cb
+#import triton.backends.nvidia.compiler as cb
+import triton.backends.amd.compiler as bc
+from triton.compiler import compiler as ttc
 
 
 # TODO(sharadmv): Enable type checking.
@@ -244,11 +246,11 @@ def lower_jaxpr_to_triton_module(
     in_shapes,
     grid_mapping: GridMapping,
     name: str,
-    cuda_options: cb.CUDAOptions,
+    options: bc.HIPOptions,
 ) -> TritonLoweringResult:
   jaxpr, _ = pe.dce_jaxpr(jaxpr, [True] * len(jaxpr.outvars), instantiate=True)
   with contextlib.ExitStack() as stack:
-    builder = tc.builder(cuda_options)
+    builder = tc.builder(options)
     stack.enter_context(builder)
     module: ir.Module = ir.Module.create()
     stack.enter_context(ir.InsertionPoint.at_block_begin(module.body))
@@ -1565,9 +1567,10 @@ def compile_jaxpr(
   # general.
   device = 0
   arch = triton_kernel_call_lib.get_compute_capability(device)
-  target = ("cuda", arch)
-  cuda_backend = cb.CUDABackend(target)
-  cuda_options = cuda_backend.parse_options(
+  #target = ("cuda", arch)
+  target = ttc.driver.active.get_current_target()
+  backend = bc.HIPBackend(target)
+  options = backend.parse_options(
       dict(
           num_warps=num_warps,
           num_stages=num_stages,
@@ -1575,15 +1578,15 @@ def compile_jaxpr(
       )
   )
   lowering_result = lower_jaxpr_to_triton_module(
-      jaxpr, in_shapes, grid_mapping, name, cuda_options
+      jaxpr, in_shapes, grid_mapping, name, options
   )
 
   ttir = str(lowering_result.module)
   ptx, name, shared_mem_bytes, compute_capability, _ = (
       compile_ttir_to_ptx_inplace(
           lowering_result.module,
-          cuda_backend,
-          cuda_options,
+          backend,
+          options,
           device=device,
       )
   )
@@ -1645,8 +1648,8 @@ def pallas_call_lowering(
       debug=debug,
   )
   # Triton returns a tuple for ROCm. We just want file path to be passed
-  if ctx.module_context.platforms[0] == 'rocm':
-    compilation_result.ptx = compilation_result.ptx[1]
+  #if ctx.module_context.platforms[0] == 'rocm':
+  #  compilation_result.ptx = compilation_result.ptx[1]
 
   if debug:
     compilation_result.lowering_result.module.dump()
