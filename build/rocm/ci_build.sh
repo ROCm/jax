@@ -219,16 +219,15 @@ if [ ! -z ${XLA_CLONE_DIR} ]; then
 fi
 
 if [ ${RUNTIME_FLAG} -eq 0 ]; then
-  DOCKER_NAME="CI_DOCKER"
+  DOCKER_NAME="JAX_CI_DOCKER"
 else
   DOCKER_NAME=${DOCKER_IMG_NAME}
 fi
 
-# DOCKER_CHECK=$(docker ps -l --filter "name=${DOCKER_NAME}")
-# echo "here is docker check: ${DOCKER_CHECK}"
+DOCKER_CHECK=$(docker ps -l --filter "name=${DOCKER_NAME}" | wc -l)
 
-if docker ps -l | grep -q ${DOCKER_NAME} || true; then 
-	echo "CI_DOCKER already exists, removing old instace..." 
+if [ "${DOCKER_CHECK}" > 1 ]; then 
+	echo "${DOCKER_NAME} already exists, removing old instace..." 
   docker rm ${DOCKER_NAME}
 fi
 
