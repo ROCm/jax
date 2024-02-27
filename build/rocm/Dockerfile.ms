@@ -122,6 +122,6 @@ ENV PYENV_ROOT /pyenv
 ENV PATH $PYENV_ROOT/shims:$PYENV_ROOT/bin:$PATH
 RUN pyenv install $PYTHON_VERSION
 RUN eval "$(pyenv init -)" && pyenv local ${PYTHON_VERSION} && pip3 install --upgrade --force-reinstall setuptools pip && pip install numpy setuptools build wheel six auditwheel scipy pytest pytest-rerunfailures matplotlib absl-py
-ENTRYPOINT [ "/bin/bash","-c" ]
+ENTRYPOINT [ "/bin/bash" ]
 
 
