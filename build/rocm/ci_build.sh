@@ -240,6 +240,7 @@ docker run ${KEEP_IMAGE} --name ${DOCKER_NAME} --pid=host --privileged --entrypo
   -e CI_RUN=1 \
   ${ROCM_EXTRA_PARAMS} \
   "${DOCKER_IMG_NAME}" \
+  -c \
   ${POSITIONAL_ARGS[@]}
 
 if [[ "${KEEP_IMAGE}" != "--rm" ]] && [[ $? == "0" ]]; then
