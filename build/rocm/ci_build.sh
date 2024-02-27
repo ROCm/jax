@@ -225,6 +225,7 @@ else
 fi
 
 DOCKER_CHECK=$(docker ps -l | grep ${DOCKER_NAME})
+echo "here is docker check: ${DOCKER_CHECK}"
 
 if [[ "${DOCKER_CHECK}" != '' ]]; then 
 	echo "CI_DOCKER already exists, removing old instace..." 
