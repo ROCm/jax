@@ -232,7 +232,7 @@ if [[ "${DOCKER_CHECK}" != '' ]]; then
   docker rm ${DOCKER_NAME}
 fi
 
-docker run ${KEEP_IMAGE} --name ${DOCKER_NAME} --pid=host --privileged \
+docker run ${KEEP_IMAGE} --pid=host --privileged \
   -v ${WORKSPACE}:/workspace \
   -w /workspace \
   -e ROCM_PATH=$ROCM_PATH \
@@ -247,6 +247,7 @@ docker run ${KEEP_IMAGE} --name ${DOCKER_NAME} --pid=host --privileged \
 
 if [[ "${KEEP_IMAGE}" != "--rm" ]] && [[ $? == "0" ]]; then
   echo "Committing the docker container as ${DOCKER_IMG_NAME}"
+  docker run --name ${DOCKER_NAME} --entrypoint /bin/bash "${DOCKER_IMG_NAME}"
   docker stop ${DOCKER_NAME}
   docker commit ${DOCKER_NAME} ${DOCKER_IMG_NAME}
   docker rm ${DOCKER_NAME}    # remove this temp container
