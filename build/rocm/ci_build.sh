@@ -224,7 +224,7 @@ else
   DOCKER_NAME=${DOCKER_IMG_NAME}
 fi
 
-DOCKER_CHECK=$(docker ps -l | grep ${DOCKER_NAME})
+DOCKER_CHECK=$(docker ps -l --filter "name=${DOCKER_NAME}")
 echo "here is docker check: ${DOCKER_CHECK}"
 
 if [[ "${DOCKER_CHECK}" != '' ]]; then 
