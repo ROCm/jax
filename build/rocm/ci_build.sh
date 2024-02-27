@@ -224,7 +224,7 @@ else
   DOCKER_NAME=${DOCKER_IMG_NAME}
 fi
 
-docker run ${KEEP_IMAGE} --name ${DOCKER_NAME} --pid=host --privileged \
+docker run ${KEEP_IMAGE} --name ${DOCKER_NAME} --pid=host --privileged --entrypoint "/bin/bash" \
   -v ${WORKSPACE}:/workspace \
   -w /workspace \
   -e ROCM_PATH=$ROCM_PATH \
