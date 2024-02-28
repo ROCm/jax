@@ -246,7 +246,7 @@ docker run ${KEEP_IMAGE} --pid=host --privileged \
 
 if [[ "${KEEP_IMAGE}" != "--rm" ]] && [[ $? == "0" ]]; then
   echo "Committing the docker container as ${DOCKER_IMG_NAME}"
-  docker run --name ${DOCKER_NAME} --entrypoint /bin/bash "${DOCKER_IMG_NAME}"
+  docker run ${KEEP_IMAGE} --name ${DOCKER_NAME} --entrypoint /bin/bash --pid=host --privileged "${DOCKER_IMG_NAME}"
   docker stop ${DOCKER_NAME}
   docker commit ${DOCKER_NAME} ${DOCKER_IMG_NAME}
   #docker rm ${DOCKER_NAME}    # remove this temp container
