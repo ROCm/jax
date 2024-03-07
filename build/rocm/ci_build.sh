@@ -231,7 +231,7 @@ if [ "${DOCKER_CHECK}" -gt 1 ]; then
   docker rm ${DOCKER_NAME}
 fi
 
-docker run ${KEEP_IMAGE} --name ${DOCKER_NAME} --pid=host --privileged \
+docker run ${KEEP_IMAGE} --name ${DOCKER_NAME} --pid=host \
   -v ${WORKSPACE}:/workspace \
   -w /workspace \
   -e ROCM_PATH=$ROCM_PATH \
