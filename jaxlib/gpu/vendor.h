@@ -297,6 +297,7 @@ typedef cusparseDnVecDescr_t gpusparseDnVecDescr_t;
   CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES
 #define GPU_EVENT_DEFAULT CU_EVENT_DEFAULT
 
+
 #define gpuGetLastError cudaGetLastError
 #define gpuGetErrorString cudaGetErrorString
 #define gpuMemcpy cudaMemcpy
@@ -513,6 +514,7 @@ typedef hipsparseDnVecDescr_t gpusparseDnVecDescr_t;
 #define gpuMemcpyHostToDevice hipMemcpyHostToDevice
 #define gpuMemcpyDeviceToHost hipMemcpyDeviceToHost
 #define gpuStreamSynchronize hipStreamSynchronize
+#define gpuStreamWaitEvent hipStreamWaitEvent
 #define gpuSuccess hipSuccess
 
 #define gpuCtxGetDevice hipCtxGetDevice

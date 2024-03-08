@@ -31,6 +31,7 @@
 #include "jaxlib/gpu/vendor.h"
 #include "xla/service/custom_call_status.h"
 #include "xla/stream_executor/gpu/asm_compiler.h"
+#include "tsl/platform/env.h"
 
 #define GPU_RETURN_IF_ERROR(expr) JAX_RETURN_IF_ERROR(JAX_AS_STATUS(expr))
 
@@ -568,7 +569,10 @@ jax_triton::TritonAutotunedKernelCall AutotunedKernelCall::ToProto() const {
     // Create a new stream to run autotuning and synchronize it with main sream.
     GPU_RETURN_IF_ERROR(
         gpuStreamCreate(&autotune_stream, GPU_STREAM_NON_BLOCKING));
-    GPU_RETURN_IF_ERROR(gpuStreamWaitEvent(autotune_stream, autotune_event));
+
+    // On CUDA flags argument is set to 0 by default, 
+    // but on HIP/ROCm required to be set to 0
+    GPU_RETURN_IF_ERROR(gpuStreamWaitEvent(autotune_stream, autotune_event, 0));
   }
 
   // If an input aliases with an output, it will get overwritten during the
@@ -651,7 +655,9 @@ jax_triton::TritonAutotunedKernelCall AutotunedKernelCall::ToProto() const {
   if (is_capturing) {
     // Wait on a main stream for completion of autotuning.
     GPU_RETURN_IF_ERROR(gpuEventRecord(autotune_event, autotune_stream));
-    GPU_RETURN_IF_ERROR(gpuStreamWaitEvent(stream, autotune_event));
+    // On CUDA flags argument is set to 0 by default, 
+    // but on HIP/ROCm required to be set to 0
+    GPU_RETURN_IF_ERROR(gpuStreamWaitEvent(stream, autotune_event, 0));
     GPU_RETURN_IF_ERROR(gpuEventDestroy(autotune_event));
 
     // Destroy autotuning stream and recover stream capturing mode.
