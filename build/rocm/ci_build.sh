@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # Copyright 2022 The JAX Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -57,10 +57,31 @@ CUSTOM_INSTALL=""
 #ROCM_PATH="/opt/rocm-5.6.0"
 POSITIONAL_ARGS=()
 
-RUNTIME_FLAG=1
+RUNTIME_FLAG=0
+WHL_ONLY_BUILD=0
 
 while [[ $# -gt 0 ]]; do
   case $1 in
+    --xla_repo)
+      XLA_REPO="$2"
+      shift 2
+      ;;
+    --xla_branch)
+      XLA_BRANCH="$2"
+      shift 2
+      ;;
+    --xla_dir)
+      XLA_CLONE_DIR="$2"
+      shift 2
+      ;;
+    --rocm_job)
+      ROCM_BUILD_JOB="$2"
+      shift 2
+      ;;
+    --rocm_build)
+      LKG_BUILD_NUM="$2"
+      shift 2
+      ;;
     --py_version)
       PYTHON_VERSION="$2"
       shift 2
@@ -75,7 +96,7 @@ while [[ $# -gt 0 ]]; do
       shift 1
       ;;
     --runtime)
-      RUNTIME_FLAG=1
+      RUNTIME_FLAG="1"
       shift 1
       ;;
     --keep_container)
@@ -86,6 +107,14 @@ while [[ $# -gt 0 ]]; do
       ROCM_VERSION="$2"
       shift 2
       ;;
+    --distro)
+      DISTRO="$2"
+      shift 2
+      ;;
+    --whl_only)
+    WHL_ONLY_BUILD="1"
+    shift 1
+    ;;
     #--rocm_path)
     #  ROCM_PATH="$2"
     #  shift 2
@@ -113,11 +142,23 @@ function upsearch (){
 }
 
 # Set up WORKSPACE. 
-WORKSPACE="${WORKSPACE:-$(upsearch WORKSPACE)}"
-BUILD_TAG="${BUILD_TAG:-jax}"
+if [ ${RUNTIME_FLAG} -eq 0 ]; then
+  WORKSPACE=${WORKSPACE}/jax
+  JAX_VERSION=$(cut -d '-' -f 3 | cut -d 'v' -f 2 <<< $XLA_BRANCH)
+  JAX_COMMIT=$(git -C $WORKSPACE rev-parse --short HEAD)
+  BUILD_TAG="compute-artifactory.amd.com:5000/rocm-plus-docker/framework/${ROCM_BUILD_JOB}:${LKG_BUILD_NUM}_${DISTRO}_py${PYTHON_VERSION}_jax${JAX_VERSION}_${JAX_COMMIT}"
+  DOCKER_IMG_NAME="${BUILD_TAG}"
+else
+  WORKSPACE="${WORKSPACE:-$(upsearch WORKSPACE)}"
+  BUILD_TAG="${BUILD_TAG:-jax}"
+  DOCKER_IMG_NAME="${BUILD_TAG}.${CONTAINER_TYPE}"
+fi
 
-# Determine the docker image name and BUILD_TAG.
-DOCKER_IMG_NAME="${BUILD_TAG}.${CONTAINER_TYPE}"
+if [ ${ROCM_BUILD_JOB} = "compute-rocm-dkms-no-npi-hipclang" ]; then
+  ROCM_PATH="/opt/rocm-${ROCM_VERSION}-${LKG_BUILD_NUM}"
+else
+  ROCM_PATH="/opt/rocm-${ROCM_VERSION}"
+fi
 
 # Under Jenkins matrix build, the build tag may contain characters such as
 # commas (,) and equal signs (=), which are not valid inside docker image names.
@@ -125,6 +166,8 @@ DOCKER_IMG_NAME=$(echo "${DOCKER_IMG_NAME}" | sed -e 's/=/_/g' -e 's/,/-/g')
 
 # Convert to all lower-case, as per requirement of Docker image names
 DOCKER_IMG_NAME=$(echo "${DOCKER_IMG_NAME}" | tr '[:upper:]' '[:lower:]')
+
+echo $DOCKER_IMG_NAME > "buildTag.txt"
 
 # Print arguments.
 echo "WORKSPACE: ${WORKSPACE}"
@@ -144,10 +187,18 @@ if [[ "${RUNTIME_FLAG}" -eq 1  ]]; then
       -f "${DOCKERFILE_PATH}" "${DOCKER_CONTEXT_PATH}"
 else
   echo "Building (CI) container (${DOCKER_IMG_NAME}) with Dockerfile($DOCKERFILE_PATH)..."
-  docker build --target ci_build --tag ${DOCKER_IMG_NAME} \
+  AMDGPU_CORE=$(curl http://rocm-ci.amd.com/job/$ROCM_BUILD_JOB/$LKG_BUILD_NUM/artifact/amdgpu_kernel_info.txt)
+  ROCM_MAJ_MIN=$(cut -d '.' -f -2 <<< $ROCM_VERSION)
+  DOCKER_BUILDKIT=1 docker build --target ci_build --tag ${DOCKER_IMG_NAME} \
+        --build-arg DISTRO=$DISTRO \
         --build-arg PYTHON_VERSION=$PYTHON_VERSION \
-        --build-arg BASE_DOCKER=$BASE_DOCKER \
-      -f "${DOCKERFILE_PATH}" "${DOCKER_CONTEXT_PATH}"  
+        --build-arg ROCM_BUILD_JOB=$ROCM_BUILD_JOB \
+        --build-arg LKG_BUILD_NUM=$LKG_BUILD_NUM \
+        --build-arg AMDGPU_CORE=$AMDGPU_CORE \
+        --build-arg ROCM_VERSION=$ROCM_VERSION \
+        --build-arg ROCM_MAJ_MIN=$ROCM_MAJ_MIN \
+        --build-arg ROCM_PATH=$ROCM_PATH \
+      -f "${DOCKERFILE_PATH}" "${DOCKER_CONTEXT_PATH}"   
 fi
 
 # Check docker build status
@@ -164,12 +215,26 @@ export XLA_CLONE_DIR="${XLA_CLONE_DIR:-}"
 export JAX_RENAME_WHL="${XLA_CLONE_DIR:-}"
 
 if [ ! -z ${XLA_CLONE_DIR} ]; then
-	ROCM_EXTRA_PARAMS=${ROCM_EXTRA_PARAMS}" -v ${XLA_CLONE_DIR}:${XLA_CLONE_DIR}"
+  ROCM_EXTRA_PARAMS=${ROCM_EXTRA_PARAMS}" -v ${XLA_CLONE_DIR}:${XLA_CLONE_DIR}"
 fi
 
-docker run ${KEEP_IMAGE} --name ${DOCKER_IMG_NAME} --pid=host \
+if [ ${RUNTIME_FLAG} -eq 0 ]; then
+  DOCKER_NAME="JAX_CI_DOCKER"
+else
+  DOCKER_NAME=${DOCKER_IMG_NAME}
+fi
+
+DOCKER_CHECK=$(docker ps -l --filter "name=${DOCKER_NAME}" | wc -l)
+
+if [ "${DOCKER_CHECK}" -gt 1 ]; then 
+	echo "${DOCKER_NAME} already exists, removing old instace..." 
+  docker rm ${DOCKER_NAME}
+fi
+
+docker run ${KEEP_IMAGE} --name ${DOCKER_NAME} --privileged \
   -v ${WORKSPACE}:/workspace \
   -w /workspace \
+  -e ROCM_PATH=$ROCM_PATH \
   -e XLA_REPO=${XLA_REPO} \
   -e XLA_BRANCH=${XLA_BRANCH} \
   -e XLA_CLONE_DIR=${XLA_CLONE_DIR} \
@@ -181,9 +246,8 @@ docker run ${KEEP_IMAGE} --name ${DOCKER_IMG_NAME} --pid=host \
 
 if [[ "${KEEP_IMAGE}" != "--rm" ]] && [[ $? == "0" ]]; then
   echo "Committing the docker container as ${DOCKER_IMG_NAME}"
-  docker stop ${DOCKER_IMG_NAME}
-  docker commit ${DOCKER_IMG_NAME} ${DOCKER_IMG_NAME}
-  docker rm ${DOCKER_IMG_NAME}    # remove this temp container
+  docker stop ${DOCKER_NAME}
+  docker commit ${DOCKER_NAME} ${DOCKER_IMG_NAME}
+  docker rm ${DOCKER_NAME}    # remove this temp container
 fi
-
-echo "Jax-ROCm build was successful!"
+  echo "Jax-ROCm wheel and docker build was successful!"
