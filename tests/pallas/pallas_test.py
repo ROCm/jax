@@ -650,6 +650,8 @@ class PallasCallTest(PallasTest):
     if isinstance(axis, int) or "arg" not in op_name
     ])
   def test_array_reduce(self, op, dtype, axis):
+    if dtype == "float16" and self.INTERPRET == True and jtu.is_device_rocm():
+      self.skipTest('Skipping on ROCm due to LLVM bug.')
     m, n = 32, 8
     out_dtype = dtype
     if op in {jnp.argmin, jnp.argmax}:
