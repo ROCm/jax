@@ -167,8 +167,6 @@ DOCKER_IMG_NAME=$(echo "${DOCKER_IMG_NAME}" | sed -e 's/=/_/g' -e 's/,/-/g')
 # Convert to all lower-case, as per requirement of Docker image names
 DOCKER_IMG_NAME=$(echo "${DOCKER_IMG_NAME}" | tr '[:upper:]' '[:lower:]')
 
-echo $DOCKER_IMG_NAME > "buildTag.txt"
-
 # Print arguments.
 echo "WORKSPACE: ${WORKSPACE}"
 echo "COMMAND: ${POSITIONAL_ARGS[*]}"
@@ -250,4 +248,5 @@ if [[ "${KEEP_IMAGE}" != "--rm" ]] && [[ $? == "0" ]]; then
   docker commit ${DOCKER_NAME} ${DOCKER_IMG_NAME}
   docker rm ${DOCKER_NAME}    # remove this temp container
 fi
+  echo $DOCKER_IMG_NAME > "buildTag.txt"
   echo "Jax-ROCm wheel and docker build was successful!"
