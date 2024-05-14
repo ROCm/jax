@@ -37,7 +37,7 @@ if ! command -v python3 &> /dev/null; then
 fi
 
 # GPU detection and test execution
-gpu_count=$(lspci | grep -c 'controller.*AMD/ATI')
+gpu_count=$(lspci|grep 'controller\|accel'|grep 'AMD/ATI'|wc -l)
 echo "Number of AMD/ATI GPUs detected: $gpu_count"
 
 if [[ $gpu_count -gt 8 ]]; then
