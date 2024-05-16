@@ -35,7 +35,7 @@ RUN pyenv install $PYTHON_VERSION
 RUN eval "$(pyenv init -)" && pyenv local ${PYTHON_VERSION} && pip3 install --upgrade --force-reinstall setuptools pip && pip install numpy setuptools build wheel six auditwheel scipy==1.12.0 pytest pytest-rerunfailures matplotlib absl-py flatbuffers hypothesis
 
 ################################################################################
-ARG BASE_DOCKER=ubuntu:20.04
+ARG BASE_DOCKER
 FROM $BASE_DOCKER as ci_build
 ################################################################################
 ARG ROCM_BUILD_JOB=ubuntu
