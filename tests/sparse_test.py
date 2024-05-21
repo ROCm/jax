@@ -953,6 +953,7 @@ class SparseObjectTest(sptu.SparseTestCase):
     # Test matching type
     x = rng_b(bshape, dtype)
     x = jnp.asarray(x)
+
     self.assertAllClose(
         M @ x, Msp @ x, rtol=sptu.MATMUL_TOL, atol=sptu.MATMUL_TOL
     )
@@ -960,6 +961,11 @@ class SparseObjectTest(sptu.SparseTestCase):
     # Test mismatched type
     x = rng_b(bshape, np.int32)
     x = jnp.asarray(x)
+
+    if jtu.is_device_rocm():
+      x = jnp.nan_to_num(x)
+      M = jnp.nan_to_num(M)
+
     with jax.numpy_dtype_promotion('standard'):
       self.assertAllClose(M @ x, Msp @ x, rtol=sptu.MATMUL_TOL)
 
