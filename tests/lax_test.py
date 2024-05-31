@@ -1037,6 +1037,8 @@ class LaxTest(jtu.JaxTestCase):
       ],
   )
   def testDot(self, lhs_shape, rhs_shape, lhs_dtype, rhs_dtype, precision):
+    if jtu.is_device_rocm() and (lhs_dtype == np.uint8):
+      raise SkipTest("testDot with int8 and uint8 type skipped on ROCm")
     rng = jtu.rand_default(self.rng())
     args_maker = lambda: [rng(lhs_shape, lhs_dtype), rng(rhs_shape, rhs_dtype)]
     self._CompileAndCheck(partial(lax.dot, precision=precision), args_maker)
