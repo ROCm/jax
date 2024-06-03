@@ -44,52 +44,14 @@ ARG AMDGPU_CORE=""
 ARG ROCM_VERSION=""
 ARG ROCM_MAJ_MIN=""
 ARG ROCM_PATH=""
+ARG CUSTOM_CI_BUILD_INSTALL
 #ENV ROCM_PATH=${ROCM_PATH}
 ARG PYTHON_VERSION=3.9.0
 COPY UTC* /usr/share/zoneinfo/UTC
 RUN ln -sf /usr/share/zoneinfo/UTC /etc/localtime ; echo 'UTC' > /etc/timezone
 
-RUN apt-get update --allow-insecure-repositories && DEBIAN_FRONTEND=noninteractive apt-get install -y \
-  build-essential \
-  software-properties-common \
-  clang-6.0 \
-  clang-format-6.0 \
-  curl \
-  g++-multilib \
-  git \
-  vim \
-  libnuma-dev \
-  virtualenv \
-  python3-pip \
-  pciutils \
-  python-is-python3 \
-  libffi-dev \
-  libssl-dev \
-  build-essential \
-  zlib1g-dev \
-  libbz2-dev \
-  libreadline-dev \
-  libsqlite3-dev curl \
-  libncursesw5-dev \
-  xz-utils \
-  tk-dev \
-  libxml2-dev \
-  libxmlsec1-dev \
-  libffi-dev \
-  liblzma-dev \
-  wget && \
-  apt-get clean && \
-  rm -rf /var/lib/apt/lists/*
-
-# Add to get ppa
-RUN apt-get update
-RUN apt-get install -y software-properties-common
-
-RUN apt update && apt install -y wget && wget http://artifactory-cdn.amd.com/artifactory/list/amdgpu-deb/amdgpu-install-internal_${ROCM_MAJ_MIN}-20.04-1_all.deb \
-    && apt install -y ./amdgpu-install-internal_${ROCM_MAJ_MIN}-20.04-1_all.deb && apt update
-RUN amdgpu-repo --amdgpu-build=${AMDGPU_CORE} --rocm-build=${ROCM_BUILD_JOB}/${LKG_BUILD_NUM} \
-    && amdgpu-install --no-dkms --usecase=rocm -y
-RUN apt install -y rocm-dev rocm-libs
+COPY ${CUSTOM_CI_BUILD_INSTALL} /${CUSTOM_CI_BUILD_INSTALL}
+RUN /${CUSTOM_CI_BUILD_INSTALL} $AMDGPU_CORE $LKG_BUILD_NUM $ROCM_BUILD_JOB $ROCM_MAJ_MIN
 
 ENV HCC_HOME=$ROCM_PATH/hcc
 ENV HIP_PATH=$ROCM_PATH/hip
