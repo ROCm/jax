@@ -40,7 +40,6 @@ FROM $BASE_DOCKER as ci_build
 ################################################################################
 ARG ROCM_BUILD_JOB=ubuntu
 ARG LKG_BUILD_NUM=main
-ARG AMDGPU_CORE=""
 ARG ROCM_VERSION=""
 ARG ROCM_MAJ_MIN=""
 ARG ROCM_PATH=""

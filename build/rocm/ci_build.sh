@@ -194,14 +194,12 @@ if [[ "${RUNTIME_FLAG}" -eq 1  ]]; then
       -f "${DOCKERFILE_PATH}" "${DOCKER_CONTEXT_PATH}"
 else
   echo "Building (CI) container (${DOCKER_IMG_NAME}) with Dockerfile($DOCKERFILE_PATH)..."
-  AMDGPU_CORE=$(curl http://rocm-ci.amd.com/job/$ROCM_BUILD_JOB/$LKG_BUILD_NUM/artifact/amdgpu_kernel_info.txt)
   ROCM_MAJ_MIN=$(cut -d '.' -f -2 <<< $ROCM_VERSION)
   DOCKER_BUILDKIT=1 docker build --target ci_build --tag ${DOCKER_IMG_NAME} \
         --build-arg DISTRO=$DISTRO \
         --build-arg PYTHON_VERSION=$PYTHON_VERSION \
         --build-arg ROCM_BUILD_JOB=$ROCM_BUILD_JOB \
         --build-arg LKG_BUILD_NUM=$LKG_BUILD_NUM \
-        --build-arg AMDGPU_CORE=$AMDGPU_CORE \
         --build-arg ROCM_VERSION=$ROCM_VERSION \
         --build-arg ROCM_MAJ_MIN=$ROCM_MAJ_MIN \
         --build-arg ROCM_PATH=$ROCM_PATH \
