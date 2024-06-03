@@ -83,6 +83,8 @@ class ProfilerTest(unittest.TestCase):
       jax.profiler.stop_server()
 
   def testProgrammaticProfiling(self):
+    if jtu.is_device_rocm:
+      raise unittest.SkipTest("[ROCm] test runs infinitely in ci.")
     with tempfile.TemporaryDirectory() as tmpdir:
       try:
         jax.profiler.start_trace(tmpdir)
@@ -104,6 +106,8 @@ class ProfilerTest(unittest.TestCase):
       self.assertIn(b"pxla.py", proto)
 
   def testProfilerGetFDOProfile(self):
+    if jtu.is_device_rocm:
+      raise unittest.SkipTest("[ROCm] test runs infinitely in ci.")
     # Tests stop_and_get_fod_profile could run.
     try:
       jax.profiler.start_trace("test")
@@ -116,6 +120,8 @@ class ProfilerTest(unittest.TestCase):
       self.assertIn(b"copy", fdo_profile)
 
   def testProgrammaticProfilingErrors(self):
+    if jtu.is_device_rocm:
+      raise unittest.SkipTest("[ROCm] test runs infinitely in ci.")
     with self.assertRaisesRegex(RuntimeError, "No profile started"):
       jax.profiler.stop_trace()
 
@@ -131,6 +137,8 @@ class ProfilerTest(unittest.TestCase):
       jax.profiler.stop_trace()
 
   def testProgrammaticProfilingContextManager(self):
+    if jtu.is_device_rocm:
+      raise unittest.SkipTest("[ROCm] test runs infinitely in ci.")
     with tempfile.TemporaryDirectory() as tmpdir:
       with jax.profiler.trace(tmpdir):
         jax.pmap(lambda x: jax.lax.psum(x + 1, 'i'), axis_name='i')(
