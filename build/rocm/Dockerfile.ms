@@ -50,7 +50,7 @@ ARG PYTHON_VERSION=3.9.0
 COPY UTC* /usr/share/zoneinfo/UTC
 RUN ln -sf /usr/share/zoneinfo/UTC /etc/localtime ; echo 'UTC' > /etc/timezone
 
-COPY ${CUSTOM_CI_BUILD_INSTALL} /custom_install.sh
+COPY custom_install.sh /custom_install.sh
 RUN /custom_install.sh $AMDGPU_CORE $LKG_BUILD_NUM $ROCM_BUILD_JOB $ROCM_MAJ_MIN
 
 ENV HCC_HOME=$ROCM_PATH/hcc
