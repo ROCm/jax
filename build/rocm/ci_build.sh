@@ -53,7 +53,7 @@ ROCM_VERSION="6.0.0" #Point to latest release
 BASE_DOCKER="$DISTRO"
 CUSTOM_INSTALL=""
 IMAGE_PATH=""
-CUSTOM_CI_BUILD_INSTALL=""
+CUSTOM_CI_BUILD_INSTALL="custom_install.sh"
 #CUSTOM_INSTALL="custom_install_dummy.sh"
 #ROCM_PATH="/opt/rocm-5.6.0"
 POSITIONAL_ARGS=()
@@ -112,10 +112,10 @@ while [[ $# -gt 0 ]]; do
       DISTRO="$2"
       shift 2
       ;;
-    --custom_ci_build_install)
-      CUSTOM_CI_BUILD_INSTALL="$2"
-      shift 2
-      ;;
+    # --custom_ci_build_install)
+    #   CUSTOM_CI_BUILD_INSTALL="$2"
+    #   shift 2
+    #   ;;
     --image_path)
       IMAGE_PATH="$2"
       shift 2
@@ -197,7 +197,6 @@ else
   AMDGPU_CORE=$(curl http://rocm-ci.amd.com/job/$ROCM_BUILD_JOB/$LKG_BUILD_NUM/artifact/amdgpu_kernel_info.txt)
   ROCM_MAJ_MIN=$(cut -d '.' -f -2 <<< $ROCM_VERSION)
   DOCKER_BUILDKIT=1 docker build --target ci_build --tag ${DOCKER_IMG_NAME} \
-        --build-arg CUSTOM_CI_BUILD_INSTALL=$CUSTOM_CI_BUILD_INSTALL \
         --build-arg DISTRO=$DISTRO \
         --build-arg PYTHON_VERSION=$PYTHON_VERSION \
         --build-arg ROCM_BUILD_JOB=$ROCM_BUILD_JOB \
