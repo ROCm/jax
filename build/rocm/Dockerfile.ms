@@ -49,7 +49,7 @@ COPY UTC* /usr/share/zoneinfo/UTC
 RUN ln -sf /usr/share/zoneinfo/UTC /etc/localtime ; echo 'UTC' > /etc/timezone
 
 COPY custom_install.sh /custom_install.sh
-RUN /custom_install.sh $ROCM_MAJ_MIN $ROCM_BUILD_JOB $AMDGPU_CORE $LKG_BUILD_NUM 
+RUN /custom_install.sh $ROCM_MAJ_MIN $ROCM_BUILD_JOB $LKG_BUILD_NUM 
 
 ENV HCC_HOME=$ROCM_PATH/hcc
 ENV HIP_PATH=$ROCM_PATH/hip
