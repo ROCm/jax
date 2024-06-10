@@ -51,7 +51,7 @@ KEEP_CONTAINER="--rm"
 PYTHON_VERSION="3.10.0"
 ROCM_VERSION="6.0.0" #Point to latest release
 BASE_DOCKER="$DISTRO"
-CUSTOM_INSTALL="${CUSTOM_INSTALL}"
+CUSTOM_CI_INSTALL="${CUSTOM_INSTALL}"
 IMAGE_PATH=""
 # CUSTOM_CI_BUILD_INSTALL="custom_install.sh"
 BUILD_TAG=""
@@ -198,7 +198,7 @@ if [[ "${RUNTIME_FLAG}" -eq 1  ]]; then
   echo "Building (runtime) container (${DOCKER_IMG_NAME}) with Dockerfile($DOCKERFILE_PATH)..."
   docker build --target rt_build --tag ${DOCKER_IMG_NAME} \
         --build-arg PYTHON_VERSION=$PYTHON_VERSION  --build-arg ROCM_VERSION=$ROCM_VERSION \
-        --build-arg CUSTOM_INSTALL=$CUSTOM_INSTALL \
+        --build-arg CUSTOM_CI_INSTALL=$CUSTOM_CI_INSTALL \
         --build-arg BASE_DOCKER=$BASE_DOCKER \
       -f "${DOCKERFILE_PATH}" "${DOCKER_CONTEXT_PATH}"
 else
@@ -212,7 +212,7 @@ else
         --build-arg ROCM_VERSION=$ROCM_VERSION \
         --build-arg ROCM_MAJ_MIN=$ROCM_MAJ_MIN \
         --build-arg ROCM_PATH=$ROCM_PATH \
-        --build-arg CUSTOM_INSTALL=$CUSTOM_INSTALL \
+        --build-arg CUSTOM_CI_INSTALL=$CUSTOM_CI_INSTALL \
       -f "${DOCKERFILE_PATH}" "${DOCKER_CONTEXT_PATH}"   
 fi
 
