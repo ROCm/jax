@@ -51,7 +51,7 @@ KEEP_CONTAINER="--rm"
 PYTHON_VERSION="3.10.0"
 ROCM_VERSION="6.0.0" #Point to latest release
 BASE_DOCKER="$DISTRO"
-CUSTOM_INSTALL=""
+CUSTOM_INSTALL="$CUSTOM_INSTALL"
 IMAGE_PATH=""
 # CUSTOM_CI_BUILD_INSTALL="custom_install.sh"
 BUILD_TAG=""
@@ -212,7 +212,7 @@ else
         --build-arg ROCM_VERSION=$ROCM_VERSION \
         --build-arg ROCM_MAJ_MIN=$ROCM_MAJ_MIN \
         --build-arg ROCM_PATH=$ROCM_PATH \
-        --build-arg CUSTOM_INSTALL=${CUSTOM_INSTALL} \
+        --build-arg CUSTOM_INSTALL=$CUSTOM_INSTALL \
       -f "${DOCKERFILE_PATH}" "${DOCKER_CONTEXT_PATH}"   
 fi
 
