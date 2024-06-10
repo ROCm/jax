@@ -59,15 +59,14 @@ def _pallas_call_ttir_lowering(
 ):
   # TODO(sharadmv): Handle multiple devices with different capabilities.
   d, *_ = jax.local_devices(backend="gpu")
-  cuda_options = dict(
+  backend_options = dict(
       compute_capability=d.compute_capability,
       num_warps=num_warps,
       num_stages=num_stages,
       debug=debug,
   )
-
   lowering_result = lowering.lower_jaxpr_to_triton_module(
-      jaxpr, (*in_shapes, *out_shapes), grid_mapping, name, cuda_options
+      jaxpr, (*in_shapes, *out_shapes), grid_mapping, name, backend_options, ctx.module_context.platforms[0]
   )
   module_op = lowering_result.module.operation
   if debug:
