@@ -43,13 +43,14 @@ ARG LKG_BUILD_NUM=main
 ARG ROCM_VERSION=""
 ARG ROCM_MAJ_MIN=""
 ARG ROCM_PATH=""
+ARG CUSTOM_INSTALL
 #ENV ROCM_PATH=${ROCM_PATH}
 ARG PYTHON_VERSION=3.9.0
 COPY UTC* /usr/share/zoneinfo/UTC
 RUN ln -sf /usr/share/zoneinfo/UTC /etc/localtime ; echo 'UTC' > /etc/timezone
 
-COPY custom_install.sh /custom_install.sh
-RUN /custom_install.sh $ROCM_MAJ_MIN $ROCM_BUILD_JOB $LKG_BUILD_NUM 
+COPY ${CUSTOM_INSTALL} /${CUSTOM_INSTALL}
+RUN /${CUSTOM_INSTALL} $ROCM_MAJ_MIN $ROCM_BUILD_JOB $LKG_BUILD_NUM 
 
 ENV HCC_HOME=$ROCM_PATH/hcc
 ENV HIP_PATH=$ROCM_PATH/hip

@@ -53,7 +53,8 @@ ROCM_VERSION="6.0.0" #Point to latest release
 BASE_DOCKER="$DISTRO"
 CUSTOM_INSTALL=""
 IMAGE_PATH=""
-CUSTOM_CI_BUILD_INSTALL="custom_install.sh"
+# CUSTOM_CI_BUILD_INSTALL="custom_install.sh"
+BUILD_TAG=""
 #CUSTOM_INSTALL="custom_install_dummy.sh"
 #ROCM_PATH="/opt/rocm-5.6.0"
 POSITIONAL_ARGS=()
@@ -120,6 +121,14 @@ while [[ $# -gt 0 ]]; do
       IMAGE_PATH="$2"
       shift 2
       ;;
+    --build_tag)
+      BUILD_TAG="$2"
+      shift 2
+      ;;
+    --custom_install)
+      CUSTOM_INSTALL="$2"
+      shift 2
+      ;;
     --whl_only)
     WHL_ONLY_BUILD="1"
     shift 1
@@ -152,10 +161,10 @@ function upsearch (){
 
 # Set up WORKSPACE. 
 if [ ${RUNTIME_FLAG} -eq 0 ]; then
-  WORKSPACE=${WORKSPACE}/jax
-  JAX_VERSION=$(cut -d '-' -f 3 | cut -d 'v' -f 2 <<< $XLA_BRANCH)
-  JAX_COMMIT=$(git -C $WORKSPACE rev-parse --short HEAD)
-  BUILD_TAG="${IMAGE_PATH}/${ROCM_BUILD_JOB}:${LKG_BUILD_NUM}_${DISTRO}_py${PYTHON_VERSION}_jax${JAX_VERSION}_${JAX_COMMIT}"
+  # WORKSPACE=${WORKSPACE}/jax
+  # JAX_VERSION=$(cut -d '-' -f 3 | cut -d 'v' -f 2 <<< $XLA_BRANCH)
+  # JAX_COMMIT=$(git -C $WORKSPACE rev-parse --short HEAD)
+  # BUILD_TAG="${IMAGE_PATH}/${ROCM_BUILD_JOB}:${LKG_BUILD_NUM}_${DISTRO}_py${PYTHON_VERSION}_jax${JAX_VERSION}_${JAX_COMMIT}"
   DOCKER_IMG_NAME="${BUILD_TAG}"
 else
   WORKSPACE="${WORKSPACE:-$(upsearch WORKSPACE)}"
@@ -203,6 +212,7 @@ else
         --build-arg ROCM_VERSION=$ROCM_VERSION \
         --build-arg ROCM_MAJ_MIN=$ROCM_MAJ_MIN \
         --build-arg ROCM_PATH=$ROCM_PATH \
+        --build-arg CUSTOM_INSTALL=${CUSTOM_INSTALL} \
       -f "${DOCKERFILE_PATH}" "${DOCKER_CONTEXT_PATH}"   
 fi
 
