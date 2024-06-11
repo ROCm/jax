@@ -161,10 +161,6 @@ function upsearch (){
 
 # Set up WORKSPACE. 
 if [ ${RUNTIME_FLAG} -eq 0 ]; then
-  # WORKSPACE=${WORKSPACE}/jax
-  # JAX_VERSION=$(cut -d '-' -f 3 | cut -d 'v' -f 2 <<< $XLA_BRANCH)
-  # JAX_COMMIT=$(git -C $WORKSPACE rev-parse --short HEAD)
-  # BUILD_TAG="${IMAGE_PATH}/${ROCM_BUILD_JOB}:${LKG_BUILD_NUM}_${DISTRO}_py${PYTHON_VERSION}_jax${JAX_VERSION}_${JAX_COMMIT}"
   DOCKER_IMG_NAME="${BUILD_TAG}"
 else
   WORKSPACE="${WORKSPACE:-$(upsearch WORKSPACE)}"
