@@ -52,7 +52,9 @@ PYTHON_VERSION="3.10.0"
 ROCM_VERSION="6.0.0" #Point to latest release
 BASE_DOCKER="$DISTRO"
 CUSTOM_INSTALL=""
-#BASE_DOCKER="compute-artifactory.amd.com:5000/rocm-plus-docker/compute-rocm-rel-6.0:91-ubuntu-20.04-stg2"
+IMAGE_PATH=""
+# CUSTOM_CI_BUILD_INSTALL="custom_install.sh"
+BUILD_TAG=""
 #CUSTOM_INSTALL="custom_install_dummy.sh"
 #ROCM_PATH="/opt/rocm-5.6.0"
 POSITIONAL_ARGS=()
@@ -111,6 +113,22 @@ while [[ $# -gt 0 ]]; do
       DISTRO="$2"
       shift 2
       ;;
+    # --custom_ci_build_install)
+    #   CUSTOM_CI_BUILD_INSTALL="$2"
+    #   shift 2
+    #   ;;
+    --image_path)
+      IMAGE_PATH="$2"
+      shift 2
+      ;;
+    --build_tag)
+      BUILD_TAG="$2"
+      shift 2
+      ;;
+    --custom_install)
+      CUSTOM_INSTALL="$2"
+      shift 2
+      ;;
     --whl_only)
     WHL_ONLY_BUILD="1"
     shift 1
@@ -143,10 +161,10 @@ function upsearch (){
 
 # Set up WORKSPACE. 
 if [ ${RUNTIME_FLAG} -eq 0 ]; then
-  WORKSPACE=${WORKSPACE}/jax
-  JAX_VERSION=$(cut -d '-' -f 3 | cut -d 'v' -f 2 <<< $XLA_BRANCH)
-  JAX_COMMIT=$(git -C $WORKSPACE rev-parse --short HEAD)
-  BUILD_TAG="compute-artifactory.amd.com:5000/rocm-plus-docker/framework/${ROCM_BUILD_JOB}:${LKG_BUILD_NUM}_${DISTRO}_py${PYTHON_VERSION}_jax${JAX_VERSION}_${JAX_COMMIT}"
+  # WORKSPACE=${WORKSPACE}/jax
+  # JAX_VERSION=$(cut -d '-' -f 3 | cut -d 'v' -f 2 <<< $XLA_BRANCH)
+  # JAX_COMMIT=$(git -C $WORKSPACE rev-parse --short HEAD)
+  # BUILD_TAG="${IMAGE_PATH}/${ROCM_BUILD_JOB}:${LKG_BUILD_NUM}_${DISTRO}_py${PYTHON_VERSION}_jax${JAX_VERSION}_${JAX_COMMIT}"
   DOCKER_IMG_NAME="${BUILD_TAG}"
 else
   WORKSPACE="${WORKSPACE:-$(upsearch WORKSPACE)}"
@@ -185,17 +203,16 @@ if [[ "${RUNTIME_FLAG}" -eq 1  ]]; then
       -f "${DOCKERFILE_PATH}" "${DOCKER_CONTEXT_PATH}"
 else
   echo "Building (CI) container (${DOCKER_IMG_NAME}) with Dockerfile($DOCKERFILE_PATH)..."
-  AMDGPU_CORE=$(curl http://rocm-ci.amd.com/job/$ROCM_BUILD_JOB/$LKG_BUILD_NUM/artifact/amdgpu_kernel_info.txt)
   ROCM_MAJ_MIN=$(cut -d '.' -f -2 <<< $ROCM_VERSION)
   DOCKER_BUILDKIT=1 docker build --target ci_build --tag ${DOCKER_IMG_NAME} \
         --build-arg DISTRO=$DISTRO \
         --build-arg PYTHON_VERSION=$PYTHON_VERSION \
         --build-arg ROCM_BUILD_JOB=$ROCM_BUILD_JOB \
         --build-arg LKG_BUILD_NUM=$LKG_BUILD_NUM \
-        --build-arg AMDGPU_CORE=$AMDGPU_CORE \
         --build-arg ROCM_VERSION=$ROCM_VERSION \
         --build-arg ROCM_MAJ_MIN=$ROCM_MAJ_MIN \
         --build-arg ROCM_PATH=$ROCM_PATH \
+        --build-arg CUSTOM_INSTALL=$CUSTOM_INSTALL \
       -f "${DOCKERFILE_PATH}" "${DOCKER_CONTEXT_PATH}"   
 fi
 
