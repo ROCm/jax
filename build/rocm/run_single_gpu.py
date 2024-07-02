@@ -22,26 +22,6 @@ from concurrent.futures import ThreadPoolExecutor
 
 GPU_LOCK = threading.Lock()
 LAST_CODE = 0
-base_dir="./logs"
-
-def extract_filename(path):
-  base_name = os.path.basename(path)
-  file_name, _ = os.path.splitext(base_name)
-  return file_name
-
-def generate_final_report(shell=False, env_vars={}):
-  env = os.environ
-  env = {**env, **env_vars}
-  cmd = ["pytest_html_merger", "-i", '{}'.format(base_dir), "-o", '{}/final_compiled_report.html'.format(base_dir)]
-  result = subprocess.run(cmd,
-                          shell=shell,
-                          capture_output=True,
-                          env=env)
-  if result.returncode != 0:
-    print("FAILED - {}".format(" ".join(cmd)))
-    print(result.stderr.decode())
-    # sys.exit(result.returncode)
-  return result.returncode, result.stderr.decode(), result.stdout.decode()
 
 
 def run_shell_command(cmd, shell=False, env_vars={}):
@@ -68,11 +48,9 @@ def collect_testmodules():
     print("Test module discovery failed.")
     exit(return_code)
   for line in stdout.split("\n"):
-    match = re.match("<Module (.*)>", line.strip())
+    match = re.match("<Module (.*)>", line)
     if match:
       test_file = match.group(1)
-      if "/" not in test_file:
-        test_file = os.path.join("tests",test_file)
       all_test_files.append(test_file)
   print("---------- collected test modules ----------")
   print("Found %d test modules." % (len(all_test_files)))
@@ -81,7 +59,7 @@ def collect_testmodules():
   return all_test_files
 
 
-def run_test(testmodule, gpu_tokens, continue_on_fail):
+def run_test(testmodule, gpu_tokens):
   global LAST_CODE
   with GPU_LOCK:
     if LAST_CODE != 0:
@@ -91,11 +69,7 @@ def run_test(testmodule, gpu_tokens, continue_on_fail):
       "HIP_VISIBLE_DEVICES": str(target_gpu),
       "XLA_PYTHON_CLIENT_ALLOCATOR": "default",
   }
-  testfile = extract_filename(testmodule)
-  if continue_on_fail:
-      cmd = ["python3", "-m", "pytest", '--html={}/{}_log.html'.format(base_dir, testfile), "--reruns", "3", "-v", testmodule]
-  else:
-      cmd = ["python3", "-m", "pytest", '--html={}/{}_log.html'.format(base_dir, testfile), "--reruns", "3", "-x", "-v", testmodule]
+  cmd = ["python3", "-m", "pytest", "--reruns", "3", "-x", testmodule]
   return_code, stderr, stdout = run_shell_command(cmd, env_vars=env_vars)
   with GPU_LOCK:
     gpu_tokens.append(target_gpu)
@@ -103,33 +77,31 @@ def run_test(testmodule, gpu_tokens, continue_on_fail):
       print("Running tests in module %s on GPU %d:" % (testmodule, target_gpu))
       print(stdout)
       print(stderr)
-      if continue_on_fail == False:
-          LAST_CODE = return_code
+      LAST_CODE = return_code
   return
 
 
-def run_parallel(all_testmodules, p, c):
-  print(f"Running tests with parallelism=", p)
+def run_parallel(all_testmodules, p):
+  print("Running tests with parallelism=", p)
   available_gpu_tokens = list(range(p))
   executor = ThreadPoolExecutor(max_workers=p)
   # walking through test modules
   for testmodule in all_testmodules:
-    executor.submit(run_test, testmodule, available_gpu_tokens, c)
+    executor.submit(run_test, testmodule, available_gpu_tokens)
   # waiting for all modules to finish
   executor.shutdown(wait=True)  # wait for all jobs to finish
   return
 
 
 def find_num_gpus():
-  cmd = ["lspci|grep 'controller\|accel'|grep 'AMD/ATI'|wc -l"]
+  cmd = ["lspci|grep 'controller'|grep 'AMD/ATI'|wc -l"]
   _, _, stdout = run_shell_command(cmd, shell=True)
   return int(stdout)
 
 
 def main(args):
   all_testmodules = collect_testmodules()
-  run_parallel(all_testmodules, args.parallel, args.continue_on_fail)
-  generate_final_report()
+  run_parallel(all_testmodules, args.parallel)
   exit(LAST_CODE)
 
 
@@ -140,13 +112,7 @@ if __name__ == '__main__':
                       "--parallel",
                       type=int,
                       help="number of tests to run in parallel")
-  parser.add_argument("-c",
-                      "--continue_on_fail",
-                      action='store_true',
-                      help="continue on failure")
   args = parser.parse_args()
-  if args.continue_on_fail:
-      print("continue on fail is set")
   if args.parallel is None:
     sys_gpu_count = find_num_gpus()
     args.parallel = sys_gpu_count
