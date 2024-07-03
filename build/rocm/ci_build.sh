@@ -168,7 +168,7 @@ else
   DOCKER_IMG_NAME="${BUILD_TAG}.${CONTAINER_TYPE}"
 fi
 
-if [ ${ROCM_BUILD_JOB} = "compute-rocm-dkms-no-npi-hipclang" ]; then
+if [[ "${ROCM_BUILD_JOB}" == "compute-rocm-dkms-no-npi-hipclang" || "${ROCM_BUILD_JOB}" == compute-rocm-dkms-component-staging-* ]]; then
   ROCM_PATH="/opt/rocm-${ROCM_VERSION}-${LKG_BUILD_NUM}"
 else
   ROCM_PATH="/opt/rocm-${ROCM_VERSION}"
