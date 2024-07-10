@@ -50,7 +50,7 @@ COPY UTC* /usr/share/zoneinfo/UTC
 RUN ln -sf /usr/share/zoneinfo/UTC /etc/localtime ; echo 'UTC' > /etc/timezone
 
 COPY ${CUSTOM_INSTALL} /${CUSTOM_INSTALL}
-RUN /${CUSTOM_INSTALL} $ROCM_MAJ_MIN $ROCM_BUILD_JOB $LKG_BUILD_NUM 
+RUN sh /${CUSTOM_INSTALL} $ROCM_MAJ_MIN $ROCM_BUILD_JOB $LKG_BUILD_NUM 
 
 ENV HCC_HOME=$ROCM_PATH/hcc
 ENV HIP_PATH=$ROCM_PATH/hip
