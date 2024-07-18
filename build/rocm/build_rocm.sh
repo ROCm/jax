@@ -68,3 +68,9 @@ if [ -v CI_RUN ]; then
 	pip3 list | grep jaxlib | tr -s ' ' | cut -d " " -f 2 | cut -d "+" -f 1 > jax_version_installed 
 	cat /opt/rocm/.info/version | cut -d "-" -f 1 > jax_rocm_version
 fi
+
+#Install packages compatible with JAX 0.4.23
+python3 -m pip install chex==0.1.86
+python3 -m pip install optax==0.2.2
+python3 -m pip install orbax-checkpoint==0.5.16
+python3 -m pip install flax==0.8.4
