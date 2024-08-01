@@ -532,9 +532,15 @@ def _spsolve_abstract_eval(data, indices, indptr, b, *, tol, reorder):
   return b
 
 
-def _spsolve_gpu_lowering(ctx, data, indices, indptr, b, *, tol, reorder):
+def _spsolve_cuda_lowering(ctx, data, indices, indptr, b, *, tol, reorder):
   data_aval, _, _, _, = ctx.avals_in
   return gpu_solver.cuda_csrlsvqr(data_aval.dtype, data, indices,
+                                  indptr, b, tol, reorder)
+
+
+def _spsolve_rocm_lowering(ctx, data, indices, indptr, b, *, tol, reorder):
+  data_aval, _, _, _, = ctx.avals_in
+  return gpu_solver.rocm_csrlsvqr(data_aval.dtype, data, indices,
                                   indptr, b, tol, reorder)
 
 
@@ -594,7 +600,8 @@ spsolve_p.def_impl(functools.partial(xla.apply_primitive, spsolve_p))
 spsolve_p.def_abstract_eval(_spsolve_abstract_eval)
 ad.defjvp(spsolve_p, _spsolve_jvp_lhs, None, None, _spsolve_jvp_rhs)
 ad.primitive_transposes[spsolve_p] = _spsolve_transpose
-mlir.register_lowering(spsolve_p, _spsolve_gpu_lowering, platform='cuda')
+mlir.register_lowering(spsolve_p, _spsolve_cuda_lowering, platform='cuda')
+mlir.register_lowering(spsolve_p, _spsolve_rocm_lowering, platform='rocm')
 mlir.register_lowering(spsolve_p, _spsolve_cpu_lowering, platform='cpu')
 
 

@@ -132,7 +132,7 @@ std::pair<int, nb::bytes> BuildGeqrfDescriptor(const dtype& dtype, int b, int m,
   return {lwork, PackDescriptor(GeqrfDescriptor{type, b, m, n, lwork})};
 }
 
-#ifdef JAX_GPU_CUDA
+// #ifdef JAX_GPU_CUDA
 
 // csrlsvqr: Linear system solve via Sparse QR
 
@@ -143,7 +143,7 @@ nb::bytes BuildCsrlsvqrDescriptor(const dtype& dtype, int n, int nnzA,
   return PackDescriptor(CsrlsvqrDescriptor{type, n, nnzA, reorder, tol});
 }
 
-#endif  // JAX_GPU_CUDA
+// #endif  // JAX_GPU_CUDA
 
 // orgqr/ungqr: apply elementary Householder transformations
 
@@ -487,8 +487,8 @@ NB_MODULE(_solver, m) {
   m.def("build_syevj_descriptor", &BuildSyevjDescriptor);
   m.def("build_gesvd_descriptor", &BuildGesvdDescriptor);
   m.def("build_sytrd_descriptor", &BuildSytrdDescriptor);
-#ifdef JAX_GPU_CUDA
   m.def("build_csrlsvqr_descriptor", &BuildCsrlsvqrDescriptor);
+#ifdef JAX_GPU_CUDA
   m.def("build_gesvdj_descriptor", &BuildGesvdjDescriptor);
 #endif  // JAX_GPU_CUDA
 }

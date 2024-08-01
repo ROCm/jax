@@ -246,7 +246,7 @@ def _csrlsvqr_hlo(platform, gpu_solver, dtype, data,
   return out
 
 cuda_csrlsvqr = partial(_csrlsvqr_hlo, "cu", _cusolver)
-
+rocm_csrlsvqr = partial(_csrlsvqr_hlo, "hip", _hipsolver)
 
 def _orgqr_hlo(platform, gpu_solver, dtype, a, tau):
   """Product of elementary Householder reflections."""

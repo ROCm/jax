@@ -1068,7 +1068,7 @@ class SparseSolverTest(sptu.SparseTestCase):
     reorder=[0, 1, 2, 3],
     dtype=jtu.dtypes.floating + jtu.dtypes.complex,
   )
-  @jtu.run_on_devices("cpu", "cuda")
+  @jtu.run_on_devices("cpu", "rocm")
   def test_sparse_qr_linear_solver(self, size, reorder, dtype):
     rng = sptu.rand_sparse(self.rng())
     a = rng((size, size), dtype)

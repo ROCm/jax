@@ -24,6 +24,7 @@ limitations under the License.
 #ifdef JAX_GPU_CUDA
 #include "third_party/gpus/cuda/include/cusolverSp.h"
 #endif  // JAX_GPU_CUDA
+// #include "third_party/gpus/rocm/include/hipsolverSp.h"
 
 namespace jax {
 
@@ -34,14 +35,13 @@ absl::StatusOr<SolverHandlePool::Handle> SolverHandlePool::Borrow(
     gpuStream_t stream);
 
 #ifdef JAX_GPU_CUDA
-
 using SpSolverHandlePool = HandlePool<cusolverSpHandle_t, gpuStream_t>;
+#endif  // JAX_GPU_CUDA
+using SpSolverHandlePool = HandlePool<hipsolverSpHandle_t, gpuStream_t>;
 
 template <>
 absl::StatusOr<SpSolverHandlePool::Handle> SpSolverHandlePool::Borrow(
     gpuStream_t stream);
-
-#endif  // JAX_GPU_CUDA
 
 namespace JAX_GPU_NAMESPACE {
 
@@ -73,7 +73,7 @@ struct GeqrfDescriptor {
 void Geqrf(gpuStream_t stream, void** buffers, const char* opaque,
            size_t opaque_len, XlaCustomCallStatus* status);
 
-#ifdef JAX_GPU_CUDA
+// #ifdef JAX_GPU_CUDA
 
 // csrlsvpr: Linear system solve via Sparse QR
 
@@ -86,7 +86,7 @@ struct CsrlsvqrDescriptor {
 void Csrlsvqr(gpuStream_t stream, void** buffers, const char* opaque,
               size_t opaque_len, XlaCustomCallStatus* status);
 
-#endif  // JAX_GPU_CUDA
+// #endif  // JAX_GPU_CUDA
 
 // orgqr/ungqr: apply elementary Householder transformations
 

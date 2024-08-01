@@ -259,7 +259,7 @@ void Geqrf(gpuStream_t stream, void** buffers, const char* opaque,
   }
 }
 
-#ifdef JAX_GPU_CUDA
+// #ifdef JAX_GPU_CUDA
 
 // csrlsvqr: Linear system solve via Sparse QR
 
@@ -275,12 +275,12 @@ static absl::Status Csrlsvqr_(gpuStream_t stream, void** buffers,
   JAX_RETURN_IF_ERROR(h.status());
   auto& handle = *h;
 
-  cusparseMatDescr_t matdesc = nullptr;
-  JAX_RETURN_IF_ERROR(JAX_AS_STATUS(cusparseCreateMatDescr(&matdesc)));
+  hipsparseMatDescr_t matdesc = nullptr;
+  JAX_RETURN_IF_ERROR(JAX_AS_STATUS(hipsparseCreateMatDescr(&matdesc)));
   JAX_RETURN_IF_ERROR(
-      JAX_AS_STATUS(cusparseSetMatType(matdesc, CUSPARSE_MATRIX_TYPE_GENERAL)));
+      JAX_AS_STATUS(hipsparseSetMatType(matdesc, HIPSPARSE_MATRIX_TYPE_GENERAL)));
   JAX_RETURN_IF_ERROR(JAX_AS_STATUS(
-      cusparseSetMatIndexBase(matdesc, CUSPARSE_INDEX_BASE_ZERO)));
+      hipsparseSetMatIndexBase(matdesc, HIPSPARSE_INDEX_BASE_ZERO)));
 
   switch (d.type) {
     case SolverType::F32: {
@@ -358,7 +358,7 @@ void Csrlsvqr(gpuStream_t stream, void** buffers, const char* opaque,
   }
 }
 
-#endif  // JAX_GPU_CUDA
+// #endif  // JAX_GPU_CUDA
 
 // orgqr/ungqr: apply elementary Householder transformations
 
