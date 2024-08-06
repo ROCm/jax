@@ -32,7 +32,7 @@ RUN --mount=type=cache,target=/var/cache/apt \
     apt-get update && apt-get install -y \
         git \
         libssl-dev \
-        libffi-dev
+        libffi-dev \
         libreadline-dev \
         liblzma-dev
 
