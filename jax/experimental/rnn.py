@@ -397,6 +397,7 @@ def lstm_fwd(x: Array, h_0: Array, c_0: Array, w: Array, seq_lengths: Array,
   if seq_lengths.dtype != jnp.dtype("int32"):
     raise NotImplementedError("`seq_lengths` can only be int32.")
   cudnn_allow_tf32 = _lstm_cudnn_allow_tf32(precision)
+  # import pdb; pdb.set_trace()
   y, h_n, c_n, reserve_space = rnn_fwd_p.bind(
       x,
       h_0,
@@ -437,7 +438,8 @@ rnn_fwd_p.multiple_results = True
 rnn_fwd_p.def_impl(partial(xla.apply_primitive, rnn_fwd_p))
 rnn_fwd_p.def_abstract_eval(rnn_abstract_eval)
 if gpu_rnn:
-  mlir.register_lowering(rnn_fwd_p, gpu_rnn.cudnn_rnn_lowering, platform='cuda')
+  mlir.register_lowering(rnn_fwd_p, gpu_rnn.cudnn_rnn_fwd_lowering, platform='cuda')
+  mlir.register_lowering(rnn_fwd_p, gpu_rnn.miopen_rnn_fwd_lowering, platform='rocm')
 
 
 def lstm_bwd(input_size: int, hidden_size: int, num_layers: int, dropout: float,
@@ -481,5 +483,7 @@ rnn_bwd_p.def_abstract_eval(rnn_bwd_abstract_eval)
 if gpu_rnn:
   mlir.register_lowering(
       rnn_bwd_p, gpu_rnn.cudnn_rnn_bwd_lowering, platform='cuda')
+  mlir.register_lowering(
+      rnn_bwd_p, gpu_rnn.miopen_rnn_bwd_lowering, platform='rocm')
 
 lstm.defvjp(lstm_fwd, lstm_bwd)
