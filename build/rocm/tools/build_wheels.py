@@ -79,6 +79,10 @@ def build_jaxlib_wheel(jax_path, rocm_path, python_version, xla_path=None, compi
     env["JAXLIB_RELEASE"] = str(1)
     env["PATH"] = "%s:%s" % (py_bin, env["PATH"])
 
+    if use_clang == "true":
+        clang_path = os.path.join(rocm_path, "llvm/bin")
+        env["PATH"] = "%s:%s" % (clang_path, env["PATH"])
+
     LOG.info("Running %r from cwd=%r" % (cmd, jax_path))
     pattern = re.compile("Output wheel: (.+)\n")
 
