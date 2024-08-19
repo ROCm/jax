@@ -298,9 +298,12 @@ def write_bazelrc(*, remote_build,
         f.write(
           f'build:cuda --repo_env HERMETIC_CUDA_COMPUTE_CAPABILITIES="{cuda_compute_capabilities}"\n')
     if enable_rocm:
-      f.write("build --config=rocm\n")
+      f.write("build --config=rocm_base\n")
       if not enable_nccl:
         f.write("build --config=nonccl\n")
+      if use_clang:
+        f.write("build --config=rocm\n")
+        f.write(f"build --action_env=CLANG_COMPILER_PATH={clang_path}\n")
     if python_version:
       f.write(
         "build --repo_env HERMETIC_PYTHON_VERSION=\"{python_version}\"".format(

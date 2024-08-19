@@ -75,6 +75,7 @@ FROM rocm_base AS rt_build
 ARG JAX_VERSION
 ARG JAX_COMMIT
 ARG XLA_COMMIT
+ARG JAX_USE_CLANG
 
 LABEL com.amdgpu.rocm_version="$ROCM_VERSION" \
       com.amdgpu.python_version="$PYTHON_VERSION" \
