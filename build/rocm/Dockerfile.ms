@@ -76,6 +76,7 @@ FROM rocm_base AS rt_build
 ARG JAX_VERSION
 ARG JAX_COMMIT
 ARG XLA_COMMIT
+ARG JAX_USE_CLANG
 
 LABEL com.amdgpu.rocm_version="$ROCM_VERSION" \
       com.amdgpu.python_version="$PYTHON_VERSION" \
@@ -93,3 +94,5 @@ RUN --mount=type=cache,mode=0755,target=/root/.cache/pip \
     ls -lah /wheelhouse && \
     pip3 install wheelhouse/*none*.whl wheelhouse/*jaxlib*.whl && \
     pip3 install wheelhouse/*rocm60*.whl
+
+

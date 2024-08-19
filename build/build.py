@@ -314,7 +314,7 @@ def write_bazelrc(*, remote_build,
         f.write("build --config=nvcc_clang\n")
         f.write(f"build --action_env=CLANG_CUDA_COMPILER_PATH={clang_path}\n")
     if enable_rocm:
-      f.write("build --config=rocm\n")
+      f.write("build --config=rocm_base\n")
       if not enable_nccl:
         f.write("build --config=nonccl\n")
     if build_gpu_plugin:
@@ -322,6 +322,9 @@ def write_bazelrc(*, remote_build,
         f.write("build --config=cuda_plugin\n")
       elif enable_rocm:
         f.write("build --config=rocm_plugin\n")
+        if use_clang:
+          f.write("build --config=rocm\n")
+          f.write(f"build --action_env=CLANG_COMPILER_PATH={clang_path}\n")
     if python_version:
       f.write(
         "build --repo_env HERMETIC_PYTHON_VERSION=\"{python_version}\"".format(
@@ -501,7 +504,7 @@ def main():
       help="A comma-separated list of CUDA compute capabilities to support.")
   parser.add_argument(
       "--rocm_amdgpu_targets",
-      default="gfx900,gfx906,gfx908,gfx90a,gfx1030",
+      default="gfx900,gfx906,gfx908,gfx90a,gfx940,gfx941,gfx942,gfx1030,gfx1100",
       help="A comma-separated list of ROCm amdgpu targets to support.")
   parser.add_argument(
       "--rocm_path",
