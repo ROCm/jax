@@ -237,6 +237,10 @@ pybind_extension(
     module_name = "rocm_plugin_extension",
     deps = [
         "//jaxlib:kernel_nanobind_helpers",
+        "@com_google_absl//absl/status",
+        "@local_config_rocm//rocm:rocm_headers",
+        "@local_config_rocm//rocm:hip",
+        "@nanobind",
         "@xla//third_party/python_runtime:headers",
         "@xla//xla:status",
         "@xla//xla:util",
