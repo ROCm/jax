@@ -119,12 +119,24 @@ build:cuda_clang --copt=-Wno-gnu-offsetof-extensions
 # Disable clang extention that rejects unknown arguments.
 build:cuda_clang --copt=-Qunused-arguments
 
-build:rocm --crosstool_top=@local_config_rocm//crosstool:toolchain
-build:rocm --define=using_rocm=true --define=using_rocm_hipcc=true
-build:rocm --@xla//xla/python:enable_gpu=true
-build:rocm --define=xla_python_enable_gpu=true
-build:rocm --repo_env TF_NEED_ROCM=1
-build:rocm --action_env TF_ROCM_AMDGPU_TARGETS="gfx900,gfx906,gfx908,gfx90a,gfx1030"
+# Build with nvcc for CUDA and clang for host
+build:nvcc_clang --config=cuda
+build:nvcc_clang --config=cuda_clang
+build:nvcc_clang --action_env=TF_NVCC_CLANG="1"
+build:nvcc_clang --@local_config_cuda//:cuda_compiler=nvcc
+
+build:rocm_base --crosstool_top=@local_config_rocm//crosstool:toolchain
+build:rocm_base --action_env=TF_ROCM_CLANG="1"
+build:rocm_base --define=using_rocm=true --define=using_rocm_hipcc=true
+build:rocm_base --repo_env TF_NEED_ROCM=1
+build:rocm_base --action_env TF_ROCM_AMDGPU_TARGETS="gfx900,gfx906,gfx908,gfx90a,gfx1030"
+
+# Build with hipcc for ROCm and clang for the host.
+build:rocm --config=rocm_base
+build:rocm --action_env=CLANG_COMPILER_PATH="/usr/lib/llvm-17/bin/clang"
+build:rocm --copt=-Wno-gnu-offsetof-extensions
+build:rocm --copt=-Qunused-arguments
+build:rocm --action_env=TF_HIPCC_CLANG="1"
 
 build:nonccl --define=no_nccl_support=true
 
