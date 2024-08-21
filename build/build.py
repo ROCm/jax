@@ -254,7 +254,8 @@ def write_bazelrc(*, remote_build,
       f.write(f'build --action_env CLANG_COMPILER_PATH="{clang_path}"\n')
       f.write(f'build --repo_env CC="{clang_path}"\n')
       f.write(f'build --repo_env BAZEL_COMPILER="{clang_path}"\n')
-      f.write('build --copt=-Wno-error=unused-command-line-argument\n')
+      if not enable_rocm:
+        f.write('build --copt=-Wno-error=unused-command-line-argument\n')
       if clang_major_version in (16, 17, 18):
         # Necessary due to XLA's old version of upb. See:
         # https://github.com/openxla/xla/blob/c4277a076e249f5b97c8e45c8cb9d1f554089d76/.bazelrc#L505
