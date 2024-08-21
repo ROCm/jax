@@ -149,8 +149,9 @@ ffi::Error TriMatrixEquationSolver<dtype>::Kernel(
     MatrixParams::UpLo uplo, MatrixParams::Transpose trans_x,
     MatrixParams::Diag diag) {
   CopyIfDiffBuffer(y, y_out);
-  FFI_ASSIGN_OR_RETURN((auto [batch_count, y_rows, y_cols]),
+  FFI_ASSIGN_OR_RETURN(auto batch_dimensions,
                        SplitBatch2D(y.dimensions()));
+  auto [batch_count, y_rows, y_cols] = batch_dimensions;
   auto* y_out_data = y_out->typed_data();
   lapack_int x_leading_dim_v =
       side == MatrixParams::Side::kLeft ? y_rows : y_cols;
@@ -225,8 +226,9 @@ ffi::Error LuDecomposition<dtype>::Kernel(
     ffi::Buffer<dtype> x, ffi::ResultBuffer<dtype> x_out,
     ffi::ResultBuffer<LapackIntDtype> ipiv,
     ffi::ResultBuffer<LapackIntDtype> info) {
-  FFI_ASSIGN_OR_RETURN((auto [batch_count, x_rows, x_cols]),
+  FFI_ASSIGN_OR_RETURN(auto batch_dimensions,
                        SplitBatch2D(x.dimensions()));
+  auto [batch_count, x_rows, x_cols] = batch_dimensions;
   auto* x_out_data = x_out->typed_data();
   auto* ipiv_data = ipiv->typed_data();
   auto* info_data = info->typed_data();
@@ -309,8 +311,9 @@ template <ffi::DataType dtype>
 ffi::Error QrFactorization<dtype>::Kernel(
     ffi::Buffer<dtype> x, ffi::ResultBuffer<dtype> x_out,
     ffi::ResultBuffer<dtype> tau, ffi::ResultBuffer<LapackIntDtype> info) {
-  FFI_ASSIGN_OR_RETURN((auto [batch_count, x_rows, x_cols]),
+  FFI_ASSIGN_OR_RETURN(auto batch_dimentions,
                        SplitBatch2D(x.dimensions()));
+  auto [batch_count, x_rows, x_cols] = batch_dimentions;
   auto* x_out_data = x_out->typed_data();
   auto* tau_data = tau->typed_data();
   auto* info_data = info->typed_data();
@@ -412,8 +415,9 @@ ffi::Error OrthogonalQr<dtype>::Kernel(ffi::Buffer<dtype> x,
                                        ffi::ResultBuffer<dtype> x_out,
                                        ffi::ResultBuffer<LapackIntDtype> info,
                                        ffi::ResultBuffer<dtype> work) {
-  FFI_ASSIGN_OR_RETURN((auto [batch_count, x_rows, x_cols]),
+  FFI_ASSIGN_OR_RETURN(auto batch_dimentions,
                        SplitBatch2D(x.dimensions()));
+  auto [batch_count, x_rows, x_cols] = batch_dimentions;
   auto* tau_data = tau.typed_data();
   auto* x_out_data = x_out->typed_data();
   auto* info_data = info->typed_data();
@@ -501,8 +505,9 @@ template <ffi::DataType dtype>
 ffi::Error CholeskyFactorization<dtype>::Kernel(
     ffi::Buffer<dtype> x, MatrixParams::UpLo uplo,
     ffi::ResultBuffer<dtype> x_out, ffi::ResultBuffer<LapackIntDtype> info) {
-  FFI_ASSIGN_OR_RETURN((auto [batch_count, x_rows, x_cols]),
+  FFI_ASSIGN_OR_RETURN(auto batch_dimentions,
                        SplitBatch2D(x.dimensions()));
+  auto [batch_count, x_rows, x_cols] = batch_dimentions;
   auto* x_out_data = x_out->typed_data();
   auto* info_data = info->typed_data();
 
@@ -699,8 +704,9 @@ static ffi::Error SvdKernel(
         XLA_FFI_Error_Code_UNIMPLEMENTED,
         "Current implementation does not support this computation mode");
   }
-  FFI_ASSIGN_OR_RETURN((auto [batch_count, x_rows, x_cols]),
+  FFI_ASSIGN_OR_RETURN(auto batch_dimentions,
                        SplitBatch2D(x.dimensions()));
+  auto [batch_count, x_rows, x_cols] = batch_dimentions;
   auto* x_out_data = x_out->typed_data();
   auto* singular_values_data = singular_values->typed_data();
   auto* u_data = u->typed_data();
@@ -979,8 +985,9 @@ ffi::Error EigenvalueDecompositionSymmetric<dtype>::Kernel(
     ffi::ResultBuffer<dtype> x_out, ffi::ResultBuffer<dtype> eigenvalues,
     ffi::ResultBuffer<LapackIntDtype> info, ffi::ResultBuffer<dtype> work,
     ffi::ResultBuffer<LapackIntDtype> iwork, eig::ComputationMode mode) {
-  FFI_ASSIGN_OR_RETURN((auto [batch_count, x_rows, x_cols]),
+  FFI_ASSIGN_OR_RETURN(auto batch_dimentions,
                        SplitBatch2D(x.dimensions()));
+  auto [batch_count, x_rows, x_cols] = batch_dimentions;
   auto* x_out_data = x_out->typed_data();
   auto* eigenvalues_data = eigenvalues->typed_data();
   auto* info_data = info->typed_data();
@@ -1042,8 +1049,9 @@ ffi::Error EigenvalueDecompositionHermitian<dtype>::Kernel(
     ffi::ResultBuffer<LapackIntDtype> info, ffi::ResultBuffer<dtype> work,
     ffi::ResultBuffer<ffi::ToReal(dtype)> rwork,
     ffi::ResultBuffer<LapackIntDtype> iwork, eig::ComputationMode mode) {
-  FFI_ASSIGN_OR_RETURN((auto [batch_count, x_rows, x_cols]),
+  FFI_ASSIGN_OR_RETURN(auto batch_dimentions,
                        SplitBatch2D(x.dimensions()));
+  auto [batch_count, x_rows, x_cols] = batch_dimentions;
   auto* x_out_data = x_out->typed_data();
   auto* eigenvalues_data = eigenvalues->typed_data();
   auto* info_data = info->typed_data();
@@ -1269,9 +1277,9 @@ ffi::Error EigenvalueDecomposition<dtype>::Kernel(
     ffi::ResultBuffer<LapackIntDtype> info, ffi::ResultBuffer<dtype> x_work,
     ffi::ResultBuffer<ffi::ToReal(dtype)> work_eigvecs_left,
     ffi::ResultBuffer<ffi::ToReal(dtype)> work_eigvecs_right) {
-  FFI_ASSIGN_OR_RETURN((auto [batch_count, x_rows, x_cols]),
+  FFI_ASSIGN_OR_RETURN(auto batch_dimentions,
                        SplitBatch2D(x.dimensions()));
-
+  auto [batch_count, x_rows, x_cols] = batch_dimentions;
   const auto* x_data = x.typed_data();
   auto* x_work_data = x_work->typed_data();
   auto* work_eigvecs_left_data = work_eigvecs_left->typed_data();
@@ -1344,8 +1352,9 @@ ffi::Error EigenvalueDecompositionComplex<dtype>::Kernel(
     ffi::ResultBuffer<dtype> eigvecs_right,
     ffi::ResultBuffer<LapackIntDtype> info, ffi::ResultBuffer<dtype> x_work,
     ffi::ResultBuffer<ffi::ToReal(dtype)> rwork) {
-  FFI_ASSIGN_OR_RETURN((auto [batch_count, x_rows, x_cols]),
+  FFI_ASSIGN_OR_RETURN(auto batch_dimentions,
                        SplitBatch2D(x.dimensions()));
+  auto [batch_count, x_rows, x_cols] = batch_dimentions;
   const auto* x_data = x.typed_data();
   auto* x_work_data = x_work->typed_data();
   auto* eigvecs_left_data = eigvecs_left->typed_data();

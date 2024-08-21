@@ -163,8 +163,9 @@ ffi::Error GetrfDispatch(gpuStream_t stream, ffi::ScratchAllocator scratch,
         ffi::ErrorCode::kInvalidArgument,
         "The input and output to getrf must have the same element type");
   }
-  FFI_ASSIGN_OR_RETURN((auto [batch, rows, cols]),
+  FFI_ASSIGN_OR_RETURN(auto batch_dimensions,
                        SplitBatch2D(a.dimensions()));
+  auto [batch, rows, cols] = batch_dimensions;
   if (batch > 1 && rows == cols && rows / batch <= 128) {
     if (dataType == ffi::DataType::F32) {
       return GetrfBatchedImpl<float>(batch, cols, stream, scratch, a, out, ipiv,
