@@ -43,6 +43,9 @@ def dist_wheels(
     # create manylinux image with requested ROCm installed
     image = "jax-manylinux_2_28_x86_64_rocm%s" % rocm_version.replace(".", "")
 
+    env = os.environ.copy()  
+    env['DOCKER_BUILDKIT'] = '1'
+
     cmd = [
         "docker",
         "build",
@@ -55,11 +58,8 @@ def dist_wheels(
         ".",
     ]
 
-    env = os.environ.copy()  
-    env['DOCKER_BUILDKIT'] = '1'
-
     if not image_by_name(image):
-        _ = subprocess.run(cmd, check=True)
+        _ = subprocess.run(cmd, check=True, env=env)
 
     # use image to build JAX/jaxlib wheels
     os.makedirs("wheelhouse", exist_ok=True)
