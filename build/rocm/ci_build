@@ -44,7 +44,6 @@ def dist_wheels(
     image = "jax-manylinux_2_28_x86_64_rocm%s" % rocm_version.replace(".", "")
 
     cmd = [
-        "DOCKER_BUILDKIT=1",
         "docker",
         "build",
         "-f",
@@ -55,6 +54,9 @@ def dist_wheels(
         "--tag=%s" % image,
         ".",
     ]
+
+    env = os.environ.copy()  
+    env['DOCKER_BUILDKIT'] = '1'
 
     if not image_by_name(image):
         _ = subprocess.run(cmd, check=True)
@@ -156,7 +158,6 @@ def dist_docker(
     md = _fetch_jax_metadata(xla_path)
 
     cmd = [
-        "DOCKER_BUILDKIT=1",
         "docker",
         "build",
         "-f",
@@ -172,6 +173,9 @@ def dist_docker(
         "--build-arg=XLA_COMMIT=%(xla_commit)s" % md,
         "--tag=%s" % tag,
     ]
+
+    env = os.environ.copy()  
+    env['DOCKER_BUILDKIT'] = '1'
 
     if not keep_image:
         cmd.append("--rm")
