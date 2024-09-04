@@ -174,14 +174,14 @@ def dist_docker(
         "--tag=%s" % tag,
     ]
 
-    env = os.environ.copy()  
-    env["DOCKER_BUILDKIT"] = "1"
-
     if not keep_image:
         cmd.append("--rm")
 
     # context dir
     cmd.append(".")
+
+    env = os.environ.copy()  
+    env["DOCKER_BUILDKIT"] = "1"
 
     subprocess.check_call(cmd)
 
