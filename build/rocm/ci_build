@@ -44,6 +44,7 @@ def dist_wheels(
     image = "jax-manylinux_2_28_x86_64_rocm%s" % rocm_version.replace(".", "")
 
     cmd = [
+        "DOCKER_BUILDKIT=1",
         "docker",
         "build",
         "-f",
@@ -155,6 +156,7 @@ def dist_docker(
     md = _fetch_jax_metadata(xla_path)
 
     cmd = [
+        "DOCKER_BUILDKIT=1",
         "docker",
         "build",
         "-f",
