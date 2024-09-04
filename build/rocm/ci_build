@@ -175,7 +175,7 @@ def dist_docker(
     ]
 
     env = os.environ.copy()  
-    env['DOCKER_BUILDKIT'] = '1'
+    env["DOCKER_BUILDKIT"] = "1"
 
     if not keep_image:
         cmd.append("--rm")
