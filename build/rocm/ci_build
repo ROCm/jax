@@ -183,7 +183,7 @@ def dist_docker(
     env = os.environ.copy()  
     env["DOCKER_BUILDKIT"] = "1"
 
-    subprocess.check_call(cmd)
+    subprocess.check_call(cmd, env=env)
 
 
 def test(image_name):
