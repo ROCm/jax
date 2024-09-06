@@ -47,6 +47,9 @@ def dist_wheels(
     # create manylinux image with requested ROCm installed
     image = "jax-manylinux_2_28_x86_64_rocm%s" % rocm_version.replace(".", "")
 
+    env = os.environ.copy()
+    env["DOCKER_BUILDKIT"] = "1"
+
     cmd = [
         "docker",
         "build",
@@ -181,7 +184,14 @@ def dist_docker(
     # context dir
     cmd.append(".")
 
+<<<<<<< HEAD
     subprocess.check_call(cmd)
+=======
+    env = os.environ.copy()
+    env["DOCKER_BUILDKIT"] = "1"
+
+    subprocess.check_call(cmd, env=env)
+>>>>>>> 96a25861a (Fix formatting issues)
 
 
 def test(image_name):
