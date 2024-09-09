@@ -94,7 +94,7 @@ def dist_wheels(
         "-v",
         "./:/jax",
         "-v",
-        "./wheelhouse:/wheelhouse",
+        "/$(pwd)/wheelhouse:/wheelhouse",
     ]
 
     if xla_path:
