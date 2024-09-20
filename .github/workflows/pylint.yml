@@ -8,3 +8,5 @@ jobs:
     steps:
       - name: Print Environment Variables
         run: printenv
+      - name: try rocm-smi
+        run: docker run -it --network=host $RENDER_DEVICES --group-add video --cap-add=SYS_PTRACE --security-opt seccomp=unconfined  --shm-size=64G rocm/rocm-terminal rocm-smi
