@@ -1,0 +1,10 @@
+name: Print Environment Variables
+
+on: [push]
+
+jobs:
+  print-env:
+    runs-on: rocm-1
+    steps:
+      - name: Print Environment Variables
+        run: printenv
