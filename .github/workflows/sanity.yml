@@ -4,7 +4,7 @@ on: [push]
 
 jobs:
   print-env:
-    runs-on: rocm-1
+    runs-on: arc-runner-set
     steps:
       - name: Print Environment Variables
         run: printenv
@@ -16,7 +16,6 @@ jobs:
         run: |
           docker run \
             --group-add video \
-            $RENDER_DEVICES \
             --cap-add=SYS_PTRACE \
             --security-opt seccomp=unconfined \
             --shm-size=64G \
