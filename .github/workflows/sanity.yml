@@ -7,11 +7,7 @@ jobs:
     runs-on: arc-runner-set
     steps:
       - name: Print Environment Variables
-        run: printenv
-        
-      - name: Set up Docker
-        uses: docker/setup-buildx-action@v2
-      
+        run: printenv   
       - name: Try rocm-smi
         run: |
           docker run \
