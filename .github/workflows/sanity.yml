@@ -4,13 +4,14 @@ on: [push]
 
 jobs:
   print-env:
-    runs-on: arc-runner-set
+    runs-on: arc-runner-set-gpu
     steps:
       - name: Print Environment Variables
         run: printenv   
       - name: Try rocm-smi
         run: |
           docker run \
+            --device=/dev/kfd --device=/dev/dri \
             --group-add video \
             --cap-add=SYS_PTRACE \
             --security-opt seccomp=unconfined \
