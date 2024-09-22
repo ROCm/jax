@@ -4,7 +4,7 @@ on: [push]
 
 jobs:
   print-env:
-    runs-on: arc-runner-set-gpu
+    runs-on: arc-runner-set-rocm-gpu
     steps:
       - name: Print Environment Variables
         run: printenv   
