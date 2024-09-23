@@ -1,19 +1,27 @@
-name: Print Environment Variables
+name: Run ROCm PyTorch Microbenchmarks on k8
 
 on: [push]
 
 jobs:
-  print-env:
-    runs-on: arc-runner-set-rocm-gpu
+  benchmark:
+    runs-on: [arc-runner-set-rocm-gpu]
+
+    container:
+      image: rocm/pytorch:latest
+      options: >-
+        -it --device=/dev/kfd --device=/dev/dri
+        -u root --ipc=host --shm-size 16G --group-add video
+        --cap-add=SYS_PTRACE --security-opt seccomp=unconfined
     steps:
-      - name: Print Environment Variables
-        run: printenv   
-      - name: Try rocm-smi
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: check rocm is working
         run: |
-          docker run \
-            --device=/dev/kfd --device=/dev/dri \
-            --group-add video \
-            --cap-add=SYS_PTRACE \
-            --security-opt seccomp=unconfined \
-            --shm-size=64G \
-            rocm/rocm-terminal rocm-smi
+          rocm-smi
+          rocminfo
+      - name: Run Microbenchmarks
+        run: |
+          git clone https://github.com/ROCm/pytorch-micro-benchmarking.git
+          cd pytorch-micro-benchmarking
+          python3 micro_benchmarking_pytorch.py --network resnet50
