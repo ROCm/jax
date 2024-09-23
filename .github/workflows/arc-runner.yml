@@ -4,7 +4,7 @@ on: [push]
 
 jobs:
   build-linux:
-    runs-on: arc-runner-set-build
+    runs-on: arc-runner-set-rocm-gpu
     strategy:
       max-parallel: 5
 
