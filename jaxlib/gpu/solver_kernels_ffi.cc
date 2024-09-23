@@ -618,7 +618,7 @@ ffi::Error SyevdImpl(int64_t batch, int64_t size, gpuStream_t stream,
 
   auto a_data = static_cast<T*>(a.untyped_data());
   auto out_data = static_cast<T*>(out->untyped_data());
-  auto w_data = static_cast<RealType<T>::Type*>(w->untyped_data());
+  auto w_data = static_cast<typename RealType<T>::Type*>(w->untyped_data());
   auto info_data = info->typed_data();
   if (a_data != out_data) {
     FFI_RETURN_IF_ERROR_STATUS(JAX_AS_STATUS(gpuMemcpyAsync(
