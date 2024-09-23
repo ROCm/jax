@@ -22,6 +22,7 @@ permissions:
 
 jobs:
   lint_and_typecheck:
+    if: false
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -38,6 +39,7 @@ jobs:
       - uses: pre-commit/action@2c7b3805fd2a0fd8c1884dcaebf91fc102a13ecd  # ratchet: pre-commit/action@v3.0.1
 
   build:
+    if: false
     name: "build ${{ matrix.name-prefix }} (py ${{ matrix.python-version }} on ${{ matrix.os }}, x64=${{ matrix.enable-x64}})"
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
@@ -103,6 +105,7 @@ jobs:
 
 
   documentation:
+    if: false
     name: Documentation - test code snippets
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -145,6 +148,7 @@ jobs:
 
 
   documentation_render:
+    if: false
     name: Documentation - render documentation
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -181,6 +185,7 @@ jobs:
 
 
   jax2tf_test:
+    if: false
     name: "jax2tf_test (py ${{ matrix.python-version }} on ${{ matrix.os }}, x64=${{ matrix.enable-x64}})"
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30

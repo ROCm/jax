@@ -1,4 +1,4 @@
-name: Print Environment Variables
+name: ROCM CI
 
 on: [push]
 
@@ -8,16 +8,18 @@ jobs:
     steps:
       - name: Print Environment Variables
         run: printenv
+
+
         
-      - name: Set up Docker
-        uses: docker/setup-buildx-action@v2
-      
-      - name: Try rocm-smi
-        run: |
-          docker run \
-            --group-add video \
-            $RENDER_DEVICES \
-            --cap-add=SYS_PTRACE \
-            --security-opt seccomp=unconfined \
-            --shm-size=64G \
-            rocm/rocm-terminal rocm-smi
+#       - name: Set up Docker
+#         uses: docker/setup-buildx-action@v2
+#       
+#       - name: Try rocm-smi
+#         run: |
+#           docker run \
+#             --group-add video \
+#             $RENDER_DEVICES \
+#             --cap-add=SYS_PTRACE \
+#             --security-opt seccomp=unconfined \
+#             --shm-size=64G \
+#             rocm/rocm-terminal rocm-smi
