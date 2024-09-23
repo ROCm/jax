@@ -34,7 +34,7 @@ importlib-resources==6.4.0
     # via etils
 iniconfig==2.0.0
     # via pytest
-kiwisolver==1.4.5
+kiwisolver==1.4.7
     # via matplotlib
 markdown-it-py==3.0.0
     # via rich
