@@ -4,7 +4,7 @@ on: [push]
 
 jobs:
   benchmark:
-    runs-on: [arc-runner-set-rocm-gpu]
+    runs-on: [arc-runner-rocm-gpu]
 
     container:
       image: rocm/pytorch:latest
