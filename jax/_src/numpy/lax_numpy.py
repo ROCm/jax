@@ -35,7 +35,6 @@ import operator
 import types
 from typing import (overload, Any, Literal, NamedTuple,
                     Protocol, TypeVar, Union)
-from textwrap import dedent as _dedent
 import warnings
 
 import numpy as np
@@ -99,16 +98,6 @@ def canonicalize_shape(shape: Any, context: str="") -> core.Shape:
   else:
     return core.canonicalize_shape(shape, context)
 
-# Common docstring additions:
-
-_PRECISION_DOC = """\
-In addition to the original NumPy arguments listed below, also supports
-``precision`` for extra control over matrix-multiplication precision
-on supported devices. ``precision`` may be set to ``None``, which means
-default precision for the backend, a :class:`~jax.lax.Precision` enum value
-(``Precision.DEFAULT``, ``Precision.HIGH`` or ``Precision.HIGHEST``) or a tuple
-of two :class:`~jax.lax.Precision` enums indicating separate precision for each argument.
-"""
 
 # Some objects below rewrite their __module__ attribute to this name.
 _PUBLIC_MODULE_NAME = "jax.numpy"
@@ -349,14 +338,103 @@ def load(*args: Any, **kwargs: Any) -> Array:
 
 ### implementations of numpy functions in terms of lax
 
-@util.implements(np.fmin, module='numpy')
 @jit
 def fmin(x1: ArrayLike, x2: ArrayLike) -> Array:
+  """Return element-wise minimum of the input arrays.
+
+  JAX implemtentation of :func:`numpy.fmin`.
+
+  Args:
+    x1: input array or scalar.
+    x2: input array or scalar. x1 and x2 must either have same shape or be
+      broadcast compatible.
+
+  Returns:
+    An array containing the element-wise minimum of x1 and x2.
+
+  Note:
+    For each pair of elements, ``jnp.fmin`` returns:
+      - the smaller of the two if both elements are finite numbers.
+      - finite number if one element is ``nan``.
+      - ``-inf`` if one element is ``-inf`` and the other is finite or ``nan``.
+      - ``inf`` if one element is ``inf`` and the other is ``nan``.
+      - ``nan`` if both elements are ``nan``.
+
+  Examples:
+    >>> jnp.fmin(2, 3)
+    Array(2, dtype=int32, weak_type=True)
+    >>> jnp.fmin(2, jnp.array([1, 4, 2, -1]))
+    Array([ 1,  2,  2, -1], dtype=int32)
+
+    >>> x1 = jnp.array([1, 3, 2])
+    >>> x2 = jnp.array([2, 1, 4])
+    >>> jnp.fmin(x1, x2)
+    Array([1, 1, 2], dtype=int32)
+
+    >>> x3 = jnp.array([1, 5, 3])
+    >>> x4 = jnp.array([[2, 3, 1],
+    ...                 [5, 6, 7]])
+    >>> jnp.fmin(x3, x4)
+    Array([[1, 3, 1],
+           [1, 5, 3]], dtype=int32)
+
+    >>> nan = jnp.nan
+    >>> x5 = jnp.array([jnp.inf, 5, nan])
+    >>> x6 = jnp.array([[2, 3, nan],
+    ...                 [nan, 6, 7]])
+    >>> jnp.fmin(x5, x6)
+    Array([[ 2.,  3., nan],
+           [inf,  5.,  7.]], dtype=float32)
+  """
   return where(ufuncs.less(x1, x2) | ufuncs.isnan(x2), x1, x2)
 
-@util.implements(np.fmax, module='numpy')
+
 @jit
 def fmax(x1: ArrayLike, x2: ArrayLike) -> Array:
+  """Return element-wise maximum of the input arrays.
+
+  JAX implementation of :func:`numpy.fmax`.
+
+  Args:
+    x1: input array or scalar
+    x2: input array or scalar. x1 and x1 must either have same shape or be
+      broadcast compatible.
+
+  Returns:
+    An array containing the element-wise maximum of x1 and x2.
+
+  Note:
+    For each pair of elements, ``jnp.fmax`` returns:
+      - the larger of the two if both elements are finite numbers.
+      - finite number if one element is ``nan``.
+      - ``nan`` if both elements are ``nan``.
+      - ``inf`` if one element is ``inf`` and the other is finite or ``nan``.
+      - ``-inf`` if one element is ``-inf`` and the other is ``nan``.
+
+  Examples:
+    >>> jnp.fmax(3, 7)
+    Array(7, dtype=int32, weak_type=True)
+    >>> jnp.fmax(5, jnp.array([1, 7, 9, 4]))
+    Array([5, 7, 9, 5], dtype=int32)
+
+    >>> x1 = jnp.array([1, 3, 7, 8])
+    >>> x2 = jnp.array([-1, 4, 6, 9])
+    >>> jnp.fmax(x1, x2)
+    Array([1, 4, 7, 9], dtype=int32)
+
+    >>> x3 = jnp.array([[2, 3, 5, 10],
+    ...                 [11, 9, 7, 5]])
+    >>> jnp.fmax(x1, x3)
+    Array([[ 2,  3,  7, 10],
+           [11,  9,  7,  8]], dtype=int32)
+
+    >>> x4 = jnp.array([jnp.inf, 6, -jnp.inf, nan])
+    >>> x5 = jnp.array([[3, 5, 7, nan],
+    ...                 [nan, 9, nan, -1]])
+    >>> jnp.fmax(x4, x5)
+    Array([[ inf,   6.,   7.,  nan],
+           [ inf,   9., -inf,  -1.]], dtype=float32)
+  """
   return where(ufuncs.greater(x1, x2) | ufuncs.isnan(x2), x1, x2)
 
 @util.implements(np.issubdtype)
@@ -376,21 +454,41 @@ def result_type(*args: Any) -> DType:
   return dtypes.result_type(*args)
 
 
-@util.implements(np.trunc, module='numpy')
 @jit
 def trunc(x: ArrayLike) -> Array:
+  """Round input to the nearest integer towards zero.
+
+  JAX implementation of :func:`numpy.trunc`.
+
+  Args:
+    x: input array or scalar.
+
+  Returns:
+    An array with same shape and dtype as ``x`` containing the rounded values.
+
+  See also:
+    - :func:`jax.numpy.fix`: Rounds the input to the nearest integer towards zero.
+    - :func:`jax.numpy.ceil`: Rounds the input up to the nearest integer.
+    - :func:`jax.numpy.floor`: Rounds the input down to the nearest integer.
+
+  Examples:
+    >>> key = jax.random.key(42)
+    >>> x = jax.random.uniform(key, (3, 3), minval=-10, maxval=10)
+    >>> with jnp.printoptions(precision=2, suppress=True):
+    ...     print(x)
+    [[ 2.88 -3.55 -6.13]
+     [ 7.73  4.49 -6.16]
+     [-3.1  -4.95  2.64]]
+    >>> jnp.trunc(x)
+    Array([[ 2., -3., -6.],
+           [ 7.,  4., -6.],
+           [-3., -4.,  2.]], dtype=float32)
+  """
   util.check_arraylike('trunc', x)
   if dtypes.isdtype(dtypes.dtype(x), ('integral', 'bool')):
     return lax_internal.asarray(x)
   return where(lax.lt(x, _lax_const(x, 0)), ufuncs.ceil(x), ufuncs.floor(x))
 
-
-_CONV_PREFERRED_ELEMENT_TYPE_DESCRIPTION = """
-preferred_element_type : dtype, optional
-    If specified, accumulate results and return a result of the given data type.
-    If not specified, the function instead follows the numpy convention of always
-    accumulating results and returning an inexact dtype.
-"""
 
 @partial(jit, static_argnames=['mode', 'op', 'precision', 'preferred_element_type'])
 def _conv(x: Array, y: Array, mode: str, op: str, precision: PrecisionLike,
@@ -720,11 +818,6 @@ def histogramdd(sample: ArrayLike, bins: ArrayLike | list[ArrayLike] = 10,
   return hist, bin_edges_by_dim
 
 
-_ARRAY_VIEW_DOC = """
-The JAX version of this function may in some cases return a copy rather than a
-view of the input.
-"""
-
 def transpose(a: ArrayLike, axes: Sequence[int] | None = None) -> Array:
   """Return a transposed version of an N-dimensional array.
 
@@ -803,8 +896,31 @@ def transpose(a: ArrayLike, axes: Sequence[int] | None = None) -> Array:
   return lax.transpose(a, axes_)
 
 
-@util.implements(getattr(np, "permute_dims", None))
 def permute_dims(a: ArrayLike, /, axes: tuple[int, ...]) -> Array:
+  """Permute the axes/dimensions of an array.
+
+  JAX implementation of :func:`array_api.permute_dims`.
+
+  Args:
+    a: input array
+    axes: tuple of integers in range ``[0, a.ndim)`` specifying the
+      axes permutation.
+
+  Returns:
+    a copy of ``a`` with axes permuted.
+
+  See also:
+    - :func:`jax.numpy.transpose`
+    - :func:`jax.numpy.matrix_transpose`
+
+  Examples:
+    >>> a = jnp.array([[1, 2, 3],
+    ...                [4, 5, 6]])
+    >>> jnp.permute_dims(a, (1, 0))
+    Array([[1, 4],
+           [2, 5],
+           [3, 6]], dtype=int32)
+  """
   util.check_arraylike("permute_dims", a)
   return lax.transpose(a, axes)
 
@@ -862,9 +978,65 @@ def matrix_transpose(x: ArrayLike, /) -> Array:
   return lax.transpose(x, axes)
 
 
-@util.implements(np.rot90, lax_description=_ARRAY_VIEW_DOC)
 @partial(jit, static_argnames=('k', 'axes'))
 def rot90(m: ArrayLike, k: int = 1, axes: tuple[int, int] = (0, 1)) -> Array:
+  """Rotate an array by 90 degrees counterclockwise in the plane specified by axes.
+
+  JAX implementation of :func:`numpy.rot90`.
+
+  Args:
+    m: input array. Must have ``m.ndim >= 2``.
+    k: int, optional, default=1. Specifies the number of times the array is rotated.
+      For negative values of ``k``, the array is rotated in clockwise direction.
+    axes: tuple of 2 integers, optional, default= (0, 1). The axes define the plane
+      in which the array is rotated. Both the axes must be different.
+
+  Returns:
+    An array containing the copy of the input, ``m`` rotated by 90 degrees.
+
+  See also:
+    - :func:`jax.numpy.flip`: reverse the order along the given axis
+    - :func:`jax.numpy.fliplr`: reverse the order along axis 1 (left/right)
+    - :func:`jax.numpy.flipud`: reverse the order along axis 0 (up/down)
+
+  Examples:
+    >>> m = jnp.array([[1, 2, 3],
+    ...                [4, 5, 6]])
+    >>> jnp.rot90(m)
+    Array([[3, 6],
+           [2, 5],
+           [1, 4]], dtype=int32)
+    >>> jnp.rot90(m, k=2)
+    Array([[6, 5, 4],
+           [3, 2, 1]], dtype=int32)
+
+    ``jnp.rot90(m, k=1, axes=(1, 0))`` is equivalent to
+    ``jnp.rot90(m, k=-1, axes(0,1))``.
+
+    >>> jnp.rot90(m, axes=(1, 0))
+    Array([[4, 1],
+           [5, 2],
+           [6, 3]], dtype=int32)
+    >>> jnp.rot90(m, k=-1, axes=(0, 1))
+    Array([[4, 1],
+           [5, 2],
+           [6, 3]], dtype=int32)
+
+    when input array has ``ndim>2``:
+
+    >>> m1 = jnp.array([[[1, 2, 3],
+    ...                  [4, 5, 6]],
+    ...                 [[7, 8, 9],
+    ...                  [10, 11, 12]]])
+    >>> jnp.rot90(m1, k=1, axes=(2, 1))
+    Array([[[ 4,  1],
+            [ 5,  2],
+            [ 6,  3]],
+    <BLANKLINE>
+           [[10,  7],
+            [11,  8],
+            [12,  9]]], dtype=int32)
+  """
   util.check_arraylike("rot90", m)
   if np.ndim(m) < 2:
     raise ValueError("rot90 requires its first argument to have ndim at least "
@@ -1105,11 +1277,68 @@ def angle(z: ArrayLike, deg: bool = False) -> Array:
   return ufuncs.degrees(result) if deg else result
 
 
-@util.implements(np.diff)
 @partial(jit, static_argnames=('n', 'axis'))
 def diff(a: ArrayLike, n: int = 1, axis: int = -1,
          prepend: ArrayLike | None = None,
          append: ArrayLike | None = None) -> Array:
+  """Calculate n-th order difference between array elements along a given axis.
+
+  JAX implementation of :func:`numpy.diff`.
+
+  The first order difference is computed by ``a[i+1] - a[i]``, and the n-th order
+  difference is computed ``n`` times recursively.
+
+  Args:
+    a: input array. Must have ``a.ndim >= 1``.
+    n: int, optional, default=1. Order of the difference. Specifies the number
+      of times the difference is computed. If n=0, no difference is computed and
+      input is returned as is.
+    axis: int, optional, default=-1. Specifies the axis along which the difference
+      is computed. The difference is computed along ``axis -1`` by default.
+    prepend: scalar or array, optional, defualt=None. Specifies the values to be
+      prepended along ``axis`` before computing the difference.
+    append: scalar or array, optional, defualt=None. Specifies the values to be
+      appended along ``axis`` before computing the difference.
+
+  Returns:
+    An array containing the n-th order difference between the elements of ``a``.
+
+  See also:
+    - :func:`jax.numpy.ediff1d`: Computes the differences between consecutive
+      elements of an array.
+    - :func:`jax.numpy.cumsum`: Computes the cumulative sum of the elements of
+      the array along a given axis.
+    - :func:`jax.numpy.gradient`: Computes the gradient of an N-dimensional array.
+
+  Examples:
+    ``jnp.diff`` computes the first order difference along ``axis``, by default.
+
+    >>> a = jnp.array([[1, 5, 2, 9],
+    ...                [3, 8, 7, 4]])
+    >>> jnp.diff(a)
+    Array([[ 4, -3,  7],
+           [ 5, -1, -3]], dtype=int32)
+
+    When ``n = 2``, second order difference is computed along ``axis``.
+
+    >>> jnp.diff(a, n=2)
+    Array([[-7, 10],
+           [-6, -2]], dtype=int32)
+
+    When ``prepend = 2``, it is prepended to ``a`` along ``axis`` before computing
+    the difference.
+
+    >>> jnp.diff(a, prepend=2)
+    Array([[-1,  4, -3,  7],
+           [ 1,  5, -1, -3]], dtype=int32)
+
+    When ``append = jnp.array([[3],[1]])``, it is appended to ``a`` along ``axis``
+    before computing the difference.
+
+    >>> jnp.diff(a, append=jnp.array([[3],[1]]))
+    Array([[ 4, -3,  7, -6],
+           [ 5, -1, -3, -3]], dtype=int32)
+  """
   util.check_arraylike("diff", a)
   arr = asarray(a)
   n = core.concrete_or_error(operator.index, n, "'n' argument of jnp.diff")
@@ -1159,16 +1388,58 @@ def diff(a: ArrayLike, n: int = 1, axis: int = -1,
 
   return arr
 
-_EDIFF1D_DOC = """\
-Unlike NumPy's implementation of ediff1d, :py:func:`jax.numpy.ediff1d` will not
-issue an error if casting ``to_end`` or ``to_begin`` to the type of ``ary``
-loses precision.
-"""
 
-@util.implements(np.ediff1d, lax_description=_EDIFF1D_DOC)
 @jit
 def ediff1d(ary: ArrayLike, to_end: ArrayLike | None = None,
             to_begin: ArrayLike | None = None) -> Array:
+  """Compute the differences of the elements of the flattened array.
+
+  JAX implementation of :func:`numpy.ediff1d`.
+
+  Args:
+    ary: input array or scalar.
+    to_end: scalar or array, optional, default=None. Specifies the numbers to
+      append to the resulting array.
+    to_begin: scalar or array, optional, default=None. Specifies the numbers to
+      prepend to the resulting array.
+
+  Returns:
+    An array containing the differences between the elements of the input array.
+
+  Note:
+    Unlike NumPy's implementation of ediff1d, :py:func:`jax.numpy.ediff1d` will
+    not issue an error if casting ``to_end`` or ``to_begin`` to the type of
+    ``ary`` loses precision.
+
+  See also:
+    - :func:`jax.numpy.diff`: Computes the n-th order difference between elements
+      of the array along a given axis.
+    - :func:`jax.numpy.cumsum`: Computes the cumulative sum of the elements of
+      the array along a given axis.
+    - :func:`jax.numpy.gradient`: Computes the gradient of an N-dimensional array.
+
+  Examples:
+    >>> a = jnp.array([2, 3, 5, 9, 1, 4])
+    >>> jnp.ediff1d(a)
+    Array([ 1,  2,  4, -8,  3], dtype=int32)
+    >>> jnp.ediff1d(a, to_begin=-10)
+    Array([-10,   1,   2,   4,  -8,   3], dtype=int32)
+    >>> jnp.ediff1d(a, to_end=jnp.array([20, 30]))
+    Array([ 1,  2,  4, -8,  3, 20, 30], dtype=int32)
+    >>> jnp.ediff1d(a, to_begin=-10, to_end=jnp.array([20, 30]))
+    Array([-10,   1,   2,   4,  -8,   3,  20,  30], dtype=int32)
+
+    For array with ``ndim > 1``, the differences are computed after flattening
+    the input array.
+
+    >>> a1 = jnp.array([[2, -1, 4, 7],
+    ...                 [3, 5, -6, 9]])
+    >>> jnp.ediff1d(a1)
+    Array([ -3,   5,   3,  -4,   2, -11,  15], dtype=int32)
+    >>> a2 = jnp.array([2, -1, 4, 7, 3, 5, -6, 9])
+    >>> jnp.ediff1d(a2)
+    Array([ -3,   5,   3,  -4,   2, -11,  15], dtype=int32)
+  """
   util.check_arraylike("ediff1d", ary)
   arr = ravel(ary)
   result = lax.sub(arr[1:], arr[:-1])
@@ -1306,6 +1577,8 @@ def reshape(
       JAX does not support ``order="A"``.
     copy: unused by JAX; JAX always returns a copy, though under JIT the compiler
       may optimize such copies away.
+    newshape: deprecated alias of the ``shape`` argument. Will result in a
+      :class:`DeprecationWarning` if used.
 
   Returns:
     reshaped copy of input array with the specified shape.
@@ -1370,11 +1643,10 @@ def reshape(
         "jnp.reshape received both `shape` and `newshape` arguments. Note that "
         "using `newshape` is deprecated, please only use `shape` instead."
       )
-    warnings.warn(
-      "The newshape argument of jax.numpy.reshape is deprecated and setting it "
-      "will soon raise an error. To avoid an error in the future, and to "
-      "suppress this warning, please use the shape argument instead.",
-      DeprecationWarning, stacklevel=2)
+    deprecations.warn(
+      "jax-numpy-reshape-newshape",
+      ("The newshape argument of jax.numpy.reshape is deprecated. "
+       "Please use the shape argument instead."), stacklevel=2)
     shape = newshape
     del newshape
   elif shape is None:
@@ -1595,9 +1867,40 @@ def unravel_index(indices: ArrayLike, shape: Shape) -> tuple[Array, ...]:
   return tuple(where(oob_pos, s - 1, where(oob_neg, 0, i))
                for s, i in safe_zip(shape, out_indices))
 
-@util.implements(np.resize)
+
 @partial(jit, static_argnames=('new_shape',))
 def resize(a: ArrayLike, new_shape: Shape) -> Array:
+  """Return a new array with specified shape.
+
+  JAX implementation of :func:`numpy.resize`.
+
+  Args:
+    a: input array or scalar.
+    new_shape: int or tuple of ints. Specifies the shape of the resized array.
+
+  Returns:
+    A resized array with specified shape. The elements of ``a`` are repeated in
+    the resized array, if the resized array is larger than the original aray.
+
+  See also:
+    - :func:`jax.numpy.reshape`: Returns a reshaped copy of an array.
+    - :func:`jax.numpy.repeat`: Constructs an array from repeated elements.
+
+  Examples:
+    >>> x = jnp.array([1, 2, 3, 4, 5, 6, 7, 8, 9])
+    >>> jnp.resize(x, (3, 3))
+    Array([[1, 2, 3],
+           [4, 5, 6],
+           [7, 8, 9]], dtype=int32)
+    >>> jnp.resize(x, (3, 4))
+    Array([[1, 2, 3, 4],
+           [5, 6, 7, 8],
+           [9, 1, 2, 3]], dtype=int32)
+    >>> jnp.resize(4, (3, 2))
+    Array([[4, 4],
+           [4, 4],
+           [4, 4]], dtype=int32, weak_type=True)
+  """
   util.check_arraylike("resize", a)
   new_shape = _ensure_index_tuple(new_shape)
 
@@ -2012,15 +2315,58 @@ def _interp(x: ArrayLike, xp: ArrayLike, fp: ArrayLike,
   return f
 
 
-@util.implements(np.interp,
-  lax_description=_dedent("""
-    In addition to constant interpolation supported by NumPy, jnp.interp also
-    supports left='extrapolate' and right='extrapolate' to indicate linear
-    extrapolation instead."""))
 def interp(x: ArrayLike, xp: ArrayLike, fp: ArrayLike,
            left: ArrayLike | str | None = None,
            right: ArrayLike | str | None = None,
            period: ArrayLike | None = None) -> Array:
+  """One-dimensional linear interpolation.
+
+  JAX implementation of :func:`numpy.interp`.
+
+  Args:
+    x: N-dimensional array of x coordinates at which to evaluate the interpolation.
+    xp: one-dimensional sorted array of points to be interpolated.
+    fp: array of shape ``xp.shape`` containing the function values associated with ``xp``.
+    left: specify how to handle points ``x < xp[0]``. Default is to return ``fp[0]``.
+      If ``left`` is a scalar value, it will return this value. if ``left`` is the string
+      ``"extrapolate"``, then the value will be determined by linear extrapolation.
+      ``left`` is ignored if ``period`` is specified.
+    right: specify how to handle points ``x > xp[-1]``. Default is to return ``fp[-1]``.
+      If ``right`` is a scalar value, it will return this value. if ``right`` is the string
+      ``"extrapolate"``, then the value will be determined by linear extrapolation.
+      ``right`` is ignored if ``period`` is specified.
+    period: optionally specify the period for the *x* coordinates, for e.g. interpolation
+      in angular space.
+
+  Returns:
+    an array of shape ``x.shape`` containing the interpolated function at values ``x``.
+
+  Examples:
+    >>> xp = jnp.arange(10)
+    >>> fp = 2 * xp
+    >>> x = jnp.array([0.5, 2.0, 3.5])
+    >>> interp(x, xp, fp)
+    Array([1., 4., 7.], dtype=float32)
+
+    Unless otherwise specified, extrapolation will be constant:
+
+    >>> x = jnp.array([-10., 10.])
+    >>> interp(x, xp, fp)
+    Array([ 0., 18.], dtype=float32)
+
+    Use ``"extrapolate"`` mode for linear extrapolation:
+
+    >>> interp(x, xp, fp, left='extrapolate', right='extrapolate')
+    Array([-20.,  20.], dtype=float32)
+
+    For periodic interpolation, specify the ``period``:
+
+    >>> xp = jnp.array([0, jnp.pi / 2, jnp.pi, 3 * jnp.pi / 2])
+    >>> fp = jnp.sin(xp)
+    >>> x = 2 * jnp.pi  # note: not in input array
+    >>> jnp.interp(x, xp, fp, period=2 * jnp.pi)
+    Array(0., dtype=float32)
+  """
   static_argnames = []
   if isinstance(left, str) or left is None:
     static_argnames.append('left')
@@ -2079,7 +2425,7 @@ def where(condition, x=None, y=None, /, *, size=None, fill_value=None):
   Returns:
     An array of dtype ``jnp.result_type(x, y)`` with values drawn from ``x`` where ``condition``
     is True, and from ``y`` where condition is ``False``. If ``x`` and ``y`` are ``None``, the
-    function behaves differently; see `:func:`jax.numpy.nonzero` for a description of the return
+    function behaves differently; see :func:`jax.numpy.nonzero` for a description of the return
     type.
 
   See Also:
@@ -2126,12 +2472,60 @@ def where(condition, x=None, y=None, /, *, size=None, fill_value=None):
     return util._where(condition, x, y)
 
 
-@util.implements(np.select)
 def select(
     condlist: Sequence[ArrayLike],
     choicelist: Sequence[ArrayLike],
     default: ArrayLike = 0,
 ) -> Array:
+  """Select values based on a series of conditions.
+
+  JAX implementation of :func:`numpy.select`, implemented in terms
+  of :func:`jax.lax.select_n`
+
+  Args:
+    condlist: sequence of array-like conditions. All entries must be mutually
+      broadcast-compatible.
+    choicelist: sequence of array-like values to choose. Must have the same length
+      as ``condlist``, and all entries must be broadcast-compatible with entries
+      of ``condlist``.
+    default: value to return when every condition is False (default: 0).
+
+  Returns:
+    Array of selected values from ``choicelist`` corresponding to the first
+    ``True`` entry in ``condlist`` at each location.
+
+  See also:
+    - :func:`jax.numpy.where`: select between two values based on a single condition.
+    - :func:`jax.lax.select_n`: select between *N* values based on an index.
+
+  Examples:
+    >>> condlist = [
+    ...    jnp.array([False, True, False, False]),
+    ...    jnp.array([True, False, False, False]),
+    ...    jnp.array([False, True, True, False]),
+    ... ]
+    >>> choicelist = [
+    ...    jnp.array([1, 2, 3, 4]),
+    ...    jnp.array([10, 20, 30, 40]),
+    ...    jnp.array([100, 200, 300, 400]),
+    ... ]
+    >>> jnp.select(condlist, choicelist, default=0)
+    Array([ 10,   2, 300,   0], dtype=int32)
+
+    This is logically equivalent to the following nested ``where`` statement:
+
+    >>> default = 0
+    >>> jnp.where(condlist[0],
+    ...   choicelist[0],
+    ...   jnp.where(condlist[1],
+    ...     choicelist[1],
+    ...     jnp.where(condlist[2],
+    ...       choicelist[2],
+    ...       default)))
+    Array([ 10,   2, 300,   0], dtype=int32)
+
+    However, for efficiency it is implemented in terms of :func:`jax.lax.select_n`.
+  """
   if len(condlist) != len(choicelist):
     msg = "condlist must have length equal to choicelist ({} vs {})"
     raise ValueError(msg.format(len(condlist), len(choicelist)))
@@ -2235,25 +2629,119 @@ def broadcast_shapes(*shapes: Sequence[int]) -> tuple[int, ...]: ...
 def broadcast_shapes(*shapes: Sequence[int | core.Tracer]
                      ) -> tuple[int | core.Tracer, ...]: ...
 
-@util.implements(getattr(np, "broadcast_shapes", None))
 def broadcast_shapes(*shapes):
+  """Broadcast input shapes to a common output shape.
+
+  JAX implementation of :func:`numpy.broadcast_shapes`. JAX uses NumPy-style
+  broadcasting rules, which you can read more about at `NumPy broadcasting`_.
+
+  Args:
+    shapes: 0 or more shapes specified as sequences of integers
+
+  Returns:
+    The broadcasted shape as a tuple of integers.
+
+  See Also:
+    - :func:`jax.numpy.broadcast_arrays`: broadcast arrays to a common shape.
+    - :func:`jax.numpy.broadcast_to`: broadcast an array to a specified shape.
+
+  Examples:
+    Some compatible shapes:
+
+    >>> jnp.broadcast_shapes((1,), (4,))
+    (4,)
+    >>> jnp.broadcast_shapes((3, 1), (4,))
+    (3, 4)
+    >>> jnp.broadcast_shapes((3, 1), (1, 4), (5, 1, 1))
+    (5, 3, 4)
+
+    Incompatible shapes:
+
+    >>> jnp.broadcast_shapes((3, 1), (4, 1))  # doctest: +IGNORE_EXCEPTION_DETAIL
+    Traceback (most recent call last):
+    ValueError: Incompatible shapes for broadcasting: shapes=[(3, 1), (4, 1)]
+
+  .. _NumPy broadcasting: https://numpy.org/doc/stable/user/basics.broadcasting.html
+  """
   if not shapes:
     return ()
   shapes = [(shape,) if np.ndim(shape) == 0 else tuple(shape) for shape in shapes]
   return lax.broadcast_shapes(*shapes)
 
 
-@util.implements(np.broadcast_arrays, lax_description="""\
-The JAX version does not necessarily return a view of the input.
-""")
 def broadcast_arrays(*args: ArrayLike) -> list[Array]:
+  """Broadcast arrays to a common shape.
+
+  JAX implementation of :func:`numpy.broadcast_arrays`. JAX uses NumPy-style
+  broadcasting rules, which you can read more about at `NumPy broadcasting`_.
+
+  Args:
+    args: zero or more array-like objects to be broadcasted.
+
+  Returns:
+    a list of arrays containing broadcasted copies of the inputs.
+
+  See also:
+    - :func:`jax.numpy.broadcast_shapes`: broadcast input shapes to a common shape.
+    - :func:`jax.numpy.broadcast_to`: broadcast an array to a specified shape.
+
+  Examples:
+
+    >>> x = jnp.arange(3)
+    >>> y = jnp.int32(1)
+    >>> jnp.broadcast_arrays(x, y)
+    [Array([0, 1, 2], dtype=int32), Array([1, 1, 1], dtype=int32)]
+
+    >>> x = jnp.array([[1, 2, 3]])
+    >>> y = jnp.array([[10],
+    ...                [20]])
+    >>> x2, y2 = jnp.broadcast_arrays(x, y)
+    >>> x2
+    Array([[1, 2, 3],
+           [1, 2, 3]], dtype=int32)
+    >>> y2
+    Array([[10, 10, 10],
+           [20, 20, 20]], dtype=int32)
+
+  .. _NumPy broadcasting: https://numpy.org/doc/stable/user/basics.broadcasting.html
+  """
   return util._broadcast_arrays(*args)
 
 
-@util.implements(np.broadcast_to, lax_description="""\
-The JAX version does not necessarily return a view of the input.
-""")
 def broadcast_to(array: ArrayLike, shape: DimSize | Shape) -> Array:
+  """Broadcast an array to a specified shape.
+
+  JAX implementation of :func:`numpy.broadcast_to`. JAX uses NumPy-style
+  broadcasting rules, which you can read more about at `NumPy broadcasting`_.
+
+  Args:
+    array: array to be broadcast.
+    shape: shape to which the array will be broadcast.
+
+  Returns:
+    a copy of array broadcast to the specified shape.
+
+  See also:
+    - :func:`jax.numpy.broadcast_arrays`: broadcast arrays to a common shape.
+    - :func:`jax.numpy.broadcast_shapes`: broadcast input shapes to a common shape.
+
+  Examples:
+    >>> x = jnp.int32(1)
+    >>> jnp.broadcast_to(x, (1, 4))
+    Array([[1, 1, 1, 1]], dtype=int32)
+
+    >>> x = jnp.array([1, 2, 3])
+    >>> jnp.broadcast_to(x, (2, 3))
+    Array([[1, 2, 3],
+           [1, 2, 3]], dtype=int32)
+
+    >>> x = jnp.array([[2], [4]])
+    >>> jnp.broadcast_to(x, (2, 4))
+    Array([[2, 2, 2, 2],
+           [4, 4, 4, 4]], dtype=int32)
+
+  .. _NumPy broadcasting: https://numpy.org/doc/stable/user/basics.broadcasting.html
+  """
   return util._broadcast_to(array, shape)
 
 
@@ -2295,30 +2783,207 @@ def _split(op: str, ary: ArrayLike,
   return [lax.slice(ary, _subval(starts, axis, start), _subval(ends, axis, end))
           for start, end in zip(split_indices[:-1], split_indices[1:])]
 
-@util.implements(np.split, lax_description=_ARRAY_VIEW_DOC)
+
 def split(ary: ArrayLike, indices_or_sections: int | Sequence[int] | ArrayLike,
           axis: int = 0) -> list[Array]:
+  """Split an array into sub-arrays.
+
+  JAX implementation of :func:`numpy.split`.
+
+  Args:
+    ary: N-dimensional array-like object to split
+    indices_or_sections: either a single integer or a sequence of indices.
+
+      - if ``indices_or_sections`` is an integer *N*, then *N* must evenly divide
+        ``ary.shape[axis]`` and ``ary`` will be divided into *N* equally-sized
+        chunks along ``axis``.
+      - if ``indices_or_sections`` is a sequence of integers, then these integers
+        specify the boundary between unevenly-sized chunks along ``axis``; see
+        examples below.
+
+    axis: the axis along which to split; defaults to 0.
+
+  Returns:
+    A list of arrays. If ``indices_or_sections`` is an integer *N*, then the list is
+    of length *N*. If ``indices_or_sections`` is a sequence *seq*, then the list is
+    is of length *len(seq) + 1*.
+
+  Examples:
+    Splitting a 1-dimensional array:
+
+    >>> x = jnp.array([1, 2, 3, 4, 5, 6, 7, 8, 9])
+
+    Split into three equal sections:
+
+    >>> chunks = jnp.split(x, 3)
+    >>> print(*chunks)
+    [1 2 3] [4 5 6] [7 8 9]
+
+    Split into sections by index:
+
+    >>> chunks = jnp.split(x, [2, 7])  # [x[0:2], x[2:7], x[7:]]
+    >>> print(*chunks)
+    [1 2] [3 4 5 6 7] [8 9]
+
+    Splitting a two-dimensional array along axis 1:
+
+    >>> x = jnp.array([[1, 2, 3, 4],
+    ...                [5, 6, 7, 8]])
+    >>> x1, x2 = jnp.split(x, 2, axis=1)
+    >>> print(x1)
+    [[1 2]
+     [5 6]]
+    >>> print(x2)
+    [[3 4]
+     [7 8]]
+
+  See also:
+    - :func:`jax.numpy.array_split`: like ``split``, but allows ``indices_or_sections``
+      to be an integer that does not evenly divide the size of the array.
+    - :func:`jax.numpy.vsplit`: split vertically, i.e. along axis=0
+    - :func:`jax.numpy.hsplit`: split horizontally, i.e. along axis=1
+    - :func:`jax.numpy.dsplit`: split depth-wise, i.e. along axis=2
+  """
   return _split("split", ary, indices_or_sections, axis=axis)
 
-def _split_on_axis(op: str, axis: int) -> Callable[[ArrayLike, int | ArrayLike], list[Array]]:
-  @util.implements(getattr(np, op), update_doc=False)
-  def f(ary: ArrayLike, indices_or_sections: int | Sequence[int] | ArrayLike) -> list[Array]:
-    # for 1-D array, hsplit becomes vsplit
-    nonlocal axis
-    util.check_arraylike(op, ary)
-    a = asarray(ary)
-    if axis == 1 and len(a.shape) == 1:
-      axis = 0
-    return _split(op, ary, indices_or_sections, axis=axis)
-  return f
 
-vsplit = _split_on_axis("vsplit", axis=0)
-hsplit = _split_on_axis("hsplit", axis=1)
-dsplit = _split_on_axis("dsplit", axis=2)
+def vsplit(ary: ArrayLike, indices_or_sections: int | Sequence[int] | ArrayLike) -> list[Array]:
+  """Split an array into sub-arrays vertically.
 
-@util.implements(np.array_split)
+  JAX implementation of :func:`numpy.vsplit`.
+
+  Refer to the documentation of :func:`jax.numpy.split` for details; ``vsplit`` is
+  equivalent to ``split`` with ``axis=0``.
+
+  Examples:
+    1D array:
+
+    >>> x = jnp.array([1, 2, 3, 4, 5, 6])
+    >>> x1, x2 = jnp.vsplit(x, 2)
+    >>> print(x1, x2)
+    [1 2 3] [4 5 6]
+
+    2D array:
+
+    >>> x = jnp.array([[1, 2, 3, 4],
+    ...                [5, 6, 7, 8]])
+    >>> x1, x2 = jnp.vsplit(x, 2)
+    >>> print(x1, x2)
+    [[1 2 3 4]] [[5 6 7 8]]
+
+  See also:
+    - :func:`jax.numpy.split`: split an array along any axis.
+    - :func:`jax.numpy.hsplit`: split horizontally, i.e. along axis=1
+    - :func:`jax.numpy.dsplit`: split depth-wise, i.e. along axis=2
+    - :func:`jax.numpy.array_split`: like ``split``, but allows ``indices_or_sections``
+      to be an integer that does not evenly divide the size of the array.
+  """
+  return _split("vsplit", ary, indices_or_sections, axis=0)
+
+
+def hsplit(ary: ArrayLike, indices_or_sections: int | Sequence[int] | ArrayLike) -> list[Array]:
+  """Split an array into sub-arrays horizontally.
+
+  JAX implementation of :func:`numpy.hsplit`.
+
+  Refer to the documentation of :func:`jax.numpy.split` for details. ``hsplit`` is
+  equivalent to ``split`` with ``axis=1``, or ``axis=0`` for one-dimensional arrays.
+
+  Examples:
+    1D array:
+
+    >>> x = jnp.array([1, 2, 3, 4, 5, 6])
+    >>> x1, x2 = jnp.hsplit(x, 2)
+    >>> print(x1, x2)
+    [1 2 3] [4 5 6]
+
+    2D array:
+
+    >>> x = jnp.array([[1, 2, 3, 4],
+    ...                [5, 6, 7, 8]])
+    >>> x1, x2 = jnp.hsplit(x, 2)
+    >>> print(x1)
+    [[1 2]
+     [5 6]]
+    >>> print(x2)
+    [[3 4]
+     [7 8]]
+
+  See also:
+    - :func:`jax.numpy.split`: split an array along any axis.
+    - :func:`jax.numpy.vsplit`: split vertically, i.e. along axis=0
+    - :func:`jax.numpy.dsplit`: split depth-wise, i.e. along axis=2
+    - :func:`jax.numpy.array_split`: like ``split``, but allows ``indices_or_sections``
+      to be an integer that does not evenly divide the size of the array.
+  """
+  util.check_arraylike("hsplit", ary)
+  a = asarray(ary)
+  return _split("hsplit", a, indices_or_sections, axis=0 if a.ndim == 1 else 1)
+
+
+def dsplit(ary: ArrayLike, indices_or_sections: int | Sequence[int] | ArrayLike) -> list[Array]:
+  """Split an array into sub-arrays depth-wise.
+
+  JAX implementation of :func:`numpy.dsplit`.
+
+  Refer to the documentation of :func:`jax.numpy.split` for details. ``dsplit`` is
+  equivalent to ``split`` with ``axis=2``.
+
+  Examples:
+
+    >>> x = jnp.arange(12).reshape(3, 1, 4)
+    >>> print(x)
+    [[[ 0  1  2  3]]
+    <BLANKLINE>
+     [[ 4  5  6  7]]
+    <BLANKLINE>
+     [[ 8  9 10 11]]]
+    >>> x1, x2 = jnp.dsplit(x, 2)
+    >>> print(x1)
+    [[[0 1]]
+    <BLANKLINE>
+     [[4 5]]
+    <BLANKLINE>
+     [[8 9]]]
+    >>> print(x2)
+    [[[ 2  3]]
+    <BLANKLINE>
+     [[ 6  7]]
+    <BLANKLINE>
+     [[10 11]]]
+
+  See also:
+    - :func:`jax.numpy.split`: split an array along any axis.
+    - :func:`jax.numpy.vsplit`: split vertically, i.e. along axis=0
+    - :func:`jax.numpy.hsplit`: split horizontally, i.e. along axis=1
+    - :func:`jax.numpy.array_split`: like ``split``, but allows ``indices_or_sections``
+      to be an integer that does not evenly divide the size of the array.
+  """
+  return _split("dsplit", ary, indices_or_sections, axis=2)
+
+
 def array_split(ary: ArrayLike, indices_or_sections: int | Sequence[int] | ArrayLike,
                 axis: int = 0) -> list[Array]:
+  """Split an array into sub-arrays.
+
+  JAX implementation of :func:`numpy.array_split`.
+
+  Refer to the documentation of :func:`jax.numpy.split` for details; ``array_split``
+  is equivalent to ``split``, but allows integer ``indices_or_sections`` which does
+  not evenly divide the split axis.
+
+  Examples:
+    >>> x = jnp.array([1, 2, 3, 4, 5, 6, 7, 8, 9])
+    >>> chunks = jnp.array_split(x, 4)
+    >>> print(*chunks)
+    [1 2 3] [4 5] [6 7] [8 9]
+
+  See also:
+    - :func:`jax.numpy.split`: split an array along any axis.
+    - :func:`jax.numpy.vsplit`: split vertically, i.e. along axis=0
+    - :func:`jax.numpy.hsplit`: split horizontally, i.e. along axis=1
+    - :func:`jax.numpy.dsplit`: split depth-wise, i.e. along axis=2
+  """
   return _split("array_split", ary, indices_or_sections, axis=axis)
 
 
@@ -2372,10 +3037,10 @@ def clip(
   min = a_min if not isinstance(a_min, DeprecatedArg) else min
   max = a_max if not isinstance(a_max, DeprecatedArg) else max
   if any(not isinstance(t, DeprecatedArg) for t in (a, a_min, a_max)):
-    warnings.warn(
-      "Passing arguments 'a', 'a_min' or 'a_max' to jax.numpy.clip is "
-      "deprecated. Please use 'arr', 'min' or 'max' respectively instead.",
-      DeprecationWarning,
+    deprecations.warn(
+      "jax-numpy-clip-args",
+      ("Passing arguments 'a', 'a_min' or 'a_max' to jax.numpy.clip is "
+       "deprecated. Please use 'arr', 'min' or 'max' respectively instead."),
       stacklevel=2,
     )
 
@@ -2392,9 +3057,47 @@ def clip(
     arr = ufuncs.minimum(max, arr)
   return asarray(arr)
 
-@util.implements(np.around, skip_params=['out'])
+
 @partial(jit, static_argnames=('decimals',))
 def round(a: ArrayLike, decimals: int = 0, out: None = None) -> Array:
+  """Round input evenly to the given number of decimals.
+
+  JAX implementation of :func:`numpy.round`.
+
+  Args:
+    a: input array or scalar.
+    decimals: int, default=0. Number of decimal points to which the input needs
+      to be rounded. It must be specified statically. Not implemented for
+      ``decimals < 0``.
+    out: Unused by JAX.
+
+  Returns:
+    An array containing the rounded values to the specified ``decimals`` with
+    same shape and dtype as ``a``.
+
+  Note:
+    ``jnp.round`` rounds to the nearest even integer for the values exactly halfway
+    between rounded decimal values.
+
+  See also:
+    - :func:`jax.numpy.floor`: Rounds the input to the nearest integer downwards.
+    - :func:`jax.numpy.ceil`: Rounds the input to the nearest integer upwards.
+    - :func:`jax.numpy.fix` and :func:numpy.trunc`: Rounds the input to the
+      nearest integer towards zero.
+
+  Examples:
+    >>> x = jnp.array([1.532, 3.267, 6.149])
+    >>> jnp.round(x)
+    Array([2., 3., 6.], dtype=float32)
+    >>> jnp.round(x, decimals=2)
+    Array([1.53, 3.27, 6.15], dtype=float32)
+
+    For values exactly halfway between rounded values:
+
+    >>> x1 = jnp.array([10.5, 21.5, 12.5, 31.5])
+    >>> jnp.round(x1)
+    Array([10., 22., 12., 32.], dtype=float32)
+  """
   util.check_arraylike("round", a)
   decimals = core.concrete_or_error(operator.index, decimals, "'decimals' argument of jnp.round")
   if out is not None:
@@ -2424,13 +3127,45 @@ def round(a: ArrayLike, decimals: int = 0, out: None = None) -> Array:
     return lax.complex(_round_float(lax.real(a)), _round_float(lax.imag(a)))
   else:
     return _round_float(a)
-around = round
-round_ = round
 
 
-@util.implements(np.fix, skip_params=['out'])
+@partial(jit, static_argnames=('decimals',))
+def around(a: ArrayLike, decimals: int = 0, out: None = None) -> Array:
+  """Alias of :func:`jax.numpy.round`"""
+  return round(a, decimals, out)
+
+
 @jit
 def fix(x: ArrayLike, out: None = None) -> Array:
+  """Round input to the nearest integer towards zero.
+
+  JAX implementation of :func:`numpy.fix`.
+
+  Args:
+    x: input array.
+    out: unused by JAX.
+
+  Returns:
+    An array with same shape and dtype as ``x`` containing the rounded values.
+
+  See also:
+    - :func:`jax.numpy.trunc`: Rounds the input to nearest integer towards zero.
+    - :func:`jax.numpy.ceil`: Rounds the input up to the nearest integer.
+    - :func:`jax.numpy.floor`: Rounds the input down to the nearest integer.
+
+  Examples:
+    >>> key = jax.random.key(0)
+    >>> x = jax.random.uniform(key, (3, 3), minval=-5, maxval=5)
+    >>> with jnp.printoptions(precision=2, suppress=True):
+    ...     print(x)
+    [[-1.45  1.04 -0.72]
+     [-2.69  1.74 -0.6 ]
+     [-2.49 -2.23  2.68]]
+    >>> jnp.fix(x)
+    Array([[-1.,  1., -0.],
+           [-2.,  1., -0.],
+           [-2., -2.,  2.]], dtype=float32)
+  """
   util.check_arraylike("fix", x)
   if out is not None:
     raise NotImplementedError("The 'out' argument to jnp.fix is not supported.")
@@ -3015,13 +3750,123 @@ def _pad(array: ArrayLike, pad_width: PadValueLike[int], mode: str,
                    "not implemented modes")
 
 
-@util.implements(np.pad, lax_description="""\
-Unlike numpy, JAX "function" mode's argument (which is another function) should return
-the modified array. This is because Jax arrays are immutable.
-(In numpy, "function" mode's argument should modify a rank 1 array in-place.)
-""")
 def pad(array: ArrayLike, pad_width: PadValueLike[int | Array | np.ndarray],
         mode: str | Callable[..., Any] = "constant", **kwargs) -> Array:
+  """Add padding to an array.
+
+  JAX implementation of :func:`numpy.pad`.
+
+  Args:
+    array: array to pad.
+    pad_width: specify the pad width for each dimension of an array. Padding widths
+      may be separately specified for *before* and *after* the array. Options are:
+
+      - ``int`` or ``(int,)``: pad each array dimension with the same number of values
+        both before and after.
+      - ``(before, after)``: pad each array with ``before`` elements before, and ``after``
+        elements after
+      - ``((before_1, after_1), (before_2, after_2), ... (before_N, after_N))``: specify
+        distinct ``before`` and ``after`` values for each array dimension.
+
+    mode: a string or callable. Supported pad modes are:
+
+      - ``'constant'`` (default): pad with a constant value, which defaults to zero.
+      - ``'empty'``: pad with empty values (i.e. zero)
+      - ``'edge'``: pad with the edge values of the array.
+      - ``'wrap'``: pad by wrapping the array.
+      - ``'linear_ramp'``: pad with a linear ramp to specified ``end_values``.
+      - ``'maximum'``: pad with the maximum value.
+      - ``'mean'``: pad with the mean value.
+      - ``'median'``: pad with the median value.
+      - ``'minimum'``: pad with the minimum value.
+      - ``'reflect'``: pad by reflection.
+      - ``'symmetric'``: pad by symmetric reflection.
+      - ``<callable>``: a callable function. See Notes below.
+
+    constant_values: referenced for ``mode = 'constant'``. Specify the constant value
+      to pad with.
+    stat_length: referenced for ``mode in ['maximum', 'mean', 'median', 'minimum']``.
+      An integer or tuple specifying the number of edge values to use when calculating
+      the statistic.
+    end_values: referenced for ``mode = 'linear_ramp'``. Specify the end values to
+      ramp the padding values to.
+    reflect_type: referenced for ``mode in ['reflect', 'symmetric']``. Specify whether
+      to use even or odd reflection.
+
+  Returns:
+    A padded copy of ``array``.
+
+  Notes:
+    When ``mode`` is callable, it should have the following signature::
+
+      def pad_func(row: Array, pad_width: tuple[int, int],
+                   iaxis: int, kwargs: dict) -> Array:
+        ...
+
+    Here ``row`` is a 1D slice of the padded array along axis ``iaxis``, with the pad
+    values filled with zeros. ``pad_width`` is a tuple specifying the ``(before, after)``
+    padding sizes, and ``kwargs`` are any additional keyword arguments passed to the
+    :func:`jax.numpy.pad` function.
+
+    Note that while in NumPy, the function should modify ``row`` in-place, in JAX the
+    function should return the modified ``row``. In JAX, the custom padding function
+    will be mapped across the padded axis using the :func:`jax.vmap` transformation.
+
+  See also:
+    - :func:`jax.numpy.resize`: resize an array
+    - :func:`jax.numpy.tile`: create a larger array by tiling a smaller array.
+    - :func:`jax.numpy.repeat`: create a larger array by repeating values of a smaller array.
+
+  Examples:
+
+    Pad a 1-dimensional array with zeros:
+
+    >>> x = jnp.array([10, 20, 30, 40])
+    >>> jnp.pad(x, 2)
+    Array([ 0,  0, 10, 20, 30, 40,  0,  0], dtype=int32)
+    >>> jnp.pad(x, (2, 4))
+    Array([ 0,  0, 10, 20, 30, 40,  0,  0,  0,  0], dtype=int32)
+
+    Pad a 1-dimensional array with specified values:
+
+    >>> jnp.pad(x, 2, constant_values=99)
+    Array([99, 99, 10, 20, 30, 40, 99, 99], dtype=int32)
+
+    Pad a 1-dimensional array with the mean array value:
+
+    >>> jnp.pad(x, 2, mode='mean')
+    Array([25, 25, 10, 20, 30, 40, 25, 25], dtype=int32)
+
+    Pad a 1-dimensional array with reflected values:
+
+    >>> jnp.pad(x, 2, mode='reflect')
+    Array([30, 20, 10, 20, 30, 40, 30, 20], dtype=int32)
+
+    Pad a 2-dimensional array with different paddings in each dimension:
+
+    >>> x = jnp.array([[1, 2, 3],
+    ...                [4, 5, 6]])
+    >>> jnp.pad(x, ((1, 2), (3, 0)))
+    Array([[0, 0, 0, 0, 0, 0],
+           [0, 0, 0, 1, 2, 3],
+           [0, 0, 0, 4, 5, 6],
+           [0, 0, 0, 0, 0, 0],
+           [0, 0, 0, 0, 0, 0]], dtype=int32)
+
+    Pad a 1-dimensional array with a custom padding function:
+
+    >>> def custom_pad(row, pad_width, iaxis, kwargs):
+    ...   # row represents a 1D slice of the zero-padded array.
+    ...   before, after = pad_width
+    ...   before_value = kwargs.get('before_value', 0)
+    ...   after_value = kwargs.get('after_value', 0)
+    ...   row = row.at[:before].set(before_value)
+    ...   return row.at[len(row) - after:].set(after_value)
+    >>> x = jnp.array([2, 3, 4])
+    >>> jnp.pad(x, 2, custom_pad, before_value=-10, after_value=10)
+    Array([-10, -10,   2,   3,   4,  10,  10], dtype=int32)
+  """
+
   util.check_arraylike("pad", array)
   pad_width = _broadcast_to_pairs(pad_width, ndim(array), "pad_width")
   if pad_width and not all(core.is_dim(p[0]) and core.is_dim(p[1])
@@ -3061,9 +3906,53 @@ def pad(array: ArrayLike, pad_width: PadValueLike[int | Array | np.ndarray],
 ### Array-creation functions
 
 
-@util.implements(np.stack, skip_params=['out'])
 def stack(arrays: np.ndarray | Array | Sequence[ArrayLike],
           axis: int = 0, out: None = None, dtype: DTypeLike | None = None) -> Array:
+  """Join arrays along a new axis.
+
+  JAX implementation of :func:`numpy.stack`.
+
+  Args:
+    arrays: a sequence of arrays to stack; each must have the same shape. If a
+      single array is given it will be treated equivalently to
+      `arrays = unstack(arrays)`, but the implementation will avoid explicit
+      unstacking.
+    axis: specify the axis along which to stack.
+    out: unused by JAX
+    dtype: optional dtype of the resulting array. If not specified, the dtype
+      will be determined via type promotion rules described in :ref:`type-promotion`.
+
+  Returns:
+    the stacked result.
+
+  See also:
+    - :func:`jax.numpy.unstack`: inverse of ``stack``.
+    - :func:`jax.numpy.concatenate`: concatenation along existing axes.
+    - :func:`jax.numpy.vstack`: stack vertically, i.e. along axis 0.
+    - :func:`jax.numpy.hstack`: stack horizontally, i.e. along axis 1.
+    - :func:`jax.numpy.dstack`: stack depth-wise, i.e. along axis 2.
+    - :func:`jax.numpy.column_stack`: stack columns.
+
+  Examples:
+    >>> x = jnp.array([1, 2, 3])
+    >>> y = jnp.array([4, 5, 6])
+    >>> jnp.stack([x, y])
+    Array([[1, 2, 3],
+           [4, 5, 6]], dtype=int32)
+    >>> jnp.stack([x, y], axis=1)
+    Array([[1, 4],
+           [2, 5],
+           [3, 6]], dtype=int32)
+
+    :func:`~jax.numpy.unstack` performs the inverse operation:
+
+    >>> arr = jnp.stack([x, y], axis=1)
+    >>> x, y = jnp.unstack(arr, axis=1)
+    >>> x
+    Array([1, 2, 3], dtype=int32)
+    >>> y
+    Array([4, 5, 6], dtype=int32)
+  """
   if not len(arrays):
     raise ValueError("Need at least one array to stack.")
   if out is not None:
@@ -3082,9 +3971,38 @@ def stack(arrays: np.ndarray | Array | Sequence[ArrayLike],
       new_arrays.append(expand_dims(a, axis))
     return concatenate(new_arrays, axis=axis, dtype=dtype)
 
-@util.implements(getattr(np, 'unstack', None))
+
 @partial(jit, static_argnames="axis")
 def unstack(x: ArrayLike, /, *, axis: int = 0) -> tuple[Array, ...]:
+  """Unstack an array along an axis.
+
+  JAX implementation of :func:`array_api.unstack`.
+
+  Args:
+    x: array to unstack. Must have ``x.ndim >= 1``.
+    axis: integer axis along which to unstack. Must satisfy
+      ``-x.ndim <= axis < x.ndim``.
+
+  Returns:
+    tuple of unstacked arrays.
+
+  See also:
+    - :func:`jax.numpy.stack`: inverse of ``unstack``
+    - :func:`jax.numpy.split`: split array into batches along an axis.
+
+  Examples:
+    >>> arr = jnp.array([[1, 2, 3],
+    ...                  [4, 5, 6]])
+    >>> arrs = jnp.unstack(arr)
+    >>> print(*arrs)
+    [1 2 3] [4 5 6]
+
+    :func:`~jax.numpy.stack` provides the inverse of this:
+
+    >>> jnp.stack(arrs)
+    Array([[1, 2, 3],
+           [4, 5, 6]], dtype=int32)
+  """
   util.check_arraylike("unstack", x)
   x = asarray(x)
   if x.ndim == 0:
@@ -3126,9 +4044,46 @@ def _concatenate_array(arr: ArrayLike, axis: int | None,
   dimensions = [*range(1, axis + 1), 0, *range(axis + 1, arr.ndim)]
   return lax.reshape(arr, shape, dimensions)
 
-@util.implements(np.concatenate)
+
 def concatenate(arrays: np.ndarray | Array | Sequence[ArrayLike],
                 axis: int | None = 0, dtype: DTypeLike | None = None) -> Array:
+  """Join arrays along an existing axis.
+
+  JAX implementation of :func:`numpy.concatenate`.
+
+  Args:
+    arrays: a sequence of arrays to concatenate; each must have the same shape
+      except along the specified axis. If a single array is given it will be
+      treated equivalently to `arrays = unstack(arrays)`, but the implementation
+      will avoid explicit unstacking.
+    axis: specify the axis along which to concatenate.
+    dtype: optional dtype of the resulting array. If not specified, the dtype
+      will be determined via type promotion rules described in :ref:`type-promotion`.
+
+  Returns:
+    the concatenated result.
+
+  See also:
+    - :func:`jax.lax.concatenate`: XLA concatenation API.
+    - :func:`jax.numpy.concat`: Array API version of this function.
+    - :func:`jax.numpy.stack`: concatenate arrays along a new axis.
+
+  Examples:
+    One-dimensional concatenation:
+
+    >>> x = jnp.arange(3)
+    >>> y = jnp.zeros(3, dtype=int)
+    >>> jnp.concatenate([x, y])
+    Array([0, 1, 2, 0, 0, 0], dtype=int32)
+
+    Two-dimensional concatenation:
+
+    >>> x = jnp.ones((2, 3))
+    >>> y = jnp.zeros((2, 1))
+    >>> jnp.concatenate([x, y], axis=1)
+    Array([[1., 1., 1., 0.],
+           [1., 1., 1., 0.]], dtype=float32)
+  """
   if isinstance(arrays, (np.ndarray, Array)):
     return _concatenate_array(arrays, axis, dtype=dtype)
   util.check_arraylike("concatenate", *arrays)
@@ -3145,7 +4100,7 @@ def concatenate(arrays: np.ndarray | Array | Sequence[ArrayLike],
     arrays_out = [asarray(arr, dtype=dtype) for arr in arrays]
   # lax.concatenate can be slow to compile for wide concatenations, so form a
   # tree of concatenations as a workaround especially for op-by-op mode.
-  # (https://github.com/google/jax/issues/653).
+  # (https://github.com/jax-ml/jax/issues/653).
   k = 16
   while len(arrays_out) > 1:
     arrays_out = [lax.concatenate(arrays_out[i:i+k], axis)
@@ -3153,15 +4108,96 @@ def concatenate(arrays: np.ndarray | Array | Sequence[ArrayLike],
   return arrays_out[0]
 
 
-@util.implements(getattr(np, "concat", None))
 def concat(arrays: Sequence[ArrayLike], /, *, axis: int | None = 0) -> Array:
+  """Join arrays along an existing axis.
+
+  JAX implementation of :func:`array_api.concat`.
+
+  Args:
+    arrays: a sequence of arrays to concatenate; each must have the same shape
+      except along the specified axis. If a single array is given it will be
+      treated equivalently to `arrays = unstack(arrays)`, but the implementation
+      will avoid explicit unstacking.
+    axis: specify the axis along which to concatenate.
+
+  Returns:
+    the concatenated result.
+
+  See also:
+    - :func:`jax.lax.concatenate`: XLA concatenation API.
+    - :func:`jax.numpy.concatenate`: NumPy version of this function.
+    - :func:`jax.numpy.stack`: concatenate arrays along a new axis.
+
+  Examples:
+    One-dimensional concatenation:
+
+    >>> x = jnp.arange(3)
+    >>> y = jnp.zeros(3, dtype=int)
+    >>> jnp.concat([x, y])
+    Array([0, 1, 2, 0, 0, 0], dtype=int32)
+
+    Two-dimensional concatenation:
+
+    >>> x = jnp.ones((2, 3))
+    >>> y = jnp.zeros((2, 1))
+    >>> jnp.concat([x, y], axis=1)
+    Array([[1., 1., 1., 0.],
+           [1., 1., 1., 0.]], dtype=float32)
+  """
   util.check_arraylike("concat", *arrays)
   return jax.numpy.concatenate(arrays, axis=axis)
 
 
-@util.implements(np.vstack)
 def vstack(tup: np.ndarray | Array | Sequence[ArrayLike],
            dtype: DTypeLike | None = None) -> Array:
+  """Vertically stack arrays.
+
+  JAX implementation of :func:`numpy.vstack`.
+
+  For arrays of two or more dimensions, this is equivalent to
+  :func:`jax.numpy.concatenate` with ``axis=0``.
+
+  Args:
+    tup: a sequence of arrays to stack; each must have the same shape along all
+      but the first axis. If a single array is given it will be treated
+      equivalently to `tup = unstack(tup)`, but the implementation will avoid
+      explicit unstacking.
+    dtype: optional dtype of the resulting array. If not specified, the dtype
+      will be determined via type promotion rules described in :ref:`type-promotion`.
+
+  Returns:
+    the stacked result.
+
+  See also:
+    - :func:`jax.numpy.stack`: stack along arbitrary axes
+    - :func:`jax.numpy.concatenate`: concatenation along existing axes.
+    - :func:`jax.numpy.hstack`: stack horizontally, i.e. along axis 1.
+    - :func:`jax.numpy.dstack`: stack depth-wise, i.e. along axis 2.
+
+  Examples:
+    Scalar values:
+
+    >>> jnp.vstack([1, 2, 3])
+    Array([[1],
+           [2],
+           [3]], dtype=int32, weak_type=True)
+
+    1D arrays:
+
+    >>> x = jnp.arange(4)
+    >>> y = jnp.ones(4)
+    >>> jnp.vstack([x, y])
+    Array([[0., 1., 2., 3.],
+           [1., 1., 1., 1.]], dtype=float32)
+
+    2D arrays:
+
+    >>> x = x.reshape(1, 4)
+    >>> y = y.reshape(1, 4)
+    >>> jnp.vstack([x, y])
+    Array([[0., 1., 2., 3.],
+           [1., 1., 1., 1.]], dtype=float32)
+  """
   arrs: Array | list[Array]
   if isinstance(tup, (np.ndarray, Array)):
     arrs = jax.vmap(atleast_2d)(tup)
@@ -3172,9 +4208,54 @@ def vstack(tup: np.ndarray | Array | Sequence[ArrayLike],
   return concatenate(arrs, axis=0, dtype=dtype)
 
 
-@util.implements(np.hstack)
 def hstack(tup: np.ndarray | Array | Sequence[ArrayLike],
            dtype: DTypeLike | None = None) -> Array:
+  """Horizontally stack arrays.
+
+  JAX implementation of :func:`numpy.hstack`.
+
+  For arrays of one or more dimensions, this is equivalent to
+  :func:`jax.numpy.concatenate` with ``axis=1``.
+
+  Args:
+    tup: a sequence of arrays to stack; each must have the same shape along all
+      but the second axis. Input arrays will be promoted to at least rank 1.
+      If a single array is given it will be treated equivalently to
+      `tup = unstack(tup)`, but the implementation will avoid explicit unstacking.
+    dtype: optional dtype of the resulting array. If not specified, the dtype
+      will be determined via type promotion rules described in :ref:`type-promotion`.
+
+  Returns:
+    the stacked result.
+
+  See also:
+    - :func:`jax.numpy.stack`: stack along arbitrary axes
+    - :func:`jax.numpy.concatenate`: concatenation along existing axes.
+    - :func:`jax.numpy.vstack`: stack vertically, i.e. along axis 0.
+    - :func:`jax.numpy.dstack`: stack depth-wise, i.e. along axis 2.
+
+  Examples:
+    Scalar values:
+
+    >>> jnp.hstack([1, 2, 3])
+    Array([1, 2, 3], dtype=int32, weak_type=True)
+
+    1D arrays:
+
+    >>> x = jnp.arange(3)
+    >>> y = jnp.ones(3)
+    >>> jnp.hstack([x, y])
+    Array([0., 1., 2., 1., 1., 1.], dtype=float32)
+
+    2D arrays:
+
+    >>> x = x.reshape(3, 1)
+    >>> y = y.reshape(3, 1)
+    >>> jnp.hstack([x, y])
+    Array([[0., 1.],
+           [1., 1.],
+           [2., 1.]], dtype=float32)
+  """
   arrs: Array | list[Array]
   if isinstance(tup, (np.ndarray, Array)):
     arrs = jax.vmap(atleast_1d)(tup)
@@ -3187,9 +4268,56 @@ def hstack(tup: np.ndarray | Array | Sequence[ArrayLike],
   return concatenate(arrs, axis=0 if arr0_ndim == 1 else 1, dtype=dtype)
 
 
-@util.implements(np.dstack)
 def dstack(tup: np.ndarray | Array | Sequence[ArrayLike],
            dtype: DTypeLike | None = None) -> Array:
+  """Stack arrays depth-wise.
+
+  JAX implementation of :func:`numpy.dstack`.
+
+  For arrays of three or more dimensions, this is equivalent to
+  :func:`jax.numpy.concatenate` with ``axis=2``.
+
+  Args:
+    tup: a sequence of arrays to stack; each must have the same shape along all
+      but the third axis. Input arrays will be promoted to at least rank 3. If a
+      single array is given it will be treated equivalently to `tup = unstack(tup)`,
+      but the implementation will avoid explicit unstacking.
+    dtype: optional dtype of the resulting array. If not specified, the dtype
+      will be determined via type promotion rules described in :ref:`type-promotion`.
+
+  Returns:
+    the stacked result.
+
+  See also:
+    - :func:`jax.numpy.stack`: stack along arbitrary axes
+    - :func:`jax.numpy.concatenate`: concatenation along existing axes.
+    - :func:`jax.numpy.vstack`: stack vertically, i.e. along axis 0.
+    - :func:`jax.numpy.hstack`: stack horizontally, i.e. along axis 1.
+
+  Examples:
+    Scalar values:
+
+    >>> jnp.dstack([1, 2, 3])
+    Array([[[1, 2, 3]]], dtype=int32, weak_type=True)
+
+    1D arrays:
+
+    >>> x = jnp.arange(3)
+    >>> y = jnp.ones(3)
+    >>> jnp.dstack([x, y])
+    Array([[[0., 1.],
+            [1., 1.],
+            [2., 1.]]], dtype=float32)
+
+    2D arrays:
+
+    >>> x = x.reshape(1, 3)
+    >>> y = y.reshape(1, 3)
+    >>> jnp.dstack([x, y])
+    Array([[[0., 1.],
+            [1., 1.],
+            [2., 1.]]], dtype=float32)
+  """
   arrs: Array | list[Array]
   if isinstance(tup, (np.ndarray, Array)):
     arrs = jax.vmap(atleast_3d)(tup)
@@ -3200,8 +4328,56 @@ def dstack(tup: np.ndarray | Array | Sequence[ArrayLike],
   return concatenate(arrs, axis=2, dtype=dtype)
 
 
-@util.implements(np.column_stack)
 def column_stack(tup: np.ndarray | Array | Sequence[ArrayLike]) -> Array:
+  """Stack arrays column-wise.
+
+  JAX implementation of :func:`numpy.column_stack`.
+
+  For arrays of two or more dimensions, this is equivalent to
+  :func:`jax.numpy.concatenate` with ``axis=1``.
+
+  Args:
+    tup: a sequence of arrays to stack; each must have the same leading dimension.
+      Input arrays will be promoted to at least rank 2. If a single array is given
+      it will be treated equivalently to `tup = unstack(tup)`, but the implementation
+      will avoid explicit unstacking.
+    dtype: optional dtype of the resulting array. If not specified, the dtype
+      will be determined via type promotion rules described in :ref:`type-promotion`.
+
+  Returns:
+    the stacked result.
+
+  See also:
+    - :func:`jax.numpy.stack`: stack along arbitrary axes
+    - :func:`jax.numpy.concatenate`: concatenation along existing axes.
+    - :func:`jax.numpy.vstack`: stack vertically, i.e. along axis 0.
+    - :func:`jax.numpy.hstack`: stack horizontally, i.e. along axis 1.
+    - :func:`jax.numpy.hstack`: stack depth=wise, i.e. along axis 2.
+
+  Examples:
+    Scalar values:
+
+    >>> jnp.column_stack([1, 2, 3])
+    Array([[1, 2, 3]], dtype=int32, weak_type=True)
+
+    1D arrays:
+
+    >>> x = jnp.arange(3)
+    >>> y = jnp.ones(3)
+    >>> jnp.column_stack([x, y])
+    Array([[0., 1.],
+           [1., 1.],
+           [2., 1.]], dtype=float32)
+
+    2D arrays:
+
+    >>> x = x.reshape(3, 1)
+    >>> y = y.reshape(3, 1)
+    >>> jnp.column_stack([x, y])
+    Array([[0., 1.],
+           [1., 1.],
+           [2., 1.]], dtype=float32)
+  """
   arrs: Array | list[Array] | np.ndarray
   if isinstance(tup, (np.ndarray, Array)):
     arrs = jax.vmap(lambda x: atleast_2d(x).T)(tup) if tup.ndim < 3 else tup
@@ -3209,7 +4385,7 @@ def column_stack(tup: np.ndarray | Array | Sequence[ArrayLike]) -> Array:
     # TODO(jakevdp): Non-array input deprecated 2023-09-22; change to error.
     util.check_arraylike("column_stack", *tup, emit_warning=True)
     arrs = [atleast_2d(arr).T if arr.ndim < 2 else arr for arr in map(asarray, tup)]
-  return concatenate(arrs, 1)
+  return concatenate(arrs, axis=1)
 
 
 @util.implements(np.choose, skip_params=['out'])
@@ -3275,10 +4451,44 @@ def atleast_1d(x: ArrayLike, /) -> Array:
 @overload
 def atleast_1d(x: ArrayLike, y: ArrayLike, /, *arys: ArrayLike) -> list[Array]:
   ...
-@util.implements(np.atleast_1d, update_doc=False, lax_description=_ARRAY_VIEW_DOC)
 @jit
 def atleast_1d(*arys: ArrayLike) -> Array | list[Array]:
-  # TODO(jakevdp): Non-array input deprecated 2023-09-22; change to error.
+  """Convert inputs to arrays with at least 1 dimension.
+
+  JAX implementation of :func:`numpy.atleast_1d`.
+
+  Args:
+    zero or more arraylike arguments.
+
+  Returns:
+    an array or list of arrays corresponding to the input values. Arrays
+    of shape ``()`` are converted to shape ``(1,)``, and arrays with other
+    shapes are returned unchanged.
+
+  See also:
+    - :func:`jax.numpy.asarray`
+    - :func:`jax.numpy.atleast_2d`
+    - :func:`jax.numpy.atleast_3d`
+
+  Examples:
+    Scalar arguments are converted to 1D, length-1 arrays:
+
+    >>> x = jnp.float32(1.0)
+    >>> jnp.atleast_1d(x)
+    Array([1.], dtype=float32)
+
+    Higher dimensional inputs are returned unchanged:
+
+    >>> y = jnp.arange(4)
+    >>> jnp.atleast_1d(y)
+    Array([0, 1, 2, 3], dtype=int32)
+
+    Multiple arguments can be passed to the function at once, in which
+    case a list of results is returned:
+
+    >>> jnp.atleast_1d(x, y)
+    [Array([1.], dtype=float32), Array([0, 1, 2, 3], dtype=int32)]
+  """
   util.check_arraylike("atleast_1d", *arys, emit_warning=True)
   if len(arys) == 1:
     return array(arys[0], copy=False, ndmin=1)
@@ -3295,9 +4505,52 @@ def atleast_2d(x: ArrayLike, /) -> Array:
 @overload
 def atleast_2d(x: ArrayLike, y: ArrayLike, /, *arys: ArrayLike) -> list[Array]:
   ...
-@util.implements(np.atleast_2d, update_doc=False, lax_description=_ARRAY_VIEW_DOC)
 @jit
 def atleast_2d(*arys: ArrayLike) -> Array | list[Array]:
+  """Convert inputs to arrays with at least 2 dimensions.
+
+  JAX implementation of :func:`numpy.atleast_2d`.
+
+  Args:
+    zero or more arraylike arguments.
+
+  Returns:
+    an array or list of arrays corresponding to the input values. Arrays
+    of shape ``()`` are converted to shape ``(1, 1)``, 1D arrays of shape
+    ``(N,)`` are converted to shape ``(1, N)``, and arrays of all other
+    shapes are returned unchanged.
+
+  See also:
+    - :func:`jax.numpy.asarray`
+    - :func:`jax.numpy.atleast_1d`
+    - :func:`jax.numpy.atleast_3d`
+
+  Examples:
+    Scalar arguments are converted to 2D, size-1 arrays:
+
+    >>> x = jnp.float32(1.0)
+    >>> jnp.atleast_2d(x)
+    Array([[1.]], dtype=float32)
+
+    One-dimensional arguments have a unit dimension prepended to the shape:
+
+    >>> y = jnp.arange(4)
+    >>> jnp.atleast_2d(y)
+    Array([[0, 1, 2, 3]], dtype=int32)
+
+    Higher dimensional inputs are returned unchanged:
+
+    >>> z = jnp.ones((2, 3))
+    >>> jnp.atleast_2d(z)
+    Array([[1., 1., 1.],
+           [1., 1., 1.]], dtype=float32)
+
+    Multiple arguments can be passed to the function at once, in which
+    case a list of results is returned:
+
+    >>> jnp.atleast_2d(x, y)
+    [Array([[1.]], dtype=float32), Array([[0, 1, 2, 3]], dtype=int32)]
+  """
   # TODO(jakevdp): Non-array input deprecated 2023-09-22; change to error.
   util.check_arraylike("atleast_2d", *arys, emit_warning=True)
   if len(arys) == 1:
@@ -3315,9 +4568,58 @@ def atleast_3d(x: ArrayLike, /) -> Array:
 @overload
 def atleast_3d(x: ArrayLike, y: ArrayLike, /, *arys: ArrayLike) -> list[Array]:
   ...
-@util.implements(np.atleast_3d, update_doc=False, lax_description=_ARRAY_VIEW_DOC)
 @jit
 def atleast_3d(*arys: ArrayLike) -> Array | list[Array]:
+  """Convert inputs to arrays with at least 3 dimensions.
+
+  JAX implementation of :func:`numpy.atleast_3d`.
+
+  Args:
+    zero or more arraylike arguments.
+
+  Returns:
+    an array or list of arrays corresponding to the input values. Arrays
+    of shape ``()`` are converted to shape ``(1, 1, 1)``, 1D arrays of
+    shape ``(N,)`` are converted to shape ``(1, N, 1)``, 2D arrays of
+    shape ``(M, N)`` are converted to shape ``(M, N, 1)``, and arrays
+    of all other shapes are returned unchanged.
+
+  See also:
+    - :func:`jax.numpy.asarray`
+    - :func:`jax.numpy.atleast_1d`
+    - :func:`jax.numpy.atleast_2d`
+
+  Examples:
+    Scalar arguments are converted to 3D, size-1 arrays:
+
+    >>> x = jnp.float32(1.0)
+    >>> jnp.atleast_3d(x)
+    Array([[[1.]]], dtype=float32)
+
+    1D arrays have a unit dimension prepended and appended:
+
+    >>> y = jnp.arange(4)
+    >>> jnp.atleast_3d(y).shape
+    (1, 4, 1)
+
+    2D arrays have a unit dimension appended:
+
+    >>> z = jnp.ones((2, 3))
+    >>> jnp.atleast_3d(z).shape
+    (2, 3, 1)
+
+    Multiple arguments can be passed to the function at once, in which
+    case a list of results is returned:
+
+    >>> x3, y3 = jnp.atleast_3d(x, y)
+    >>> print(x3)
+    [[[1.]]]
+    >>> print(y3)
+    [[[0]
+      [1]
+      [2]
+      [3]]]
+  """
   # TODO(jakevdp): Non-array input deprecated 2023-09-22; change to error.
   util.check_arraylike("atleast_3d", *arys, emit_warning=True)
   if len(arys) == 1:
@@ -3342,22 +4644,73 @@ def _supports_buffer_protocol(obj):
     return True
 
 
-_ARRAY_DOC = """
-This function will create arrays on JAX's default device. For control of the
-device placement of data, see :func:`jax.device_put`. More information is
-available in the JAX FAQ at :ref:`faq-data-placement` (full FAQ at
-https://jax.readthedocs.io/en/latest/faq.html).
-"""
-
-deprecations.register("jax-numpy-array-none")
-
-@util.implements(np.array, lax_description=_ARRAY_DOC, extra_params="""
-device: (optional) :class:`~jax.Device` or :class:`~jax.sharding.Sharding`
-  to which the created array will be committed.
-""")
 def array(object: Any, dtype: DTypeLike | None = None, copy: bool = True,
           order: str | None = "K", ndmin: int = 0,
           *, device: xc.Device | Sharding | None = None) -> Array:
+  """Convert an object to a JAX array.
+
+  JAX implementation of :func:`numpy.array`.
+
+  Args:
+    object: an object that is convertible to an array. This includes JAX
+      arrays, NumPy arrays, Python scalars, Python collections like lists
+      and tuples, objects with an ``__array__`` method, and objects
+      supporting the Python buffer protocol.
+    dtype: optionally specify the dtype of the output array. If not
+      specified it will be inferred from the input.
+    copy: specify whether to force a copy of the input. Default: True.
+    order: not implemented in JAX
+    ndmin: integer specifying the minimum number of dimensions in the
+      output array.
+    device: optional :class:`~jax.Device` or :class:`~jax.sharding.Sharding`
+      to which the created array will be committed.
+
+  Returns:
+    A JAX array constructed from the input.
+
+  See also:
+    - :func:`jax.numpy.asarray`: like `array`, but by default only copies
+      when necessary.
+    - :func:`jax.numpy.from_dlpack`: construct a JAX array from an object
+      that implements the dlpack interface.
+    - :func:`jax.numpy.frombuffer`: construct a JAX array from an object
+      that implements the buffer interface.
+
+  Examples:
+    Constructing JAX arrays from Python scalars:
+
+    >>> jnp.array(True)
+    Array(True, dtype=bool)
+    >>> jnp.array(42)
+    Array(42, dtype=int32, weak_type=True)
+    >>> jnp.array(3.5)
+    Array(3.5, dtype=float32, weak_type=True)
+    >>> jnp.array(1 + 1j)
+    Array(1.+1.j, dtype=complex64, weak_type=True)
+
+    Constructing JAX arrays from Python collections:
+
+    >>> jnp.array([1, 2, 3])  # list of ints -> 1D array
+    Array([1, 2, 3], dtype=int32)
+    >>> jnp.array([(1, 2, 3), (4, 5, 6)])  # list of tuples of ints -> 2D array
+    Array([[1, 2, 3],
+           [4, 5, 6]], dtype=int32)
+    >>> jnp.array(range(5))
+    Array([0, 1, 2, 3, 4], dtype=int32)
+
+    Constructing JAX arrays from NumPy arrays:
+
+    >>> jnp.array(np.linspace(0, 2, 5))
+    Array([0. , 0.5, 1. , 1.5, 2. ], dtype=float32)
+
+    Constructing a JAX array via the Python buffer interface, using Python's
+    built-in :mod:`array` module.
+
+    >>> from array import array
+    >>> pybuffer = array('i', [2, 3, 5, 7])
+    >>> jnp.array(pybuffer)
+    Array([2, 3, 5, 7], dtype=int32)
+  """
   if order is not None and order != "K":
     raise NotImplementedError("Only implemented for order='K'")
 
@@ -3439,7 +4792,7 @@ def array(object: Any, dtype: DTypeLike | None = None, copy: bool = True,
   if all(not isinstance(leaf, Array) for leaf in leaves):
     # TODO(jakevdp): falling back to numpy here fails to overflow for lists
     # containing large integers; see discussion in
-    # https://github.com/google/jax/pull/6047. More correct would be to call
+    # https://github.com/jax-ml/jax/pull/6047. More correct would be to call
     # coerce_to_array on each leaf, but this may have performance implications.
     out = np.asarray(object, dtype=dtype)
   elif isinstance(object, Array):
@@ -3478,8 +4831,6 @@ def _convert_to_array_if_dtype_fails(x: ArrayLike) -> ArrayLike:
   else:
     return x
 
-
-deprecations.register("jax-numpy-astype-complex-to-real")
 
 def astype(x: ArrayLike, dtype: DTypeLike | None,
            /, *, copy: bool = False,
@@ -3546,13 +4897,72 @@ def astype(x: ArrayLike, dtype: DTypeLike | None,
   return _array_copy(result) if copy else result
 
 
-@util.implements(np.asarray, lax_description=_ARRAY_DOC, extra_params="""
-device: (optional) :class:`~jax.Device` or :class:`~jax.sharding.Sharding`
-  to which the created array will be committed.
-""")
 def asarray(a: Any, dtype: DTypeLike | None = None, order: str | None = None,
             *, copy: bool | None = None,
             device: xc.Device | Sharding | None = None) -> Array:
+  """Convert an object to a JAX array.
+
+  JAX implementation of :func:`numpy.asarray`.
+
+  Args:
+    a: an object that is convertible to an array. This includes JAX
+      arrays, NumPy arrays, Python scalars, Python collections like lists
+      and tuples, objects with an ``__array__`` method, and objects
+      supporting the Python buffer protocol.
+    dtype: optionally specify the dtype of the output array. If not
+      specified it will be inferred from the input.
+    order: not implemented in JAX
+    copy: optional boolean specifying the copy mode. If True, then always
+      return a copy. If False, then error if a copy is necessary. Default is
+      None, which will only copy when necessary.
+    device: optional :class:`~jax.Device` or :class:`~jax.sharding.Sharding`
+      to which the created array will be committed.
+
+  Returns:
+    A JAX array constructed from the input.
+
+  See also:
+    - :func:`jax.numpy.array`: like `asarray`, but defaults to `copy=True`.
+    - :func:`jax.numpy.from_dlpack`: construct a JAX array from an object
+      that implements the dlpack interface.
+    - :func:`jax.numpy.frombuffer`: construct a JAX array from an object
+      that implements the buffer interface.
+
+  Examples:
+    Constructing JAX arrays from Python scalars:
+
+    >>> jnp.asarray(True)
+    Array(True, dtype=bool)
+    >>> jnp.asarray(42)
+    Array(42, dtype=int32, weak_type=True)
+    >>> jnp.asarray(3.5)
+    Array(3.5, dtype=float32, weak_type=True)
+    >>> jnp.asarray(1 + 1j)
+    Array(1.+1.j, dtype=complex64, weak_type=True)
+
+    Constructing JAX arrays from Python collections:
+
+    >>> jnp.asarray([1, 2, 3])  # list of ints -> 1D array
+    Array([1, 2, 3], dtype=int32)
+    >>> jnp.asarray([(1, 2, 3), (4, 5, 6)])  # list of tuples of ints -> 2D array
+    Array([[1, 2, 3],
+           [4, 5, 6]], dtype=int32)
+    >>> jnp.asarray(range(5))
+    Array([0, 1, 2, 3, 4], dtype=int32)
+
+    Constructing JAX arrays from NumPy arrays:
+
+    >>> jnp.asarray(np.linspace(0, 2, 5))
+    Array([0. , 0.5, 1. , 1.5, 2. ], dtype=float32)
+
+    Constructing a JAX array via the Python buffer interface, using Python's
+    built-in :mod:`array` module.
+
+    >>> from array import array
+    >>> pybuffer = array('i', [2, 3, 5, 7])
+    >>> jnp.asarray(pybuffer)
+    Array([2, 3, 5, 7], dtype=int32)
+  """
   # For copy=False, the array API specifies that we raise a ValueError if the input supports
   # the buffer protocol but a copy is required. Since array() supports the buffer protocol
   # via numpy, this is only the case when the default device is not 'cpu'
@@ -3568,8 +4978,50 @@ def asarray(a: Any, dtype: DTypeLike | None = None, order: str | None = None,
   return array(a, dtype=dtype, copy=bool(copy), order=order, device=device)
 
 
-@util.implements(np.copy, lax_description=_ARRAY_DOC)
 def copy(a: ArrayLike, order: str | None = None) -> Array:
+  """Return a copy of the array.
+
+  JAX implementation of :func:`numpy.copy`.
+
+  Args:
+    a: arraylike object to copy
+    order: not implemented in JAX
+
+  Returns:
+    a copy of the input array ``a``.
+
+  See Also:
+    - :func:`jax.numpy.array`: create an array with or without a copy.
+    - :meth:`jax.Array.copy`: same function accessed as an array method.
+
+  Examples:
+    Since JAX arrays are immutable, in most cases explicit array copies
+    are not necessary. One exception is when using a function with donated
+    arguments (see the ``donate_argnums`` argument to :func:`jax.jit`).
+
+    >>> f = jax.jit(lambda x: 2 * x, donate_argnums=0)
+    >>> x = jnp.arange(4)
+    >>> y = f(x)
+    >>> print(y)
+    [0 2 4 6]
+
+    Because we marked ``x`` as being donated, the original array is no longer
+    available:
+
+    >>> print(x)  # doctest: +IGNORE_EXCEPTION_DETAIL
+    Traceback (most recent call last):
+    RuntimeError: Array has been deleted with shape=int32[4].
+
+    In situations like this, an explicit copy will let you keep access to the
+    original buffer:
+
+    >>> x = jnp.arange(4)
+    >>> y = f(x.copy())
+    >>> print(y)
+    [0 2 4 6]
+    >>> print(x)
+    [0 1 2 3]
+  """
   util.check_arraylike("copy", a)
   return array(a, copy=True, order=order)
 
@@ -4007,9 +5459,50 @@ def array_equiv(a1: ArrayLike, a2: ArrayLike) -> Array:
 
 # General np.from* style functions mostly delegate to numpy.
 
-@util.implements(np.frombuffer)
 def frombuffer(buffer: bytes | Any, dtype: DTypeLike = float,
                count: int = -1, offset: int = 0) -> Array:
+  r"""Convert a buffer into a 1-D JAX array.
+
+  JAX implementation of :func:`numpy.frombuffer`.
+
+  Args:
+    buffer: an object containing the data. It must be either a bytes object with
+      a length that is an integer multiple of the dtype element size, or
+      it must be an object exporting the `Python buffer interface`_.
+    dtype: optional. Desired data type for the array. Default is ``float64``.
+      This specifes the dtype used to parse the buffer, but note that after parsing,
+      64-bit values will be cast to 32-bit JAX arrays if the ``jax_enable_x64``
+      flag is set to ``False``.
+    count: optional integer specifying the number of items to read from the buffer.
+      If -1 (default), all items from the buffer are read.
+    offset: optional integer specifying the number of bytes to skip at the beginning
+      of the buffer. Default is 0.
+
+  Returns:
+    A 1-D JAX array representing the interpreted data from the buffer.
+
+  See also:
+    - :func:`jax.numpy.fromstring`: convert a string of text into 1-D JAX array.
+
+  Examples:
+    Using a bytes buffer:
+
+    >>> buf = b"\x00\x01\x02\x03\x04"
+    >>> jnp.frombuffer(buf, dtype=jnp.uint8)
+    Array([0, 1, 2, 3, 4], dtype=uint8)
+    >>> jnp.frombuffer(buf, dtype=jnp.uint8, offset=1)
+    Array([1, 2, 3, 4], dtype=uint8)
+
+    Constructing a JAX array via the Python buffer interface, using Python's
+    built-in :mod:`array` module.
+
+    >>> from array import array
+    >>> pybuffer = array('i', [0, 1, 2, 3, 4])
+    >>> jnp.frombuffer(pybuffer, dtype=jnp.int32)
+    Array([0, 1, 2, 3, 4], dtype=int32)
+
+  .. _Python buffer interface: https://docs.python.org/3/c-api/buffer.html
+  """
   return asarray(np.frombuffer(buffer=buffer, dtype=dtype, count=count, offset=offset))
 
 
@@ -4118,8 +5611,31 @@ def fromfunction(function: Callable[..., Array], shape: Any,
   return function(*(arange(s, dtype=dtype) for s in shape), **kwargs)
 
 
-@util.implements(np.fromstring)
 def fromstring(string: str, dtype: DTypeLike = float, count: int = -1, *, sep: str) -> Array:
+  """Convert a string of text into 1-D JAX array.
+
+  JAX implementation of :func:`numpy.fromstring`.
+
+  Args:
+    string: input string containing the data.
+    dtype: optional. Desired data type for the array. Default is ``float``.
+    count: optional integer specifying the number of items to read from the string.
+      If -1 (default), all items are read.
+    sep: the string used to separate values in the input string.
+
+  Returns:
+    A 1-D JAX array containing the parsed data from the input string.
+
+  See also:
+    - :func:`jax.numpy.frombuffer`: construct a JAX array from an object
+      that implements the buffer interface.
+
+  Examples:
+    >>> jnp.fromstring("1 2 3", dtype=int, sep=" ")
+    Array([1, 2, 3], dtype=int32)
+    >>> jnp.fromstring("0.1, 0.2, 0.3", dtype=float, count=2, sep=",")
+    Array([0.1, 0.2], dtype=float32)
+  """
   return asarray(np.fromstring(string=string, dtype=dtype, count=count, sep=sep))
 
 
@@ -4402,15 +5918,69 @@ def linspace(start: ArrayLike, stop: ArrayLike, num: int = 50,
              dtype: DTypeLike | None = None,
              axis: int = 0,
              *, device: xc.Device | Sharding | None = None) -> Array | tuple[Array, Array]: ...
-@util.implements(np.linspace, extra_params="""
-device: (optional) :class:`~jax.Device` or :class:`~jax.sharding.Sharding`
-  to which the created array will be committed.
-""")
 def linspace(start: ArrayLike, stop: ArrayLike, num: int = 50,
              endpoint: bool = True, retstep: bool = False,
              dtype: DTypeLike | None = None,
              axis: int = 0,
              *, device: xc.Device | Sharding | None = None) -> Array | tuple[Array, Array]:
+  """Return evenly-spaced numbers within an interval.
+
+  JAX implementation of :func:`numpy.linspace`.
+
+  Args:
+    start: scalar or array of starting values.
+    stop: scalar or array of stop values.
+    num: number of values to generate. Default: 50.
+    endpoint: if True (default) then include the ``stop`` value in the result.
+      If False, then exclude the ``stop`` value.
+    retstep: If True, then return a ``(result, step)`` tuple, where ``step`` is the
+      interval between adjacent values in ``result``.
+    axis: integer axis along which to generate the linspace. Defaults to zero.
+    device: optional :class:`~jax.Device` or :class:`~jax.sharding.Sharding`
+      to which the created array will be committed.
+
+  Returns:
+    An array ``values``, or a tuple ``(values, step)`` if ``retstep`` is True, where:
+
+    - ``values`` is an array of evenly-spaced values from ``start`` to ``stop``
+    - ``step`` is the interval between adjacent values.
+
+  See also:
+    - :func:`jax.numpy.arange`: Generate ``N`` evenly-spaced values given a starting
+      point and a step
+    - :func:`jax.numpy.logspace`: Generate logarithmically-spaced values.
+    - :func:`jax.numpy.geomspace`: Generate geometrically-spaced values.
+
+  Examples:
+    List of 5 values between 0 and 10:
+
+    >>> jnp.linspace(0, 10, 5)
+    Array([ 0. ,  2.5,  5. ,  7.5, 10. ], dtype=float32)
+
+    List of 8 values between 0 and 10, excluding the endpoint:
+
+    >>> jnp.linspace(0, 10, 8, endpoint=False)
+    Array([0.  , 1.25, 2.5 , 3.75, 5.  , 6.25, 7.5 , 8.75], dtype=float32)
+
+    List of values and the step size between them
+
+    >>> vals, step = jnp.linspace(0, 10, 9, retstep=True)
+    >>> vals
+    Array([ 0.  ,  1.25,  2.5 ,  3.75,  5.  ,  6.25,  7.5 ,  8.75, 10.  ],      dtype=float32)
+    >>> step
+    Array(1.25, dtype=float32)
+
+    Multi-dimensional linspace:
+
+    >>> start = jnp.array([0, 5])
+    >>> stop = jnp.array([5, 10])
+    >>> jnp.linspace(start, stop, 5)
+    Array([[ 0.  ,  5.  ],
+           [ 1.25,  6.25],
+           [ 2.5 ,  7.5 ],
+           [ 3.75,  8.75],
+           [ 5.  , 10.  ]], dtype=float32)
+  """
   num = core.concrete_dim_or_error(num, "'num' argument of jnp.linspace")
   axis = core.concrete_or_error(operator.index, axis, "'axis' argument of jnp.linspace")
   return _linspace(start, stop, num, endpoint, retstep, dtype, axis, device=device)
@@ -4473,10 +6043,69 @@ def _linspace(start: ArrayLike, stop: ArrayLike, num: int = 50,
   return (result, delta) if retstep else result
 
 
-@util.implements(np.logspace)
 def logspace(start: ArrayLike, stop: ArrayLike, num: int = 50,
              endpoint: bool = True, base: ArrayLike = 10.0,
              dtype: DTypeLike | None = None, axis: int = 0) -> Array:
+  """Generate logarithmically-spaced values.
+
+  JAX implementation of :func:`numpy.logspace`.
+
+  Args:
+    start: scalar or array. Used to specify the start value. The start value is
+      ``base ** start``.
+    stop: scalar or array. Used to specify the stop value. The end value is
+      ``base ** stop``.
+    num: int, optional, default=50. Number of values to generate.
+    endpoint: bool, optional, default=True. If True, then include the ``stop`` value
+      in the result. If False, then exclude the ``stop`` value.
+    base: scalar or array, optional, default=10. Specifies the base of the logarithm.
+    dtype: optional. Specifies the dtype of the output.
+    axis: int, optional, default=0. Axis along which to generate the logspace.
+
+  Returns:
+    An array of logarithm.
+
+  See also:
+    - :func:`jax.numpy.arange`: Generate ``N`` evenly-spaced values given a starting
+      point and a step value.
+    - :func:`jax.numpy.linspace`: Generate evenly-spaced values.
+    - :func:`jax.numpy.geomspace`: Generate geometrically-spaced values.
+
+  Examples:
+    List 5 logarithmically spaced values between 1 (``10 ** 0``) and 100
+    (``10 ** 2``):
+
+    >>> with jnp.printoptions(precision=3, suppress=True):
+    ...   jnp.logspace(0, 2, 5)
+    Array([  1.   ,   3.162,  10.   ,  31.623, 100.   ], dtype=float32)
+
+    List 5 logarithmically-spaced values between 1(``10 ** 0``) and 100
+    (``10 ** 2``), excluding endpoint:
+
+    >>> with jnp.printoptions(precision=3, suppress=True):
+    ...   jnp.logspace(0, 2, 5, endpoint=False)
+    Array([ 1.   ,  2.512,  6.31 , 15.849, 39.811], dtype=float32)
+
+    List 7 logarithmically-spaced values between 1 (``2 ** 0``) and 4 (``2 ** 2``)
+    with base 2:
+
+    >>> with jnp.printoptions(precision=3, suppress=True):
+    ...   jnp.logspace(0, 2, 7, base=2)
+    Array([1.   , 1.26 , 1.587, 2.   , 2.52 , 3.175, 4.   ], dtype=float32)
+
+    Multi-dimensional logspace:
+
+    >>> start = jnp.array([0, 5])
+    >>> stop = jnp.array([5, 0])
+    >>> base = jnp.array([2, 3])
+    >>> with jnp.printoptions(precision=3, suppress=True):
+    ...   jnp.logspace(start, stop, 5, base=base)
+    Array([[  1.   , 243.   ],
+           [  2.378,  61.547],
+           [  5.657,  15.588],
+           [ 13.454,   3.948],
+           [ 32.   ,   1.   ]], dtype=float32)
+  """
   num = core.concrete_or_error(operator.index, num, "'num' argument of jnp.logspace")
   axis = core.concrete_or_error(operator.index, axis, "'axis' argument of jnp.logspace")
   return _logspace(start, stop, num, endpoint, base, dtype, axis)
@@ -4499,9 +6128,54 @@ def _logspace(start: ArrayLike, stop: ArrayLike, num: int = 50,
   return lax.convert_element_type(ufuncs.power(base, lin), dtype)
 
 
-@util.implements(np.geomspace)
 def geomspace(start: ArrayLike, stop: ArrayLike, num: int = 50, endpoint: bool = True,
               dtype: DTypeLike | None = None, axis: int = 0) -> Array:
+  """Generate geometrically-spaced values.
+
+  JAX implementation of :func:`numpy.geomspace`.
+
+  Args:
+    start: scalar or array. Specifies the starting values.
+    stop: scalar or array. Specifies the stop values.
+    num: int, optional, default=50. Number of values to generate.
+    endpoint: bool, optional, default=True. If True, then include the ``stop`` value
+      in the result. If False, then exclude the ``stop`` value.
+    dtype: optional. Specifies the dtype of the output.
+    axis: int, optional, default=0. Axis along which to generate the geomspace.
+
+  Returns:
+    An array containing the geometrically-spaced values.
+
+  See also:
+    - :func:`jax.numpy.arange`: Generate ``N`` evenly-spaced values given a starting
+      point and a step value.
+    - :func:`jax.numpy.linspace`: Generate evenly-spaced values.
+    - :func:`jax.numpy.logspace`: Generate logarithmically-spaced values.
+
+  Examples:
+    List 5 geometrically-spaced values between 1 and 16:
+
+    >>> with jnp.printoptions(precision=3, suppress=True):
+    ...   jnp.geomspace(1, 16, 5)
+    Array([ 1.,  2.,  4.,  8., 16.], dtype=float32)
+
+    List 4 geomtrically-spaced values between 1 and 16, with ``endpoint=False``:
+
+    >>> with jnp.printoptions(precision=3, suppress=True):
+    ...   jnp.geomspace(1, 16, 4, endpoint=False)
+    Array([1., 2., 4., 8.], dtype=float32)
+
+    Multi-dimensional geomspace:
+
+    >>> start = jnp.array([1, 1000])
+    >>> stop = jnp.array([27, 1])
+    >>> with jnp.printoptions(precision=3, suppress=True):
+    ...   jnp.geomspace(start, stop, 4)
+    Array([[   1., 1000.],
+           [   3.,  100.],
+           [   9.,   10.],
+           [  27.,    1.]], dtype=float32)
+  """
   num = core.concrete_or_error(operator.index, num, "'num' argument of jnp.geomspace")
   axis = core.concrete_or_error(operator.index, axis, "'axis' argument of jnp.geomspace")
   return _geomspace(start, stop, num, endpoint, dtype, axis)
@@ -4528,9 +6202,67 @@ def _geomspace(start: ArrayLike, stop: ArrayLike, num: int = 50, endpoint: bool 
   return lax.convert_element_type(res, dtype)
 
 
-@util.implements(np.meshgrid, lax_description=_ARRAY_VIEW_DOC)
 def meshgrid(*xi: ArrayLike, copy: bool = True, sparse: bool = False,
              indexing: str = 'xy') -> list[Array]:
+  """Construct N-dimensional grid arrays from N 1-dimensional vectors.
+
+  JAX implementation of :func:`numpy.meshgrid`.
+
+  Args:
+    xi: N arrays to convert to a grid.
+    copy: whether to copy the input arrays. JAX supports only ``copy=True``,
+      though under JIT compilation the compiler may opt to avoid copies.
+    sparse: if False (default), then each returned arrays will be of shape
+      ``[len(x1), len(x2), ..., len(xN)]``. If False, then returned arrays
+      will be of shape ``[1, 1, ..., len(xi), ..., 1, 1]``.
+    indexing: options are ``'xy'`` for cartesian indexing (default) or ``'ij'``
+      for matrix indexing.
+
+  Returns:
+    A length-N list of grid arrays.
+
+  See also:
+    - :obj:`jax.numpy.mgrid`: create a meshgrid using indexing syntax.
+    - :obj:`jax.numpy.ogrid`: create an open meshgrid using indexing syntax.
+
+  Examples:
+    For the following examples, we'll use these 1D arrays as inputs:
+
+    >>> x = jnp.array([1, 2])
+    >>> y = jnp.array([10, 20, 30])
+
+    2D cartesian mesh grid:
+
+    >>> x_grid, y_grid = jnp.meshgrid(x, y)
+    >>> print(x_grid)
+    [[1 2]
+     [1 2]
+     [1 2]]
+    >>> print(y_grid)
+    [[10 10]
+     [20 20]
+     [30 30]]
+
+    2D sparse cartesian mesh grid:
+
+    >>> x_grid, y_grid = jnp.meshgrid(x, y, sparse=True)
+    >>> print(x_grid)
+    [[1 2]]
+    >>> print(y_grid)
+    [[10]
+     [20]
+     [30]]
+
+    2D matrix-index mesh grid:
+
+    >>> x_grid, y_grid = jnp.meshgrid(x, y, indexing='ij')
+    >>> print(x_grid)
+    [[1 1 1]
+     [2 2 2]]
+    >>> print(y_grid)
+    [[10 20 30]
+     [10 20 30]]
+  """
   util.check_arraylike("meshgrid", *xi)
   args = [asarray(x) for x in xi]
   if not copy:
@@ -4550,19 +6282,53 @@ def meshgrid(*xi: ArrayLike, copy: bool = True, sparse: bool = False,
   return output
 
 
-@custom_jvp
-@util.implements(np.i0)
 @jit
 def i0(x: ArrayLike) -> Array:
+  r"""Calculate modified Bessel function of first kind, zeroth order.
+
+  JAX implementation of :func:`numpy.i0`.
+
+  Modified Bessel function of first kind, zeroth order is defined by:
+
+  .. math::
+
+     \mathrm{i0}(x) = I_0(x) = \sum_{k=0}^{\infty} \frac{(x^2/4)^k}{(k!)^2}
+
+  Args:
+    x: scalar or array. Specifies the argument of Bessel function. Complex inputs
+      are not supported.
+
+  Returns:
+    An array containing the corresponding vlaues of the modified Bessel function
+    of ``x``.
+
+  See also:
+    - :func:`jax.scipy.special.i0`: Calculates the modified Bessel function of
+      zeroth order.
+    - :func:`jax.scipy.special.i1`: Calculates the modified Bessel function of
+      first order.
+    - :func:`jax.scipy.special.i0e`: Calculates the exponentially scaled modified
+      Bessel function of zeroth order.
+
+  Examples:
+    >>> x = jnp.array([-2, -1, 0, 1, 2])
+    >>> jnp.i0(x)
+    Array([2.2795851, 1.266066 , 1.0000001, 1.266066 , 2.2795851], dtype=float32)
+  """
   x_arr, = util.promote_args_inexact("i0", x)
   if not issubdtype(x_arr.dtype, np.floating):
     raise ValueError(f"Unsupported input type to jax.numpy.i0: {_dtype(x)}")
-  x_arr = lax.abs(x_arr)
-  return lax.mul(lax.exp(x_arr), lax.bessel_i0e(x_arr))
+  return _i0(x_arr)
 
-@i0.defjvp
+
+@custom_jvp
+def _i0(x):
+  abs_x = lax.abs(x)
+  return lax.mul(lax.exp(abs_x), lax.bessel_i0e(abs_x))
+
+@_i0.defjvp
 def _i0_jvp(primals, tangents):
-  primal_out, tangent_out = jax.jvp(i0.fun, primals, tangents)
+  primal_out, tangent_out = jax.jvp(_i0.fun, primals, tangents)
   return primal_out, where(primals[0] == 0, 0.0, tangent_out)
 
 def ix_(*args: ArrayLike) -> tuple[Array, ...]:
@@ -4996,13 +6762,60 @@ def triu(m: ArrayLike, k: int = 0) -> Array:
   return lax.select(lax.broadcast(mask, m_shape[:-2]), zeros_like(m), m)
 
 
-@util.implements(np.trace, skip_params=['out'])
 @partial(jit, static_argnames=('axis1', 'axis2', 'dtype'))
 def trace(a: ArrayLike, offset: int | ArrayLike = 0, axis1: int = 0, axis2: int = 1,
           dtype: DTypeLike | None = None, out: None = None) -> Array:
+  """Calculate sum of the diagonal of input along the given axes.
+
+  JAX implementation of :func:`numpy.trace`.
+
+  Args:
+    a: input array. Must have ``a.ndim >= 2``.
+    offset: optional, int, default=0. Diagonal offset from the main diagonal.
+      Can be positive or negative.
+    axis1: optional, default=0. The first axis along which to take the sum of
+      diagonal. Must be a static integer value.
+    axis2: optional, default=1. The second axis along which to take the sum of
+      diagonal. Must be a static integer value.
+    dtype: optional. The dtype of the output array. Should be provided as static
+      argument in JIT compilation.
+    out: Not used by JAX.
+
+  Returns:
+    An array of dimension x.ndim-2 containing the sum of the diagonal elements
+    along axes (axis1, axis2)
+
+  See also:
+    - :func:`jax.numpy.diag`: Returns the specified diagonal or constructs a diagonal
+      array
+    - :func:`jax.numpy.diagonal`: Returns the specified diagonal of an array.
+    - :func:`jax.numpy.diagflat`: Returns a 2-D array with the flattened input array
+      laid out on the diagonal.
+
+  Examples:
+    >>> x = jnp.arange(1, 9).reshape(2, 2, 2)
+    >>> x
+    Array([[[1, 2],
+            [3, 4]],
+    <BLANKLINE>
+           [[5, 6],
+            [7, 8]]], dtype=int32)
+    >>> jnp.trace(x)
+    Array([ 8, 10], dtype=int32)
+    >>> jnp.trace(x, offset=1)
+    Array([3, 4], dtype=int32)
+    >>> jnp.trace(x, axis1=1, axis2=2)
+    Array([ 5, 13], dtype=int32)
+    >>> jnp.trace(x, offset=1, axis1=1, axis2=2)
+    Array([2, 6], dtype=int32)
+  """
   util.check_arraylike("trace", a)
   if out is not None:
     raise NotImplementedError("The 'out' argument to jnp.trace is not supported.")
+
+  if _canonicalize_axis(axis1, ndim(a)) == _canonicalize_axis(axis2, ndim(a)):
+    raise ValueError(f"axis1 and axis2 can not be same. axis1={axis1} and axis2={axis2}")
+
   dtypes.check_user_dtype_supported(dtype, "trace")
 
   a_shape = shape(a)
@@ -5426,10 +7239,42 @@ def diag_indices_from(arr: ArrayLike) -> tuple[Array, ...]:
 
   return diag_indices(s[0], ndim=nd)
 
-@util.implements(np.diagonal, lax_description=_ARRAY_VIEW_DOC)
 @partial(jit, static_argnames=('offset', 'axis1', 'axis2'))
 def diagonal(a: ArrayLike, offset: int = 0, axis1: int = 0,
              axis2: int = 1) -> Array:
+  """Returns the specified diagonal of an array.
+
+  JAX implementation of :func:`numpy.diagonal`.
+
+  The JAX version always returns a copy of the input, although if this is used
+  within a JIT compilation, the compiler may avoid the copy.
+
+  Args:
+    a: Input array. Must be at least 2-dimensional.
+    offset: optional, default=0. Diagonal offset from the main diagonal.
+      Must be a static integer value. Can be positive or negative.
+    axis1: optional, default=0. The first axis along which to take the diagonal.
+    axis2: optional, default=1. The second axis along which to take the diagonal.
+
+   Returns:
+    A 1D array for 2D input, and in general a N-1 dimensional array
+    for N-dimensional input.
+
+  See also:
+    - :func:`jax.numpy.diag`
+    - :func:`jax.numpy.diagflat`
+
+  Examples:
+    >>> x = jnp.array([[1, 2, 3],
+    ...                [4, 5, 6],
+    ...                [7, 8, 9]])
+    >>> jnp.diagonal(x)
+    Array([1, 5, 9], dtype=int32)
+    >>> jnp.diagonal(x, offset=1)
+    Array([2, 6], dtype=int32)
+    >>> jnp.diagonal(x, offset=-1)
+    Array([4, 8], dtype=int32)
+  """
   util.check_arraylike("diagonal", a)
   a_shape = shape(a)
   if ndim(a) < 2:
@@ -5445,8 +7290,53 @@ def diagonal(a: ArrayLike, offset: int = 0, axis1: int = 0,
   return a[..., i, j] if offset >= 0 else a[..., j, i]
 
 
-@util.implements(np.diag, lax_description=_ARRAY_VIEW_DOC)
 def diag(v: ArrayLike, k: int = 0) -> Array:
+  """Returns the specified diagonal or constructs a diagonal array.
+
+  JAX implementation of :func:`numpy.diag`.
+
+  The JAX version always returns a copy of the input, although if this is used
+  within a JIT compilation, the compiler may avoid the copy.
+
+  Args:
+    v: Input array. Can be a 1-D array to create a diagonal matrix or a
+      2-D array to extract a diagonal.
+    k: optional, default=0. Diagonal offset. Positive values place the diagonal
+      above the main diagonal, negative values place it below the main diagonal.
+
+  Returns:
+    If `v` is a 2-D array, a 1-D array containing the diagonal elements.
+    If `v` is a 1-D array, a 2-D array with the input elements placed along the
+    specified diagonal.
+
+  See also:
+    - :func:`jax.numpy.diagflat`
+    - :func:`jax.numpy.diagonal`
+
+  Examples:
+    Creating a diagonal matrix from a 1-D array:
+
+    >>> jnp.diag(jnp.array([1, 2, 3]))
+    Array([[1, 0, 0],
+           [0, 2, 0],
+           [0, 0, 3]], dtype=int32)
+
+    Specifying a diagonal offset:
+
+    >>> jnp.diag(jnp.array([1, 2, 3]), k=1)
+    Array([[0, 1, 0, 0],
+           [0, 0, 2, 0],
+           [0, 0, 0, 3],
+           [0, 0, 0, 0]], dtype=int32)
+
+    Extracting a diagonal from a 2-D array:
+
+    >>> x = jnp.array([[1, 2, 3],
+    ...                [4, 5, 6],
+    ...                [7, 8, 9]])
+    >>> jnp.diag(x)
+    Array([1, 5, 9], dtype=int32)
+  """
   return _diag(v, operator.index(k))
 
 @partial(jit, static_argnames=('k',))
@@ -5463,14 +7353,46 @@ def _diag(v, k):
   else:
     raise ValueError("diag input must be 1d or 2d")
 
-_SCALAR_VALUE_DOC = """\
-This differs from np.diagflat for some scalar values of v,
-jax always returns a two-dimensional array, whereas numpy may
-return a scalar depending on the type of v.
-"""
-
-@util.implements(np.diagflat, lax_description=_SCALAR_VALUE_DOC)
 def diagflat(v: ArrayLike, k: int = 0) -> Array:
+  """Return a 2-D array with the flattened input array laid out on the diagonal.
+
+  JAX implementation of :func:`numpy.diagflat`.
+
+  This differs from `np.diagflat` for some scalar values of `v`. JAX always returns
+  a two-dimensional array, whereas NumPy may return a scalar depending on the type
+  of `v`.
+
+  Args:
+    v: Input array. Can be N-dimensional but is flattened to 1D.
+    k: optional, default=0. Diagonal offset. Positive values place the diagonal
+      above the main diagonal, negative values place it below the main diagonal.
+
+  Returns:
+    A 2D array with the input elements placed along the diagonal with the
+    specified offset (k). The remaining entries are filled with zeros.
+
+  See also:
+    - :func:`jax.numpy.diag`
+    - :func:`jax.numpy.diagonal`
+
+  Examples:
+    >>> jnp.diagflat(jnp.array([1, 2, 3]))
+    Array([[1, 0, 0],
+           [0, 2, 0],
+           [0, 0, 3]], dtype=int32)
+    >>> jnp.diagflat(jnp.array([1, 2, 3]), k=1)
+    Array([[0, 1, 0, 0],
+           [0, 0, 2, 0],
+           [0, 0, 0, 3],
+           [0, 0, 0, 0]], dtype=int32)
+    >>> a = jnp.array([[1, 2],
+    ...                [3, 4]])
+    >>> jnp.diagflat(a)
+    Array([[1, 0, 0, 0],
+           [0, 2, 0, 0],
+           [0, 0, 3, 0],
+           [0, 0, 0, 4]], dtype=int32)
+  """
   util.check_arraylike("diagflat", v)
   v_ravel = ravel(v)
   v_length = len(v_ravel)
@@ -5486,16 +7408,48 @@ def diagflat(v: ArrayLike, k: int = 0) -> Array:
   return res
 
 
-@util.implements(np.trim_zeros)
-def trim_zeros(filt, trim='fb'):
-  filt = core.concrete_or_error(asarray, filt,
-    "Error arose in the `filt` argument of trim_zeros()")
-  nz = (filt == 0)
+def trim_zeros(filt: ArrayLike, trim: str ='fb') -> Array:
+  """Trim leading and/or trailing zeros of the input array.
+
+  JAX implementation of :func:`numpy.trim_zeros`.
+
+  Args:
+    filt: input array. Must have ``filt.ndim == 1``.
+    trim: string, optional, default = ``fb``. Specifies from which end the input
+      is trimmed.
+
+      - ``f`` - trims only the leading zeros.
+      - ``b`` - trims only the trailing zeros.
+      - ``fb`` - trims both leading and trailing zeros.
+
+  Returns:
+    An array containig the trimmed input with same dtype as ``filt``.
+
+  Examples:
+    >>> x = jnp.array([0, 0, 2, 0, 1, 4, 3, 0, 0, 0])
+    >>> jnp.trim_zeros(x)
+    Array([2, 0, 1, 4, 3], dtype=int32)
+  """
+  # Non-array inputs are deprecated 2024-09-11
+  util.check_arraylike("trim_zeros", filt, emit_warning=True)
+  core.concrete_or_error(None, filt,
+                         "Error arose in the `filt` argument of trim_zeros()")
+  filt_arr = jax.numpy.asarray(filt)
+  del filt
+  if filt_arr.ndim != 1:
+    # Added on 2024-09-11
+    if deprecations.is_accelerated("jax-numpy-trimzeros-not-1d-array"):
+      raise TypeError(f"'filt' must be 1-D array, but received {filt_arr.ndim}-D array.")
+    warnings.warn(
+      "Passing arrays with ndim != 1 to jnp.trim_zeros() is deprecated. Currently, it "
+      "works with Arrays having ndim != 1. In the future this will result in an error.",
+      DeprecationWarning, stacklevel=2)
+  nz = (filt_arr == 0)
   if reductions.all(nz):
-    return empty(0, _dtype(filt))
-  start = argmin(nz) if 'f' in trim.lower() else 0
-  end = argmin(nz[::-1]) if 'b' in trim.lower() else 0
-  return filt[start:len(filt) - end]
+    return empty(0, filt_arr.dtype)
+  start: Array | int = argmin(nz) if 'f' in trim.lower() else 0
+  end: Array | int = argmin(nz[::-1]) if 'b' in trim.lower() else 0
+  return filt_arr[start:len(filt_arr) - end]
 
 
 def trim_zeros_tol(filt, tol, trim='fb'):
@@ -5845,20 +7799,17 @@ def dot(a: ArrayLike, b: ArrayLike, *,
   batch_dims = ((), ())
   a_ndim, b_ndim = ndim(a), ndim(b)
   if a_ndim == 0 or b_ndim == 0:
-    # TODO(jakevdp): lower this case to dot_general as well?
-    # Currently, doing so causes issues in remat tests due to #16805
-    if preferred_element_type is not None:
-      a = a.astype(preferred_element_type)
-      b = b.astype(preferred_element_type)
-    result = lax.mul(a, b)
+    contract_dims: tuple[tuple[int, ...], tuple[int, ...]] = ((), ())
   else:
     if b_ndim == 1:
       contract_dims = ((a_ndim - 1,), (0,))
     else:
       contract_dims = ((a_ndim - 1,), (b_ndim - 2,))
-    result = lax.dot_general(a, b, dimension_numbers=(contract_dims, batch_dims),
-                             precision=precision, preferred_element_type=preferred_element_type)
-  return lax_internal._convert_element_type(result, preferred_element_type, output_weak_type)
+  result = lax.dot_general(a, b, dimension_numbers=(contract_dims, batch_dims),
+                           precision=precision,
+                           preferred_element_type=preferred_element_type)
+  return lax_internal._convert_element_type(result, preferred_element_type,
+                                            output_weak_type)
 
 
 @partial(jit, static_argnames=('precision', 'preferred_element_type'), inline=True)
@@ -5871,7 +7822,7 @@ def matmul(a: ArrayLike, b: ArrayLike, *,
   JAX implementation of :func:`numpy.matmul`.
 
   Args:
-    a: first input array, of shape ``(..., N)``.
+    a: first input array, of shape ``(N,)`` or ``(..., K, N)``.
     b: second input array. Must have shape ``(N,)`` or ``(..., N, M)``.
       In the multi-dimensional case, leading dimensions must be broadcast-compatible
       with the leading dimensions of ``a``.
@@ -6772,9 +8723,33 @@ def inner(
                    preferred_element_type=preferred_element_type)
 
 
-@util.implements(np.outer, skip_params=['out'])
 @partial(jit, inline=True)
 def outer(a: ArrayLike, b: ArrayLike, out: None = None) -> Array:
+  """Compute the outer product of two arrays.
+
+  JAX implementation of :func:`numpy.outer`.
+
+  Args:
+    a: first input array, if not 1D it will be flattened.
+    b: second input array, if not 1D it will be flattened.
+    out: unsupported by JAX.
+
+  Returns:
+    The outer product of the inputs ``a`` and ``b``. Returned array
+    will be of shape ``(a.size, b.size)``.
+
+  See also:
+    - :func:`jax.numpy.inner`: compute the inner product of two arrays.
+    - :func:`jax.numpy.einsum`: Einstein summation.
+
+  Examples:
+    >>> a = jnp.array([1, 2, 3])
+    >>> b = jnp.array([4, 5, 6])
+    >>> jnp.outer(a, b)
+    Array([[ 4,  5,  6],
+           [ 8, 10, 12],
+           [12, 15, 18]], dtype=int32)
+  """
   if out is not None:
     raise NotImplementedError("The 'out' argument to jnp.outer is not supported.")
   util.check_arraylike("outer", a, b)
@@ -6810,9 +8785,39 @@ def cross(a, b, axisa: int = -1, axisb: int = -1, axisc: int = -1,
   return moveaxis(c, 0, axisc)
 
 
-@util.implements(np.kron)
 @jit
 def kron(a: ArrayLike, b: ArrayLike) -> Array:
+  """Compute the Kronecker product of two input arrays.
+
+  JAX implementation of :func:`numpy.kron`.
+
+  The Kronecker product is an operation on two matrices of arbitrary size that
+  produces a block matrix. Each element of the first matrix ``a`` is multiplied by
+  the entire second matrix ``b``. If ``a`` has shape (m, n) and ``b``
+  has shape (p, q), the resulting matrix will have shape (m * p, n * q).
+
+  Args:
+    a: first input array with any shape.
+    b: second input array with any shape.
+
+  Returns:
+    A new array representing the Kronecker product of the inputs  ``a`` and ``b``.
+    The shape of the output is the element-wise product of the input shapes.
+
+  See also:
+    - :func:`jax.numpy.outer`: compute the outer product of two arrays.
+
+  Examples:
+    >>> a = jnp.array([[1, 2],
+    ...                [3, 4]])
+    >>> b = jnp.array([[5, 6],
+    ...                [7, 8]])
+    >>> jnp.kron(a, b)
+    Array([[ 5,  6, 10, 12],
+           [ 7,  8, 14, 16],
+           [15, 18, 20, 24],
+           [21, 24, 28, 32]], dtype=int32)
+  """
   util.check_arraylike("kron", a, b)
   a, b = util.promote_dtypes(a, b)
   if ndim(a) < ndim(b):
@@ -6825,11 +8830,51 @@ def kron(a: ArrayLike, b: ArrayLike) -> Array:
   return reshape(lax.mul(a_reshaped, b_reshaped), out_shape)
 
 
-@util.implements(np.vander)
 @partial(jit, static_argnames=('N', 'increasing'))
 def vander(
     x: ArrayLike, N: int | None = None, increasing: bool = False
 ) -> Array:
+  """Generate a Vandermonde matrix.
+
+  JAX implementation of :func:`numpy.vander`.
+
+  Args:
+    x: input array. Must have ``x.ndim == 1``.
+    N: int, optional, default=None. Specifies the number of the columns the
+      output matrix. If not specified, ``N = len(x)``.
+    increasing: bool, optional, default=False. Specifies the order of the powers
+      of the columns. If ``True``, the powers increase from left to right,
+      :math:`[x^0, x^1, ..., x^{(N-1)}]`. By default, the powers decrease from left to
+      right :math:`[x^{(N-1)}, ..., x^1, x^0]`.
+
+  Returns:
+    An array of shape ``[len(x), N]`` containing the generated Vandermonde matrix.
+
+  Examples:
+    >>> x = jnp.array([1, 2, 3, 4])
+    >>> jnp.vander(x)
+    Array([[ 1,  1,  1,  1],
+           [ 8,  4,  2,  1],
+           [27,  9,  3,  1],
+           [64, 16,  4,  1]], dtype=int32)
+
+    If ``N = 2``, generates a Vandermonde matrix with ``2`` columns.
+
+    >>> jnp.vander(x, N=2)
+    Array([[1, 1],
+           [2, 1],
+           [3, 1],
+           [4, 1]], dtype=int32)
+
+    Generates the Vandermonde matrix in increaing order of powers, when
+    ``increasing=True``.
+
+    >>> jnp.vander(x, increasing=True)
+    Array([[ 1,  1,  1,  1],
+           [ 1,  2,  4,  8],
+           [ 1,  3,  9, 27],
+           [ 1,  4, 16, 64]], dtype=int32)
+  """
   util.check_arraylike("vander", x)
   x = asarray(x)
   if x.ndim != 1:
@@ -6913,9 +8958,41 @@ def argwhere(
   return result.reshape(result.shape[0], ndim(a))
 
 
-@util.implements(np.argmax, skip_params=['out'])
 def argmax(a: ArrayLike, axis: int | None = None, out: None = None,
            keepdims: bool | None = None) -> Array:
+  """Return the index of the maximum value of an array.
+
+  JAX implementation of :func:`numpy.argmax`.
+
+  Args:
+    a: input array
+    axis: optional integer specifying the axis along which to find the maximum
+      value. If ``axis`` is not specified, ``a`` will be flattened.
+    out: unused by JAX
+    keepdims: if True, then return an array with the same number of dimensions
+      as ``a``.
+
+  Returns:
+    an array containing the index of the maximum value along the specified axis.
+
+  See also:
+    - :func:`jax.numpy.argmin`: return the index of the minimum value.
+    - :func:`jax.numpy.nanargmax`: compute ``argmax`` while ignoring NaN values.
+
+  Examples:
+    >>> x = jnp.array([1, 3, 5, 4, 2])
+    >>> jnp.argmax(x)
+    Array(2, dtype=int32)
+
+    >>> x = jnp.array([[1, 3, 2],
+    ...                [5, 4, 1]])
+    >>> jnp.argmax(x, axis=1)
+    Array([1, 0], dtype=int32)
+
+    >>> jnp.argmax(x, axis=1, keepdims=True)
+    Array([[1],
+           [0]], dtype=int32)
+  """
   util.check_arraylike("argmax", a)
   if out is not None:
     raise NotImplementedError("The 'out' argument to jnp.argmax is not supported.")
@@ -6935,9 +9012,42 @@ def _argmax(a: Array, axis: int | None = None, keepdims: bool = False) -> Array:
   result = lax.argmax(a, _canonicalize_axis(axis, a.ndim), dtypes.canonicalize_dtype(int_))
   return expand_dims(result, dims) if keepdims else result
 
-@util.implements(np.argmin, skip_params=['out'])
+
 def argmin(a: ArrayLike, axis: int | None = None, out: None = None,
            keepdims: bool | None = None) -> Array:
+  """Return the index of the minimum value of an array.
+
+  JAX implementation of :func:`numpy.argmax`.
+
+  Args:
+    a: input array
+    axis: optional integer specifying the axis along which to find the maximum
+      value. If ``axis`` is not specified, ``a`` will be flattened.
+    out: unused by JAX
+    keepdims: if True, then return an array with the same number of dimensions
+      as ``a``.
+
+  Returns:
+    an array containing the index of the maximum value along the specified axis.
+
+  See also:
+    - :func:`jax.numpy.argmax`: return the index of the maximum value.
+    - :func:`jax.numpy.nanargmin`: compute ``argmin`` while ignoring NaN values.
+
+  Examples:
+    >>> x = jnp.array([1, 3, 5, 4, 2])
+    >>> jnp.argmin(x)
+    Array(0, dtype=int32)
+
+    >>> x = jnp.array([[1, 3, 2],
+    ...                [5, 4, 1]])
+    >>> jnp.argmin(x, axis=1)
+    Array([0, 2], dtype=int32)
+
+    >>> jnp.argmin(x, axis=1, keepdims=True)
+    Array([[0],
+           [2]], dtype=int32)
+  """
   util.check_arraylike("argmin", a)
   if out is not None:
     raise NotImplementedError("The 'out' argument to jnp.argmin is not supported.")
@@ -6958,19 +9068,57 @@ def _argmin(a: Array, axis: int | None = None, keepdims: bool = False) -> Array:
   return expand_dims(result, dims) if keepdims else result
 
 
-_NANARG_DOC = """\
-Warning: jax.numpy.arg{} returns -1 for all-NaN slices and does not raise
-an error.
-"""
-
-
-@util.implements(np.nanargmax, lax_description=_NANARG_DOC.format("max"), skip_params=['out'])
 def nanargmax(
     a: ArrayLike,
     axis: int | None = None,
     out: None = None,
     keepdims: bool | None = None,
 ) -> Array:
+  """Return the index of the maximum value of an array, ignoring NaNs.
+
+  JAX implementation of :func:`numpy.nanargmax`.
+
+  Args:
+    a: input array
+    axis: optional integer specifying the axis along which to find the maximum
+      value. If ``axis`` is not specified, ``a`` will be flattened.
+    out: unused by JAX
+    keepdims: if True, then return an array with the same number of dimensions
+      as ``a``.
+
+  Returns:
+    an array containing the index of the maximum value along the specified axis.
+
+  Note:
+    In the case of an axis with all-NaN values, the returned index will be -1.
+    This differs from the behavior of :func:`numpy.nanargmax`, which raises an error.
+
+  See also:
+    - :func:`jax.numpy.argmax`: return the index of the maximum value.
+    - :func:`jax.numpy.nanargmin`: compute ``argmin`` while ignoring NaN values.
+
+  Examples:
+    >>> x = jnp.array([1, 3, 5, 4, jnp.nan])
+
+    Using a standard :func:`~jax.numpy.argmax` leads to potentially unexpected results:
+
+    >>> jnp.argmax(x)
+    Array(4, dtype=int32)
+
+    Using ``nanargmax`` returns the index of the maximum non-NaN value.
+
+    >>> jnp.nanargmax(x)
+    Array(2, dtype=int32)
+
+    >>> x = jnp.array([[1, 3, jnp.nan],
+    ...                [5, 4, jnp.nan]])
+    >>> jnp.nanargmax(x, axis=1)
+    Array([1, 0], dtype=int32)
+
+    >>> jnp.nanargmax(x, axis=1, keepdims=True)
+    Array([[1],
+           [0]], dtype=int32)
+  """
   if out is not None:
     raise NotImplementedError("The 'out' argument to jnp.nanargmax is not supported.")
   return _nanargmax(a, None if axis is None else operator.index(axis), keepdims=bool(keepdims))
@@ -6987,13 +9135,50 @@ def _nanargmax(a, axis: int | None = None, keepdims: bool = False):
   return where(reductions.all(nan_mask, axis=axis, keepdims=keepdims), -1, res)
 
 
-@util.implements(np.nanargmin, lax_description=_NANARG_DOC.format("min"),  skip_params=['out'])
 def nanargmin(
     a: ArrayLike,
     axis: int | None = None,
     out: None = None,
     keepdims: bool | None = None,
 ) -> Array:
+
+  """Return the index of the minimum value of an array, ignoring NaNs.
+
+  JAX implementation of :func:`numpy.nanargmin`.
+
+  Args:
+    a: input array
+    axis: optional integer specifying the axis along which to find the maximum
+      value. If ``axis`` is not specified, ``a`` will be flattened.
+    out: unused by JAX
+    keepdims: if True, then return an array with the same number of dimensions
+      as ``a``.
+
+  Returns:
+    an array containing the index of the minimum value along the specified axis.
+
+  Note:
+    In the case of an axis with all-NaN values, the returned index will be -1.
+    This differs from the behavior of :func:`numpy.nanargmin`, which raises an error.
+
+  See also:
+    - :func:`jax.numpy.argmin`: return the index of the minimum value.
+    - :func:`jax.numpy.nanargmax`: compute ``argmax`` while ignoring NaN values.
+
+  Examples:
+    >>> x = jnp.array([jnp.nan, 3, 5, 4, 2])
+    >>> jnp.nanargmin(x)
+    Array(4, dtype=int32)
+
+    >>> x = jnp.array([[1, 3, jnp.nan],
+    ...                [5, 4, jnp.nan]])
+    >>> jnp.nanargmin(x, axis=1)
+    Array([0, 1], dtype=int32)
+
+    >>> jnp.nanargmin(x, axis=1, keepdims=True)
+    Array([[0],
+           [1]], dtype=int32)
+  """
   if out is not None:
     raise NotImplementedError("The 'out' argument to jnp.nanargmin is not supported.")
   return _nanargmin(a, None if axis is None else operator.index(axis), keepdims=bool(keepdims))
@@ -7073,11 +9258,40 @@ def sort(
   return lax.rev(result, dimensions=[dimension]) if descending else result
 
 
-@util.implements(np.sort_complex)
 @jit
 def sort_complex(a: ArrayLike) -> Array:
+  """Return a sorted copy of complex array.
+
+  JAX implementation of :func:`numpy.sort_complex`.
+
+  Complex numbers are sorted lexicographically, meaning by their real part
+  first, and then by their imaginary part if real parts are equal.
+
+  Args:
+    a: input array. If dtype is not complex, the array will be upcast to complex.
+
+  Returns:
+    A sorted array of the same shape and complex dtype as the input. If ``a``
+    is multi-dimensional, it is sorted along the last axis.
+
+  See also:
+    - :func:`jax.numpy.sort`: Return a sorted copy of an array.
+
+  Examples:
+    >>> a = jnp.array([1+2j, 2+4j, 3-1j, 2+3j])
+    >>> jnp.sort_complex(a)
+    Array([1.+2.j, 2.+3.j, 2.+4.j, 3.-1.j], dtype=complex64)
+
+    Multi-dimensional arrays are sorted along the last axis:
+
+    >>> a = jnp.array([[5, 3, 4],
+    ...                [6, 9, 2]])
+    >>> jnp.sort_complex(a)
+    Array([[3.+0.j, 4.+0.j, 5.+0.j],
+           [2.+0.j, 6.+0.j, 9.+0.j]], dtype=complex64)
+  """
   util.check_arraylike("sort_complex", a)
-  a = lax.sort(asarray(a), dimension=0)
+  a = lax.sort(asarray(a))
   return lax.convert_element_type(a, dtypes.to_complex_dtype(a.dtype))
 
 @util.implements(np.lexsort)
@@ -7352,9 +9566,45 @@ def _roll_static(a: Array, shift: Sequence[int], axis: Sequence[int]) -> Array:
                         dimension=ax)
   return a
 
-@util.implements(np.roll)
 def roll(a: ArrayLike, shift: ArrayLike | Sequence[int],
          axis: int | Sequence[int] | None = None) -> Array:
+  """Roll the elements of an array along a specified axis.
+
+  JAX implementation of :func:`numpy.roll`.
+
+  Args:
+    a: input array.
+    shift: the number of positions to shift the specified axis. If an integer,
+      all axes are shifted by the same amount. If a tuple, the shift for each
+      axis is specified individually.
+    axis: the axis or axes to roll. If ``None``, the array is flattened, shifted,
+      and then reshaped to its original shape.
+
+  Returns:
+    A copy of ``a`` with elements rolled along the specified axis or axes.
+
+  See also:
+    - :func:`jax.numpy.rollaxis`: roll the specified axis to a given position.
+
+  Examples:
+    >>> a = jnp.array([0, 1, 2, 3, 4, 5])
+    >>> jnp.roll(a, 2)
+    Array([4, 5, 0, 1, 2, 3], dtype=int32)
+
+    Roll elements along a specific axis:
+
+    >>> a = jnp.array([[ 0,  1,  2,  3],
+    ...                [ 4,  5,  6,  7],
+    ...                [ 8,  9, 10, 11]])
+    >>> jnp.roll(a, 1, axis=0)
+    Array([[ 8,  9, 10, 11],
+           [ 0,  1,  2,  3],
+           [ 4,  5,  6,  7]], dtype=int32)
+    >>> jnp.roll(a, [2, 3], axis=[0, 1])
+    Array([[ 5,  6,  7,  4],
+           [ 9, 10, 11,  8],
+           [ 1,  2,  3,  0]], dtype=int32)
+  """
   util.check_arraylike("roll", a)
   arr = asarray(a)
   if axis is None:
@@ -8290,11 +10540,11 @@ def _eliminate_deprecated_list_indexing(idx):
       if any(_should_unpack_list_index(i) for i in idx):
         msg = ("Using a non-tuple sequence for multidimensional indexing is not allowed; "
                "use `arr[tuple(seq)]` instead of `arr[seq]`. "
-               "See https://github.com/google/jax/issues/4564 for more information.")
+               "See https://github.com/jax-ml/jax/issues/4564 for more information.")
       else:
         msg = ("Using a non-tuple sequence for multidimensional indexing is not allowed; "
                "use `arr[array(seq)]` instead of `arr[seq]`. "
-               "See https://github.com/google/jax/issues/4564 for more information.")
+               "See https://github.com/jax-ml/jax/issues/4564 for more information.")
       raise TypeError(msg)
     else:
       idx = (idx,)
@@ -8340,7 +10590,10 @@ def _expand_bool_indices(idx, shape):
         i_shape = _shape(i)
         start = len(out) + ellipsis_offset - newaxis_offset
         expected_shape = shape[start: start + _ndim(i)]
-        if i_shape != expected_shape:
+        if len(i_shape) != len(expected_shape):
+          raise IndexError(f"too many boolean indices at index {dim_number}: got mask of shape "
+                           f"{i_shape}, but only {len(expected_shape)} dimensions remain.")
+        if not all(s1 in (0, s2) for s1, s2 in zip(i_shape, expected_shape)):
           raise IndexError("boolean index did not match shape of indexed array in index "
                            f"{dim_number}: got {i_shape}, expected {expected_shape}")
         out.extend(np.where(i))
@@ -8465,8 +10718,28 @@ def _preprocess_slice(
   return start, step, slice_size
 
 
-@util.implements(np.blackman)
 def blackman(M: int) -> Array:
+  """Return a Blackman window of size M.
+
+  JAX implementation of :func:`numpy.blackman`.
+
+  Args:
+    M: The window size.
+
+  Returns:
+    An array of size M containing the Blackman window.
+
+  Examples:
+    >>> with jnp.printoptions(precision=2, suppress=True):
+    ...   print(jnp.blackman(4))
+    [-0.    0.63  0.63 -0.  ]
+
+  See also:
+    - :func:`jax.numpy.bartlett`: return a Bartlett window of size M.
+    - :func:`jax.numpy.hamming`: return a Hamming window of size M.
+    - :func:`jax.numpy.hanning`: return a Hanning window of size M.
+    - :func:`jax.numpy.kaiser`: return a Kaiser window of size M.
+  """
   M = core.concrete_or_error(int, M, "M argument of jnp.blackman")
   dtype = dtypes.canonicalize_dtype(float_)
   if M <= 1:
@@ -8475,8 +10748,28 @@ def blackman(M: int) -> Array:
   return 0.42 - 0.5 * ufuncs.cos(2 * pi * n / (M - 1)) + 0.08 * ufuncs.cos(4 * pi * n / (M - 1))
 
 
-@util.implements(np.bartlett)
 def bartlett(M: int) -> Array:
+  """Return a Bartlett window of size M.
+
+  JAX implementation of :func:`numpy.bartlett`.
+
+  Args:
+    M: The window size.
+
+  Returns:
+    An array of size M containing the Bartlett window.
+
+  Examples:
+    >>> with jnp.printoptions(precision=2, suppress=True):
+    ...   print(jnp.bartlett(4))
+    [0.   0.67 0.67 0.  ]
+
+  See also:
+    - :func:`jax.numpy.blackman`: return a Blackman window of size M.
+    - :func:`jax.numpy.hamming`: return a Hamming window of size M.
+    - :func:`jax.numpy.hanning`: return a Hanning window of size M.
+    - :func:`jax.numpy.kaiser`: return a Kaiser window of size M.
+  """
   M = core.concrete_or_error(int, M, "M argument of jnp.bartlett")
   dtype = dtypes.canonicalize_dtype(float_)
   if M <= 1:
@@ -8485,8 +10778,28 @@ def bartlett(M: int) -> Array:
   return 1 - ufuncs.abs(2 * n + 1 - M) / (M - 1)
 
 
-@util.implements(np.hamming)
 def hamming(M: int) -> Array:
+  """Return a Hamming window of size M.
+
+  JAX implementation of :func:`numpy.hamming`.
+
+  Args:
+    M: The window size.
+
+  Returns:
+    An array of size M containing the Hamming window.
+
+  Examples:
+    >>> with jnp.printoptions(precision=2, suppress=True):
+    ...   print(jnp.hamming(4))
+    [0.08 0.77 0.77 0.08]
+
+  See also:
+    - :func:`jax.numpy.bartlett`: return a Bartlett window of size M.
+    - :func:`jax.numpy.blackman`: return a Blackman window of size M.
+    - :func:`jax.numpy.hanning`: return a Hanning window of size M.
+    - :func:`jax.numpy.kaiser`: return a Kaiser window of size M.
+  """
   M = core.concrete_or_error(int, M, "M argument of jnp.hamming")
   dtype = dtypes.canonicalize_dtype(float_)
   if M <= 1:
@@ -8495,8 +10808,28 @@ def hamming(M: int) -> Array:
   return 0.54 - 0.46 * ufuncs.cos(2 * pi * n / (M - 1))
 
 
-@util.implements(np.hanning)
 def hanning(M: int) -> Array:
+  """Return a Hanning window of size M.
+
+  JAX implementation of :func:`numpy.hanning`.
+
+  Args:
+    M: The window size.
+
+  Returns:
+    An array of size M containing the Hanning window.
+
+  Examples:
+    >>> with jnp.printoptions(precision=2, suppress=True):
+    ...   print(jnp.hanning(4))
+    [0.   0.75 0.75 0.  ]
+
+  See also:
+    - :func:`jax.numpy.bartlett`: return a Bartlett window of size M.
+    - :func:`jax.numpy.blackman`: return a Blackman window of size M.
+    - :func:`jax.numpy.hamming`: return a Hamming window of size M.
+    - :func:`jax.numpy.kaiser`: return a Kaiser window of size M.
+  """
   M = core.concrete_or_error(int, M, "M argument of jnp.hanning")
   dtype = dtypes.canonicalize_dtype(float_)
   if M <= 1:
@@ -8505,8 +10838,29 @@ def hanning(M: int) -> Array:
   return 0.5 * (1 - ufuncs.cos(2 * pi * n / (M - 1)))
 
 
-@util.implements(np.kaiser)
 def kaiser(M: int, beta: ArrayLike) -> Array:
+  """Return a Kaiser window of size M.
+
+  JAX implementation of :func:`numpy.kaiser`.
+
+  Args:
+    M: The window size.
+    beta: The Kaiser window parameter.
+
+  Returns:
+    An array of size M containing the Kaiser window.
+
+  Examples:
+    >>> with jnp.printoptions(precision=2, suppress=True):
+    ...   print(jnp.kaiser(4, 1.5))
+    [0.61 0.95 0.95 0.61]
+
+  See also:
+    - :func:`jax.numpy.bartlett`: return a Bartlett window of size M.
+    - :func:`jax.numpy.blackman`: return a Blackman window of size M.
+    - :func:`jax.numpy.hamming`: return a Hamming window of size M.
+    - :func:`jax.numpy.hanning`: return a Hanning window of size M.
+  """
   M = core.concrete_or_error(int, M, "M argument of jnp.kaiser")
   dtype = dtypes.canonicalize_dtype(float_)
   if M <= 1:
@@ -8526,9 +10880,43 @@ def _gcd_body_fn(xs: tuple[Array, Array]) -> tuple[Array, Array]:
             where(x2 != 0, lax.rem(x1, x2), _lax_const(x2, 0)))
   return (where(x1 < x2, x2, x1), where(x1 < x2, x1, x2))
 
-@util.implements(np.gcd, module='numpy')
 @jit
 def gcd(x1: ArrayLike, x2: ArrayLike) -> Array:
+  """Compute the greatest common divisor of two arrays.
+
+  JAX implementation of :func:`numpy.gcd`.
+
+  Args:
+    x1: First input array. The elements must have integer dtype.
+    x2: Second input array. The elements must have integer dtype.
+
+  Returns:
+    An array containing the greatest common divisors of the corresponding
+    elements from the absolute values of `x1` and `x2`.
+
+  See also:
+    - :func:`jax.numpy.lcm`: compute the least common multiple of two arrays.
+
+  Examples:
+    Scalar inputs:
+
+    >>> jnp.gcd(12, 18)
+    Array(6, dtype=int32, weak_type=True)
+
+    Array inputs:
+
+    >>> x1 = jnp.array([12, 18, 24])
+    >>> x2 = jnp.array([5, 10, 15])
+    >>> jnp.gcd(x1, x2)
+    Array([1, 2, 3], dtype=int32)
+
+    Broadcasting:
+
+    >>> x1 = jnp.array([12])
+    >>> x2 = jnp.array([6, 9, 12])
+    >>> jnp.gcd(x1, x2)
+    Array([ 6,  3, 12], dtype=int32)
+  """
   util.check_arraylike("gcd", x1, x2)
   x1, x2 = util.promote_dtypes(x1, x2)
   if not issubdtype(_dtype(x1), integer):
@@ -8538,9 +10926,43 @@ def gcd(x1: ArrayLike, x2: ArrayLike) -> Array:
   return gcd
 
 
-@util.implements(np.lcm, module='numpy')
 @jit
 def lcm(x1: ArrayLike, x2: ArrayLike) -> Array:
+  """Compute the least common multiple of two arrays.
+
+  JAX implementation of :func:`numpy.lcm`.
+
+  Args:
+    x1: First input array. The elements must have integer dtype.
+    x2: Second input array. The elements must have integer dtype.
+
+  Returns:
+    An array containing the least common multiple of the corresponding
+    elements from the absolute values of `x1` and `x2`.
+
+  See also:
+    - :func:`jax.numpy.gcd`: compute the greatest common divisor of two arrays.
+
+  Examples:
+    Scalar inputs:
+
+    >>> jnp.lcm(12, 18)
+    Array(36, dtype=int32, weak_type=True)
+
+    Array inputs:
+
+    >>> x1 = jnp.array([12, 18, 24])
+    >>> x2 = jnp.array([5, 10, 15])
+    >>> jnp.lcm(x1, x2)
+    Array([ 60,  90, 120], dtype=int32)
+
+    Broadcasting:
+
+    >>> x1 = jnp.array([12])
+    >>> x2 = jnp.array([6, 9, 12])
+    >>> jnp.lcm(x1, x2)
+    Array([12, 36, 12], dtype=int32)
+  """
   util.check_arraylike("lcm", x1, x2)
   x1, x2 = util.promote_dtypes(x1, x2)
   x1, x2 = ufuncs.abs(x1), ufuncs.abs(x2)
@@ -8813,7 +11235,7 @@ def _searchsorted_via_scan(unrolled: bool, sorted_arr: Array, query: Array, side
 def _searchsorted_via_sort(sorted_arr: Array, query: Array, side: str, dtype: type) -> Array:
   working_dtype = int32 if sorted_arr.size + query.size < np.iinfo(np.int32).max else int64
   def _rank(x):
-    idx = lax.iota(working_dtype, len(x))
+    idx = lax.iota(working_dtype, x.shape[0])
     return zeros_like(idx).at[argsort(x)].set(idx)
   query_flat = query.ravel()
   if side == 'left':
@@ -8906,8 +11328,8 @@ def searchsorted(a: ArrayLike, v: ArrayLike, side: str = 'left',
   a, v = util.promote_dtypes(a, v)
   if sorter is not None:
     a = a[sorter]
-  dtype = int32 if len(a) <= np.iinfo(np.int32).max else int64
-  if len(a) == 0:
+  dtype = int32 if a.shape[0] <= np.iinfo(np.int32).max else int64
+  if a.shape[0] == 0:
     return zeros_like(v, dtype=dtype)
   impl = {
       'scan': partial(_searchsorted_via_scan, False),
@@ -8917,9 +11339,46 @@ def searchsorted(a: ArrayLike, v: ArrayLike, side: str = 'left',
   }[method]
   return impl(asarray(a), asarray(v), side, dtype)  # type: ignore
 
-@util.implements(np.digitize)
-@partial(jit, static_argnames=('right',))
-def digitize(x: ArrayLike, bins: ArrayLike, right: bool = False) -> Array:
+
+@partial(jit, static_argnames=('right', 'method'))
+def digitize(x: ArrayLike, bins: ArrayLike, right: bool = False,
+             *, method: str | None = None) -> Array:
+  """Convert an array to bin indices.
+
+  JAX implementation of :func:`numpy.digitize`.
+
+  Args:
+    x: array of values to digitize.
+    bins: 1D array of bin edges. Must be monotonically increasing or decreasing.
+    right: if true, the intervals include the right bin edges. If false (default)
+      the intervals include the left bin edges.
+    method: optional method argument to be passed to :func:`~jax.numpy.searchsorted`.
+      See that function for available options.
+
+  Returns:
+    An integer array of the same shape as ``x`` indicating the bin number that
+    the values are in.
+
+  See also:
+    - :func:`jax.numpy.searchsorted`: find insertion indices for values in a
+      sorted array.
+    - :func:`jax.numpy.histogram`: compute frequency of array values within
+      specified bins.
+
+  Examples:
+    >>> x = jnp.array([1.0, 2.0, 2.5, 1.5, 3.0, 3.5])
+    >>> bins = jnp.array([1, 2, 3])
+    >>> jnp.digitize(x, bins)
+    Array([1, 2, 2, 1, 3, 3], dtype=int32)
+    >>> jnp.digitize(x, bins, right=True)
+    Array([0, 1, 2, 1, 2, 3], dtype=int32)
+
+    ``digitize`` supports reverse-ordered bins as well:
+
+    >>> bins = jnp.array([3, 2, 1])
+    >>> jnp.digitize(x, bins)
+    Array([2, 1, 1, 2, 0, 0], dtype=int32)
+  """
   util.check_arraylike("digitize", x, bins)
   right = core.concrete_or_error(bool, right, "right argument of jnp.digitize()")
   bins_arr = asarray(bins)
@@ -8928,22 +11387,83 @@ def digitize(x: ArrayLike, bins: ArrayLike, right: bool = False) -> Array:
   if bins_arr.shape[0] == 0:
     return zeros_like(x, dtype=int32)
   side = 'right' if not right else 'left'
+  kwds: dict[str, str] = {} if method is None else {'method': method}
   return where(
     bins_arr[-1] >= bins_arr[0],
-    searchsorted(bins_arr, x, side=side),
-    len(bins_arr) - searchsorted(bins_arr[::-1], x, side=side)
+    searchsorted(bins_arr, x, side=side, **kwds),
+    bins_arr.shape[0] - searchsorted(bins_arr[::-1], x, side=side, **kwds)
   )
 
-_PIECEWISE_DOC = """\
-Unlike `np.piecewise`, :py:func:`jax.numpy.piecewise` requires functions in
-`funclist` to be traceable by JAX, as it is implemented via :func:`jax.lax.switch`.
-See the :func:`jax.lax.switch` documentation for more information.
-"""
 
-@util.implements(np.piecewise, lax_description=_PIECEWISE_DOC)
 def piecewise(x: ArrayLike, condlist: Array | Sequence[ArrayLike],
               funclist: list[ArrayLike | Callable[..., Array]],
               *args, **kw) -> Array:
+  """Evaluate a function defined piecewise across the domain.
+
+  JAX implementation of :func:`numpy.piecewise`, in terms of :func:`jax.lax.switch`.
+
+  Note:
+    Unlike :func:`numpy.piecewise`, :func:`jax.numpy.piecewise` requires functions
+    in ``funclist`` to be traceable by JAX, as it is implemented via
+    :func:`jax.lax.switch`.
+
+  Args:
+    x: array of input values.
+    condlist: boolean array or sequence of boolean arrays corresponding to the
+      functions in ``funclist``. If a sequence of arrays, the length of each
+      array must match the length of ``x``
+    funclist: list of arrays or functions; must either be the same length as
+      ``condlist``, or have length ``len(condlist) + 1``, in which case the
+      last entry is the default applied when none of the conditions are True.
+      Alternatively, entries of ``funclist`` may be numerical values, in which
+      case they indicate a constant function.
+    args, kwargs: additional arguments are passed to each function in
+      ``funclist``.
+
+  Returns:
+    An array which is the result of evaluating the functions on ``x`` at
+    the specified conditions.
+
+  See also:
+    - :func:`jax.lax.switch`: choose between *N* functions based on an index.
+    - :func:`jax.lax.cond`: choose between two functions based on a boolean condition.
+    - :func:`jax.numpy.where`: choose between two results based on a boolean mask.
+    - :func:`jax.lax.select`: choose between two results based on a boolean mask.
+    - :func:`jax.lax.select_n`: choose between *N* results based on a boolean mask.
+
+  Examples:
+    Here's an example of a function which is zero for negative values, and linear
+    for positive values:
+
+    >>> x = jnp.array([-4, -3, -2, -1, 0, 1, 2, 3, 4])
+
+    >>> condlist = [x < 0, x >= 0]
+    >>> funclist = [lambda x: 0 * x, lambda x: x]
+    >>> jnp.piecewise(x, condlist, funclist)
+    Array([0, 0, 0, 0, 0, 1, 2, 3, 4], dtype=int32)
+
+    ``funclist`` can also contain a simple scalar value for constant functions:
+
+    >>> condlist = [x < 0, x >= 0]
+    >>> funclist = [0, lambda x: x]
+    >>> jnp.piecewise(x, condlist, funclist)
+    Array([0, 0, 0, 0, 0, 1, 2, 3, 4], dtype=int32)
+
+    You can specify a default value by appending an extra condition to ``funclist``:
+
+    >>> condlist = [x < -1, x > 1]
+    >>> funclist = [lambda x: 1 + x, lambda x: x - 1, 0]
+    >>> jnp.piecewise(x, condlist, funclist)
+    Array([-3, -2,  -1,  0,  0,  0,  1,  2, 3], dtype=int32)
+
+    ``condlist`` may also be a simple array of scalar conditions, in which case
+    the associated function applies to the whole range
+
+    >>> condlist = jnp.array([False, True, False])
+    >>> funclist = [lambda x: x * 0, lambda x: x * 10, lambda x: x * 100]
+    >>> jnp.piecewise(x, condlist, funclist)
+    Array([-40, -30, -20, -10,   0,  10,  20,  30,  40], dtype=int32)
+  """
   util.check_arraylike("piecewise", x)
   nc, nf = len(condlist), len(funclist)
   if nf == nc + 1:

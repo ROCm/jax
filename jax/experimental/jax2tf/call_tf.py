@@ -19,7 +19,7 @@ This module introduces the function :func:`call_tf` that allows JAX to call
 TensorFlow functions.
 
 For examples and details, see
-https://github.com/google/jax/blob/main/jax/experimental/jax2tf/README.md#calling-tensorflow-functions-from-jax.
+https://github.com/jax-ml/jax/blob/main/jax/experimental/jax2tf/README.md#calling-tensorflow-functions-from-jax.
 
 """
 
@@ -93,7 +93,7 @@ def call_tf(
 
   For an example and more details see the
   `README
-  <https://github.com/google/jax/blob/main/jax/experimental/jax2tf/README.md#calling-tensorflow-functions-from-jax>`_.
+  <https://github.com/jax-ml/jax/blob/main/jax/experimental/jax2tf/README.md#calling-tensorflow-functions-from-jax>`_.
 
   Args:
     callable_tf: a TensorFlow Callable that can take a pytree of TensorFlow
@@ -224,9 +224,11 @@ def call_tf(
     def tf_vjp_fun(args_tf, ct_res_tf):
       """Invoke TF gradient."""
 
-      # TF does not like us to watch non-float vars
-      def replace_non_float(arg_tf):
-        if arg_tf.dtype.is_floating or arg_tf.dtype.is_complex:
+      # TF does not like us to watch non-float vars or Nones.
+      def replace_non_float_or_none(arg_tf):
+        if arg_tf is not None and (
+            arg_tf.dtype.is_floating or arg_tf.dtype.is_complex
+        ):
           return arg_tf
         else:
           # When watched, this will be ignored. When used in results it will
@@ -234,29 +236,38 @@ def call_tf(
           # replace it with a float0)
           return tf.zeros((), dtype=tf.float32)
 
-      watched_args_tf = tf.nest.map_structure(replace_non_float, args_tf)
+      watched_args_tf = tf.nest.map_structure(
+          replace_non_float_or_none, args_tf
+      )
       with tf.GradientTape(persistent=True) as tape:
         tape.watch(watched_args_tf)
         res = callable_tf(*args_tf)
 
       tf.nest.assert_same_structure(res, ct_res_tf)
       dres_darg = tape.gradient(
-          tf.nest.map_structure(replace_non_float, res),
+          tf.nest.map_structure(replace_non_float_or_none, res),
           sources=watched_args_tf,
           output_gradients=ct_res_tf,
-          unconnected_gradients=tf.UnconnectedGradients.ZERO)
+          unconnected_gradients=tf.UnconnectedGradients.ZERO,
+      )
 
       dres_darg = tree_util.tree_map(
           lambda x: x if x is None else tf.convert_to_tensor(x),
           dres_darg,
       )
-      tf.nest.assert_same_structure(dres_darg, args_tf)
+
+      # callable_tf may mutate (the structure of) args_tf, thus we check against
+      # watched_args_tf which should be structurally the same as the original
+      # args_tf.
+      tf.nest.assert_same_structure(dres_darg, watched_args_tf)
       return dres_darg
 
     # Use call_tf to call the VJP function
     ct_args_jax = call_tf(tf_vjp_fun)(args_jax, ct_res_jax)
     # We must make the float0s that JAX expects
     def fix_float0(arg_jax, ct_arg_jax):
+      if arg_jax is None:
+        return None
       arg_dtype = dtypes.result_type(arg_jax)  # May be scalar
       ct_arg_dtype = core.primal_dtype_to_tangent_dtype(arg_dtype)
       if ct_arg_dtype != ct_arg_jax.dtype:
@@ -264,7 +275,8 @@ def call_tf(
                                                         ct_arg_dtype))
       return ct_arg_jax
 
-    ct_args_jax_fixed = tree_util.tree_map(fix_float0, args_jax, ct_args_jax)
+    ct_args_jax_fixed = tree_util.tree_map(fix_float0, args_jax, ct_args_jax,
+                                           is_leaf=lambda x: x is None)
     return ct_args_jax_fixed
 
   make_call.defvjp(make_call_vjp_fwd, make_call_vjp_bwd)
@@ -448,7 +460,7 @@ def _call_tf_abstract_eval(
   msg = ("call_tf cannot call functions whose output has dynamic shape. "
     f"Found output shapes: {concrete_function_flat_tf.output_shapes}. "
     "Consider using the `output_shape_dtype` argument to call_tf. "
-    "\nSee https://github.com/google/jax/blob/main/jax/experimental/jax2tf/README.md#limitations-of-call_tf"
+    "\nSee https://github.com/jax-ml/jax/blob/main/jax/experimental/jax2tf/README.md#limitations-of-call_tf"
       " for a discussion.")
   raise ValueError(msg)
 
@@ -487,7 +499,7 @@ def _call_tf_lowering(
     msg = (
         "call_tf works best with a TensorFlow function that does not capture "
         "variables or tensors from the context. "
-        "See https://github.com/google/jax/blob/main/jax/experimental/jax2tf/README.md#limitations-of-call_tf for a discussion. "
+        "See https://github.com/jax-ml/jax/blob/main/jax/experimental/jax2tf/README.md#limitations-of-call_tf for a discussion. "
         f"The following captures were found {concrete_function_flat_tf.captured_inputs}")
     logging.warning(msg)
     for inp in concrete_function_flat_tf.captured_inputs:
@@ -532,7 +544,7 @@ def _call_tf_lowering(
              "\ncall_tf can used " +
               "in a staged context (under jax.jit, lax.scan, etc.) only with " +
               "compilable functions with static output shapes.\n" +
-              "See https://github.com/google/jax/blob/main/jax/experimental/jax2tf/README.md#limitations-of-call_tf for a discussion." +
+              "See https://github.com/jax-ml/jax/blob/main/jax/experimental/jax2tf/README.md#limitations-of-call_tf for a discussion." +
              "\n\nCaught TensorFlow exception: " + str(e))
       raise ValueError(msg) from e
 
@@ -545,7 +557,7 @@ def _call_tf_lowering(
              f"{res_shape}. call_tf can used " +
              "in a staged context (under jax.jit, lax.scan, etc.) only with " +
              "compilable functions with static output shapes. " +
-             "See https://github.com/google/jax/blob/main/jax/experimental/jax2tf/README.md#limitations-of-call_tf for a discussion.")
+             "See https://github.com/jax-ml/jax/blob/main/jax/experimental/jax2tf/README.md#limitations-of-call_tf for a discussion.")
       raise ValueError(msg)
 
     res_dtype = res_shape.numpy_dtype()

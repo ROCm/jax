@@ -19,6 +19,7 @@ load("@local_config_cuda//cuda:build_defs.bzl", _cuda_library = "cuda_library", 
 load("@local_config_rocm//rocm:build_defs.bzl", _if_rocm_is_configured = "if_rocm_is_configured", _rocm_library = "rocm_library")
 load("@python_version_repo//:py_version.bzl", "HERMETIC_PYTHON_VERSION")
 load("@rules_cc//cc:defs.bzl", _cc_proto_library = "cc_proto_library")
+load("@rules_python//python:defs.bzl", "py_test")
 load("@tsl//tsl/platform:build_config_root.bzl", _tf_cuda_tests_tags = "tf_cuda_tests_tags", _tf_exec_properties = "tf_exec_properties")
 load("@xla//xla/tsl:tsl.bzl", _if_windows = "if_windows", _pybind_extension = "tsl_pybind_extension_opensource")
 
@@ -222,7 +223,7 @@ def if_building_jaxlib(
     })
 
 # buildifier: disable=function-docstring
-def jax_test(
+def jax_multiplatform_test(
         name,
         srcs,
         args = [],
@@ -230,15 +231,22 @@ def jax_test(
         shard_count = None,
         deps = [],
         data = [],
-        disable_backends = None,  # buildifier: disable=unused-variable
+        enable_backends = None,
         backend_variant_args = {},  # buildifier: disable=unused-variable
         backend_tags = {},  # buildifier: disable=unused-variable
         disable_configs = None,  # buildifier: disable=unused-variable
-        enable_configs = None,  # buildifier: disable=unused-variable
+        enable_configs = [],
         config_tags_overrides = None,  # buildifier: disable=unused-variable
         tags = [],
         main = None,
         pjrt_c_api_bypass = False):  # buildifier: disable=unused-variable
+    # enable_configs and disable_configs do not do anything in OSS, only in Google's CI.
+    # The order in which `enable_backends`, `enable_configs`, and `disable_configs` are applied is
+    # as follows:
+    # 1. `enable_backends` is applied first, enabling all test configs for the given backends.
+    # 2. `disable_configs` is applied second, disabling the named test configs.
+    # 3. `enable_configs` is applied last, enabling the named test configs.
+
     if main == None:
         if len(srcs) == 1:
             main = srcs[0]
@@ -255,7 +263,7 @@ def jax_test(
             "--jax_platform_name=" + backend,
         ]
         test_tags = list(tags) + ["jax_test_%s" % backend] + backend_tags.get(backend, [])
-        if disable_backends and backend in disable_backends:
+        if enable_backends != None and backend not in enable_backends and not any([config.startswith(backend) for config in enable_configs]):
             test_tags += ["manual"]
         if backend == "gpu":
             test_tags += tf_cuda_tests_tags()
@@ -267,10 +275,10 @@ def jax_test(
             deps = [
                 "//jax",
                 "//jax:test_util",
-            ] + deps + if_building_jaxlib(["//jaxlib/cuda:gpu_only_test_deps"]) + select({
-                "//jax:enable_build_cuda_plugin_from_source": ["//jax_plugins:gpu_plugin_only_test_deps"],
-                "//conditions:default": [],
-            }),
+            ] + deps + if_building_jaxlib([
+                "//jaxlib/cuda:gpu_only_test_deps",
+                "//jax_plugins:gpu_plugin_only_test_deps",
+            ]),
             data = data,
             shard_count = test_shards,
             tags = test_tags,
@@ -297,3 +305,15 @@ def jax_generate_backend_suites(backends = []):
     )
 
 jax_test_file_visibility = []
+
+def xla_py_proto_library(*args, **kw):  # buildifier: disable=unused-variable
+    pass
+
+def jax_py_test(
+        name,
+        env = {},
+        **kwargs):
+    env = dict(env)
+    if "PYTHONWARNINGS" not in env:
+        env["PYTHONWARNINGS"] = "error"
+    py_test(name = name, env = env, **kwargs)

@@ -59,6 +59,8 @@ def program_id(axis: int) -> jax.Array:
   grid coordinates `(1, 2)`,
   `program_id(axis=0)` returns `1` and `program_id(axis=1)` returns `2`.
 
+  The returned value is an array of shape `()` and dtype `int32`.
+
   Args:
     axis: the axis of the grid along which to count the program.
   """
@@ -177,8 +179,10 @@ def _atomic_abstract_eval(*avals_flat, args_tree, atomic_type: AtomicOpType):
 
 def _atomic_rmw(x_ref_or_view, idx, val, *, mask: Any | None = None,
                 atomic_type: AtomicOpType):
-  x_ref, indexers = sp.get_ref_and_indexers(x_ref_or_view, idx, "atomic_rmw")
-  args_flat, args_tree = tree_util.tree_flatten((x_ref, indexers, val, mask))
+  x_ref, transforms = sp.get_ref_and_transforms(
+      x_ref_or_view, idx, "atomic_rmw"
+  )
+  args_flat, args_tree = tree_util.tree_flatten((x_ref, transforms, val, mask))
   return atomic_rmw_p.bind(
       *args_flat, args_tree=args_tree, atomic_type=atomic_type
   )
@@ -379,7 +383,7 @@ def _load_pp_rule(eqn, context, settings):
   result = [
       lhs,
       pp.text(' <- '),
-      sp.pp_ref_indexers(context, x, indexers)
+      sp.pp_ref_transforms(context, x, indexers)
   ]
   if mask is not None:
     result += [
@@ -421,10 +425,17 @@ ad.primitive_jvps[load_p] = _load_jvp
 def uninitialized_value(shape, dtype):
   if jnp.issubdtype(dtype, jnp.floating):
     return jnp.full(shape, jnp.nan, dtype)
+  # Note: Currently semaphore is i16[], meaning this case needs to be
+  # handled before the general case for integers.
+  # TODO(justinfu): Handle semaphores with a custom extended dtype.
+  elif jnp.issubdtype(dtype, pallas_core.SEMAPHORE_INTERPRET_DTYPE):
+    return jnp.full(shape, 0, dtype)
   elif jnp.issubdtype(dtype, jnp.integer):
     return jnp.full(shape, jnp.iinfo(dtype).min, dtype)
   elif jnp.issubdtype(dtype, jnp.bool):
     return jnp.full(shape, False, dtype)
+  elif jnp.issubdtype(dtype, pallas_core.semaphore_dtype):
+    return jnp.full(shape, 0, dtype)
   raise NotImplementedError(dtype)
 
 def _pad_values_to_avoid_dynamic_slice_oob_shift(value,
@@ -464,7 +475,7 @@ def _load_discharge_rule(in_avals, out_avals, *args_flat, args_tree, **_):
     raise NotImplementedError("Only one indexer supported in discharge rule.")
   idx = indexers[0]
   if all((isinstance(s, Slice) or not s.shape) for s in idx.indices):
-    # TODO(b/329733289): support strided load/store in interpret mode.
+    # TODO(ayx): support strided load/store in interpret mode.
     for s in idx.indices:
       if isinstance(s, Slice) and s.stride > 1:
         raise NotImplementedError("Unimplemented stride support.")
@@ -522,7 +533,7 @@ def _swap_pp_rule(eqn, context, settings):
   # Pretty prints `_ = swap x v i` as `x[i] <- v`
   y, = eqn.outvars
   x, indexers, val, mask = eqn.params["args_tree"].unflatten(eqn.invars)
-  x_i = sp.pp_ref_indexers(context, x, indexers)
+  x_i = sp.pp_ref_transforms(context, x, indexers)
   if isinstance(y, jax_core.DropVar):
     return pp.concat([
         x_i,
@@ -576,7 +587,7 @@ def _swap_discharge_rule(in_avals, out_avals, *args_flat, args_tree, **_):
     raise NotImplementedError("Only one indexer supported in discharge rule.")
   idx = indexers[0]
   if all((isinstance(s, Slice) or not s.shape) for s in idx.indices):
-    # TODO(b/329733289): support strided load/store in interpret mode.
+    # TODO(ayx): support strided load/store in interpret mode.
     for s in idx.indices:
       if isinstance(s, Slice) and s.stride > 1:
         raise NotImplementedError("Unimplemented stride support.")
@@ -631,8 +642,10 @@ def load(x_ref_or_view, idx, *, mask=None, other=None, cache_modifier=None,
     eviction_policy: TO BE DOCUMENTED.
     volatile: TO BE DOCUMENTED.
   """
-  x_ref, indexers = sp.get_ref_and_indexers(x_ref_or_view, idx, "load")
-  args_flat, args_tree = tree_util.tree_flatten((x_ref, indexers, mask, other))
+  x_ref, transforms = sp.get_ref_and_transforms(x_ref_or_view, idx, "load")
+  args_flat, args_tree = tree_util.tree_flatten(
+      (x_ref, transforms, mask, other)
+  )
   return load_p.bind(
       *args_flat,
       args_tree=args_tree,
@@ -650,8 +663,10 @@ def swap(x_ref_or_view, idx, val, *, mask=None, eviction_policy=None,
   Returns:
     The value stored in the ref prior to the swap.
   """
-  x_ref, indexers = sp.get_ref_and_indexers(x_ref_or_view, idx, _function_name)
-  args_flat, args_tree = tree_util.tree_flatten((x_ref, indexers, val, mask))
+  x_ref, transforms = sp.get_ref_and_transforms(
+      x_ref_or_view, idx, _function_name
+  )
+  args_flat, args_tree = tree_util.tree_flatten((x_ref, transforms, val, mask))
   return swap_p.bind(
       *args_flat, args_tree=args_tree, eviction_policy=eviction_policy
   )
@@ -700,8 +715,8 @@ debug_print_p = jax_core.Primitive("debug_print")
 debug_print_p.multiple_results = True
 
 
-def debug_print(fmt: str, *args: jax.ArrayLike):
-  """Prints scalar values from inside a Pallas kernel.
+def debug_print(fmt: str, *args: jax.typing.ArrayLike):
+  """Prints values from inside a Pallas kernel.
 
   Args:
     fmt: A format string to be included in the output. The restrictions on the
@@ -711,11 +726,11 @@ def debug_print(fmt: str, *args: jax.ArrayLike):
         (``{...}``), since it is always printed before any of the values.
       * On GPU, when using the experimental Mosaic GPU backend, ``fmt`` must
         contain a placeholder for each value to be printed. Format specs and
-        conversions are not supported.
+        conversions are not supported. All values must be scalars.
       * In TPU, if ``fmt`` contains placeholders, all values must be 32-bit
         integers. If there are no placeholders, the values are printed after
-        the format string.
-    *args: The scalar values to print.
+        the format string. All values must be scalars.
+    *args: The values to print.
   """  # fmt: skip
   has_placeholders = False
   if fmt:
@@ -725,7 +740,7 @@ def debug_print(fmt: str, *args: jax.ArrayLike):
 
 
 def check_debug_print_format(
-    fmt: str, *args: jax.ArrayLike
+    fmt: str, *args: jax.typing.ArrayLike
 ):
   n_placeholders = 0
   for _, field, spec, conversion in string.Formatter().parse(fmt):
@@ -758,9 +773,7 @@ def debug_print_impl(*args: Any, fmt: str, has_placeholders: bool):
 
 @debug_print_p.def_effectful_abstract_eval
 def debug_print_abstract_eval(*avals: Any, fmt: str, has_placeholders: bool):
-  del fmt, has_placeholders
-  if any(aval.shape for aval in avals):
-    raise ValueError("Only scalar values are supported")
+  del avals, fmt, has_placeholders  # Unused.
   return [], {debug_print_effect}
 
 
@@ -817,7 +830,7 @@ def run_scoped(f: Callable[..., Any], *types, **kw_types) -> Any:
 
   flat_types, in_tree = tree_util.tree_flatten((types, kw_types))
   flat_fun, out_tree_thunk = api_util.flatten_fun(lu.wrap_init(f), in_tree)
-  avals = [t.get_aval() for t in flat_types]
+  avals = [t.get_ref_aval() for t in flat_types]
   # Turn the function into a jaxpr. The body of run_scoped may have
   # effects (IO) on constvars (i.e. variables inherited from the
   # parent scope). Jax can't reason about effects to references that
@@ -843,3 +856,54 @@ def _run_scoped_abstract_eval(*args, jaxpr):
       )
   }
   return [v.aval for v in jaxpr.outvars], nonlocal_effects
+
+
+def _run_scoped_discharge_rule(in_avals,
+                               out_avals,
+                               *args_flat,
+                               jaxpr,
+                               **_):
+  del out_avals
+  num_consts = len(args_flat)
+  jaxpr_noconst = pe.convert_constvars_jaxpr(jaxpr)
+  num_return_values = len(jaxpr_noconst.outvars)
+  discharged_body, new_consts = state_discharge.discharge_state(
+      jaxpr_noconst, [])
+  if new_consts:
+    raise NotImplementedError(
+        "Cannot handle new consts created by state discharge.")
+  # Create inputs filled with uninitialized values to the body.
+  body_avals = [v.aval for v in discharged_body.invars[num_consts:]]
+  init_vals = [uninitialized_value(
+      aval.shape, aval.dtype) for aval in body_avals]
+  init_vals_with_consts = args_flat + tuple(init_vals)
+  out = jax_core.eval_jaxpr(discharged_body, [], *init_vals_with_consts)
+  # Order of outputs:
+  # (1) return values, (2) closed refs, (3) scoped refs.
+  return_values = out[:num_return_values]
+  ref_outputs = out[num_return_values:]
+  # We update all ref values with their updated values from the discharged
+  # body. For other values we leave them in place.
+  updates = [
+      ref_outputs.pop(0) if isinstance(aval, pallas_core.AbstractMemoryRef)
+      else None for aval in in_avals]
+  assert len(ref_outputs) == len(
+      body_avals), f'{len(body_avals)}, != {len(ref_outputs)}'
+  assert len(updates) == len(in_avals), f'{len(updates)} != {len(in_avals)}'
+  return updates, return_values
+
+
+state_discharge.register_discharge_rule(run_scoped_p)(
+    _run_scoped_discharge_rule)
+
+
+@functools.partial(mlir.register_lowering, run_scoped_p)
+def _run_scoped_lowering_rule(ctx, *args, jaxpr):
+  # This lowering rule gets triggered when run_scoped is not discharged.
+  # In this case there are no stateful effects to handle.
+  def _lower_fun(*lower_fun_args):
+    updates, out = _run_scoped_discharge_rule([], [], *lower_fun_args,
+                               jaxpr=jaxpr)
+    assert len(updates) == 0, 'Cannot lower run_scoped with effects.'
+    return out
+  return mlir.lower_fun(_lower_fun, multiple_results=True)(ctx, *args)

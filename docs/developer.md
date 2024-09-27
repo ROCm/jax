@@ -6,7 +6,7 @@
 First, obtain the JAX source code:
 
 ```
-git clone https://github.com/google/jax
+git clone https://github.com/jax-ml/jax
 cd jax
 ```
 
@@ -26,28 +26,38 @@ If you're only modifying Python portions of JAX, we recommend installing
 pip install jaxlib
 ```
 
-See the [JAX readme](https://github.com/google/jax#installation) for full
+See the [JAX readme](https://github.com/jax-ml/jax#installation) for full
 guidance on pip installation (e.g., for GPU and TPU support).
 
 ### Building `jaxlib` from source
 
+```{warning}
+While it should typically be possible to compile `jaxlib` from source using
+most modern compilers, the builds are only tested using clang. Pull requests
+are welcomed to improve support for different toolchains, but other compilers
+are not actively supported.
+```
+
 To build `jaxlib` from source, you must also install some prerequisites:
 
-- a C++ compiler (g++, clang, or MSVC)
+- A C++ compiler:
 
-  On Ubuntu or Debian you can install the necessary prerequisites with:
+  As mentioned in the box above, it is best to use a recent version of clang
+  (at the time of writing, the version we test is 18), but other compilers (e.g.
+  g++ or MSVC) may work.
 
-  ```
-  sudo apt install g++ python python3-dev
-  ```
+  On Ubuntu or Debian you can follow the instructions from the
+  [LLVM](https://apt.llvm.org/) documentation to install the latest stable
+  version of clang.
 
   If you are building on a Mac, make sure XCode and the XCode command line tools
   are installed.
 
   See below for Windows build instructions.
 
-- there is no need to install Python dependencies locally, as your system
-  Python will be ignored during the build; please check
+- Python: for running the build helper script. Note that there is no need to
+  install Python dependencies locally, as your system Python will be ignored
+  during the build; please check
   [Managing hermetic Python](#managing-hermetic-python) for details.
 
 To build `jaxlib` for CPU or TPU, you can run:
@@ -75,17 +85,44 @@ There are two ways to build `jaxlib` with CUDA support: (1) use
 `python build/build.py --enable_cuda` to generate a jaxlib wheel with cuda
 support, or (2) use
 `python build/build.py --enable_cuda --build_gpu_plugin --gpu_plugin_cuda_version=12`
-to generate three wheels (jaxlib without cuda, jax-cuda-plugin,
-and jax-cuda-pjrt). You can set `gpu_plugin_cuda_version` to 11 or 12.
+to generate three wheels (jaxlib without cuda, jax-cuda-plugin, and
+jax-cuda-pjrt). By default all CUDA compilation steps performed by NVCC and 
+clang, but it can be restricted to clang via the `--nouse_cuda_nvcc` flag.
 
-See `python build/build.py --help` for configuration options, including ways to
-specify the paths to CUDA and CUDNN, which you must have installed. Here
+See `python build/build.py --help` for configuration options. Here
 `python` should be the name of your Python 3 interpreter; on some systems, you
 may need to use `python3` instead. Despite calling the script with `python`,
 Bazel will always use its own hermetic Python interpreter and dependencies, only
 the `build/build.py` script itself will be processed by your system Python
 interpreter. By default, the wheel is written to the `dist/` subdirectory of the
 current directory.
+
+*  JAX versions starting from v.0.4.32: you can provide custom CUDA and CUDNN
+   versions in the configuration options. Bazel will download them and use as
+   target dependencies.
+
+   To download the specific versions of CUDA/CUDNN redistributions, you can use
+   the following command:
+
+   ```bash
+   python build/build.py --enable_cuda \
+   --cuda_version=12.3.2 --cudnn_version=9.1.1
+   ```
+
+   To point to CUDA/CUDNN/NCCL redistributions on local file system, you can use
+   the following command:
+
+   ```bash
+   python build/build.py --enable_cuda \
+   --bazel_options=--repo_env=LOCAL_CUDA_PATH="/foo/bar/nvidia/cuda" \
+   --bazel_options=--repo_env=LOCAL_CUDNN_PATH="/foo/bar/nvidia/cudnn" \
+   --bazel_options=--repo_env=LOCAL_NCCL_PATH="/foo/bar/nvidia/nccl"
+   ```
+
+   Please see the full list of instructions in [XLA documentation](https://github.com/openxla/xla/blob/main/docs/hermetic_cuda.md).
+
+*  JAX versions prior v.0.4.32: you must have CUDA and CUDNN installed and
+   provide paths to them using configuration options.
 
 ### Building jaxlib from source with a modified XLA repository.
 
@@ -111,6 +148,8 @@ The version of XLA pinned by JAX is regularly updated, but is updated in
 particular before each `jaxlib` release.
 
 ### Additional Notes for Building `jaxlib` from source on Windows
+
+Note: JAX does not support CUDA on Windows; use WSL2 for CUDA support.
 
 On Windows, follow [Install Visual Studio](https://docs.microsoft.com/en-us/visualstudio/install/install-visual-studio?view=vs-2019)
 to set up a C++ toolchain. Visual Studio 2019 version 16.5 or newer is required.
@@ -231,8 +270,8 @@ together with their corresponding hashes are specified in
 `build/requirements_lock_<python version>.txt` files (
 e.g. `build/requirements_lock_3_12.txt` for `Python 3.12`).
 
-To update the lock files, make sure `build/requirements.in` contains the desired 
-direct dependencies list and then execute the following command (which will call 
+To update the lock files, make sure `build/requirements.in` contains the desired
+direct dependencies list and then execute the following command (which will call
 [pip-compile](https://pypi.org/project/pip-tools/) under the hood):
 
 ```
@@ -327,17 +366,24 @@ sudo apt-get install libopenblas-dev -y
    has `custom_python_interpreter()` entry there, pointing to the version of
    Python you want to build.
 
-3) Run `bazel build @python_dev//:python_dev` to build Python interpreter. By default it will
-   be built with GCC compiler. If you wish to build with clang, you need to set
-   corresponding env variables to do so (
+3) Run `bazel build @python_dev//:python_dev -repo_env=HERMETIC_PYTHON_VERSION=3.12`
+   to build Python interpreter. Note, it is easy to confuse Python version used
+   to conduct the build (which is needed for technical reasons and is defined by
+   `HERMETIC_PYTHON_VERSION=3.12`) and the version of Python you are building
+   (defined by whichever version you specified in `custom_python_interpreter()`
+   on step 2). For build to succeed, please make sure that hermetic Python you
+   choose to conduct the build already exists in your configuraiton (the actual
+   version does not matter, as long as it is a working one). By default, Python
+   binary will be built with GCC compiler. If you wish to build it with clang,
+   you need to set corresponding env variables to do so (
    e.g. `--repo_env=CC=/usr/lib/llvm-17/bin/clang --repo_env=CXX=/usr/lib/llvm-17/bin/clang++`).
 
 4) Check the output of the previous command. At the very end of it you will find
    a code snippet for `python_register_toolchains()` entry with your newly built
    Python in it. Copy that code snippet in your `WORKSPACE` file either right
    after  `python_init_toolchains()` entry (to add the new version of Python) or
-   instead of it (to replace an existing version, like replacing 3.12 with
-   custom built variant of 3.12). The code snippet is generated to match your
+   instead of it (to replace an existing version, like replacing `3.12` with
+   custom built variant of `3.12`). The code snippet is generated to match your
    actual setup, so it should work as is, but you can customize it if you choose
    so (for example to change location of Python's `.tgz` file so it could be
    downloaded remotely instead of being on local machine).
@@ -345,7 +391,11 @@ sudo apt-get install libopenblas-dev -y
 5) Make sure there is an entry for your Python's version in `requirements`
    parameter for `python_init_repositories()` in your WORKSPACE file. For
    example for `Python 3.13` it should have something
-   like `"3.13": "//build:requirements_lock_3_13.txt"`.
+   like `"3.13": "//build:requirements_lock_3_13.txt"`. Note, the key in the
+   `requirements` parameter must always be in `"major.minor"` version format, so
+   even if you are building Python version `3.13.0rc1` the corresponding
+   `requirements` entry must still be `"3.13": "//build:requirements_lock_3_13.txt"`,
+   **not** `"3.13.0rc1": "//build:requirements_lock_3_13_0rc1.txt"`.
 
 6) For unstable versions of Python, optionally (but highly recommended)
    run `bazel build //build:all_py_deps --repo_env=HERMETIC_PYTHON_VERSION="3.13"`,
@@ -572,7 +622,7 @@ pytest --doctest-modules jax/_src/numpy/lax_numpy.py
 
 Keep in mind that there are several files that are marked to be skipped when the
 doctest command is run on the full package; you can see the details in
-[`ci-build.yaml`](https://github.com/google/jax/blob/main/.github/workflows/ci-build.yaml)
+[`ci-build.yaml`](https://github.com/jax-ml/jax/blob/main/.github/workflows/ci-build.yaml)
 
 ## Type checking
 
@@ -658,12 +708,12 @@ using [jupytext](https://jupytext.readthedocs.io/) by running `jupytext --sync` 
 notebooks; for example:
 
 ```
-pip install jupytext==1.16.0
+pip install jupytext==1.16.4
 jupytext --sync docs/notebooks/thinking_in_jax.ipynb
 ```
 
 The jupytext version should match that specified in
-[.pre-commit-config.yaml](https://github.com/google/jax/blob/main/.pre-commit-config.yaml).
+[.pre-commit-config.yaml](https://github.com/jax-ml/jax/blob/main/.pre-commit-config.yaml).
 
 To check that the markdown and ipynb files are properly synced, you may use the
 [pre-commit](https://pre-commit.com/) framework to perform the same check used
@@ -691,12 +741,12 @@ desired formats, and which the `jupytext --sync` command recognizes when invoked
 Some of the notebooks are built automatically as part of the pre-submit checks and
 as part of the [Read the docs](https://jax.readthedocs.io/en/latest) build.
 The build will fail if cells raise errors. If the errors are intentional, you can either catch them,
-or tag the cell with `raises-exceptions` metadata ([example PR](https://github.com/google/jax/pull/2402/files)).
+or tag the cell with `raises-exceptions` metadata ([example PR](https://github.com/jax-ml/jax/pull/2402/files)).
 You have to add this metadata by hand in the `.ipynb` file. It will be preserved when somebody else
 re-saves the notebook.
 
 We exclude some notebooks from the build, e.g., because they contain long computations.
-See `exclude_patterns` in [conf.py](https://github.com/google/jax/blob/main/docs/conf.py).
+See `exclude_patterns` in [conf.py](https://github.com/jax-ml/jax/blob/main/docs/conf.py).
 
 ### Documentation building on `readthedocs.io`
 
@@ -723,7 +773,7 @@ I saw in the Readthedocs logs:
 mkvirtualenv jax-docs  # A new virtualenv
 mkdir jax-docs  # A new directory
 cd jax-docs
-git clone --no-single-branch --depth 50 https://github.com/google/jax
+git clone --no-single-branch --depth 50 https://github.com/jax-ml/jax
 cd jax
 git checkout --force origin/test-docs
 git clean -d -f -f

@@ -5,14 +5,14 @@ jupytext:
     extension: .md
     format_name: myst
     format_version: 0.13
-    jupytext_version: 1.16.1
+    jupytext_version: 1.16.4
 kernelspec:
   display_name: Python 3
   language: python
   name: python3
 ---
 
-# Stateful Computations
+# Stateful computations
 
 <!--* freshness: { reviewed: '2024-05-03' } *-->
 
@@ -144,7 +144,7 @@ This is because, like the strategy we just applied, object-oriented programming 
 
 In our case, the `CounterV2` class is nothing more than a namespace bringing all the functions that use `CounterState` into one location. Exercise for the reader: do you think it makes sense to keep it as a class?
 
-Incidentally, you've already seen an example of this strategy in the JAX pseudo-randomness API, {mod}`jax.random`, shown in the :ref:`pseudorandom-numbers` section.
+Incidentally, you've already seen an example of this strategy in the JAX pseudo-randomness API, {mod}`jax.random`, shown in the {ref}`pseudorandom-numbers` section.
 Unlike Numpy, which manages random state using implicitly updated stateful classes, JAX requires the programmer to work directly with the random generator state -- the PRNG key.
 
 
@@ -234,4 +234,4 @@ Handling parameters manually seems fine if you're dealing with two parameters, b
 
 2) Are we supposed to pipe all these things around manually?
 
-The details can be tricky to handle, but there are examples of libraries that take care of this for you. See [JAX Neural Network Libraries](https://github.com/google/jax#neural-network-libraries) for some examples.
+The details can be tricky to handle, but there are examples of libraries that take care of this for you. See [JAX Neural Network Libraries](https://github.com/jax-ml/jax#neural-network-libraries) for some examples.

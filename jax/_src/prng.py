@@ -321,6 +321,7 @@ def base_arr_shape_to_keys_shape(impl, base_arr_shape):
 
 
 class KeyTyRules:
+  allow_conversion: bool = False
 
   @staticmethod
   def full(shape, fill_value, dtype):
@@ -425,14 +426,6 @@ class KeyTyRules:
   def zero(_):
     return np.zeros((), dtypes.float0)
 
-  @staticmethod
-  def convert_from(key_dtype, other_dtype) -> bool:
-    return False
-
-  @staticmethod
-  def convert_to(other_dtype, key_dtype) -> bool:
-    return False
-
 
 class KeyTy(dtypes.ExtendedDType):
   _impl: PRNGImpl  # TODO(mattjj,frostig): protocol really
@@ -466,11 +459,12 @@ xla.pytype_aval_mappings[PRNGKeyArray] = lambda x: x.aval
 xla.canonicalize_dtype_handlers[PRNGKeyArray] = lambda x: x
 
 
-def key_array_shard_arg_handler(xs: Sequence[PRNGKeyArray], shardings):
+def key_array_shard_arg_handler(xs: Sequence[PRNGKeyArray], shardings, layouts):
   arrs = [x._base_array for x in xs]
   phys_shardings = [physical_sharding(x.aval, sharding)
                     for x, sharding in zip(xs, shardings)]
-  return pxla.shard_args(phys_shardings, arrs)
+  # TODO(yashkatariya): `layouts` should be converted to physical layouts.
+  return pxla.shard_args(phys_shardings, layouts, arrs)
 
 
 pxla.shard_arg_handlers[PRNGKeyArray] = key_array_shard_arg_handler

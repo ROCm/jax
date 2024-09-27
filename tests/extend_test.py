@@ -15,7 +15,8 @@
 import os
 
 import numpy as np
-from absl.testing import absltest, parameterized
+from absl.testing import absltest
+from absl.testing import parameterized
 
 import jax
 from jax import lax
@@ -30,8 +31,8 @@ from jax._src import prng
 from jax._src import test_util as jtu
 from jax._src import xla_bridge
 from jax._src.interpreters import mlir
-from jax._src.lib.mlir import ir
-from jax._src.extend import ffi
+from jax._src.layout import DeviceLocalLayout
+from jax._src.lib.mlir.dialects import hlo
 
 jax.config.parse_flags_with_absl()
 
@@ -97,30 +98,85 @@ class RandomTest(jtu.JaxTestCase):
 
 class FfiTest(jtu.JaxTestCase):
 
+  def find_custom_call_in_module(self, module):
+    for func in module.body.operations:
+      for block in func.body.blocks:
+        for op in block.operations:
+          if op.OPERATION_NAME == "stablehlo.custom_call":
+            return op
+    self.fail("No custom_call found in the lowered IR")
+
   def testHeadersExist(self):
     base_dir = os.path.join(jex.ffi.include_dir(), "xla", "ffi", "api")
     for header in ["c_api.h", "api.h", "ffi.h"]:
       self.assertTrue(os.path.exists(os.path.join(base_dir, header)))
 
-  @parameterized.parameters(
-      [True, int(1), float(5.0),
-       np.int32(-5), np.float32(0.5)])
-  def testIrAttribute(self, value):
-    with mlir.make_ir_context(), ir.Location.unknown():
-      const = mlir.ir_constant(value)
-      attr = ffi._ir_attribute(value)
-      assert const.type.element_type == attr.type
-
-  @parameterized.parameters([True, 1, 5.0, "param", np.float32(0.5)])
-  def testParams(self, param):
+  @parameterized.parameters([
+    (tuple(range(3)), tuple(range(3))),
+    (None, tuple(reversed(range(3)))),
+    (DeviceLocalLayout(tuple(range(3))), tuple(reversed(range(3)))),
+  ])
+  def testLoweringLayouts(self, layout_spec, expected_layout):
+    # Regression test to ensure that the lowering rule properly captures
+    # layouts.
+    def lowering_rule(ctx, x):
+      aval, = ctx.avals_in
+      ndim = len(aval.shape)
+      return jex.ffi.ffi_lowering("test_ffi", operand_layouts=[layout_spec],
+                                  result_layouts=[layout_spec])(ctx, x)
     prim = core.Primitive("test_ffi")
-    prim.def_abstract_eval(lambda *args, **kwargs: args[0])
-    mlir.register_lowering(prim, jex.ffi.ffi_lowering("test_ffi"))
+    prim.def_impl(lambda x: x)
+    prim.def_abstract_eval(lambda x: x)
+    mlir.register_lowering(prim, lowering_rule)
 
-    # TODO(dfm): Currently testing that lowering works with different types of
-    # parameters, but we should probably actually check the emitted HLO.
-    func = jax.jit(lambda *args: prim.bind(*args, param=param))
-    func.lower(jnp.linspace(0, 5, 10))
+    x = jnp.ones((3,) * len(expected_layout))
+    lowered = jax.jit(prim.bind).lower(x)
+    module = lowered.compiler_ir("stablehlo")
+    op = self.find_custom_call_in_module(module)
+    self.assertIn("operand_layouts", op.attributes)
+    self.assertIn("result_layouts", op.attributes)
+
+    text = lowered.as_text()
+    expected = ", ".join(map(str, expected_layout))
+    pattern = rf"operand_layouts = \[dense<\[{expected}\]>"
+    self.assertRegex(text, pattern)
+    pattern = rf"result_layouts = \[dense<\[{expected}\]>"
+    self.assertRegex(text, pattern)
+
+  @parameterized.parameters([
+      (True, mlir.ir.BoolAttr.get),
+      (1, mlir.i64_attr),
+      (5.0, lambda x: mlir.ir.FloatAttr.get(mlir.ir.F64Type.get(), x)),
+      ("param", mlir.ir.StringAttr.get),
+      (np.float32(0.5),
+       lambda x: mlir.ir.FloatAttr.get(mlir.ir.F32Type.get(), x)),
+  ])
+  def testParams(self, param, expected_builder):
+    def fun(x):
+      return jex.ffi.ffi_call("test_ffi", x, x, param=param)
+
+    # Here we inspect the lowered IR to test that the parameter has been
+    # serialized with the appropriate type.
+    module = jax.jit(fun).lower(0.5).compiler_ir("stablehlo")
+    op = self.find_custom_call_in_module(module)
+    config = op.attributes["mhlo.backend_config"]
+    self.assertIsInstance(config, mlir.ir.DictAttr)
+    self.assertIn("param", config)
+    with mlir.make_ir_context(), mlir.ir.Location.unknown():
+      expected = expected_builder(param)
+    self.assertEqual(type(config["param"]), type(expected))
+    self.assertTrue(expected.type.isinstance(config["param"].type))
+
+  def testToken(self):
+    def fun():
+      token = lax.create_token()
+      return jex.ffi.ffi_call("test_ffi", core.abstract_token, token)
+
+    # Ensure that token inputs and outputs are translated to the correct type
+    module = jax.jit(fun).lower().compiler_ir("stablehlo")
+    op = self.find_custom_call_in_module(module)
+    self.assertTrue(hlo.TokenType.isinstance(op.operands[0].type))
+    self.assertTrue(hlo.TokenType.isinstance(op.results[0].type))
 
   @jtu.sample_product(
     shape=[(1,), (4,), (5,)],
@@ -166,6 +222,7 @@ def ffi_call_lu_pivots_to_permutation(pivots, permutation_size, vectorized=True)
           dtype=pivots.dtype,
       ),
       pivots,
+      # TODO(b/358275922): Remove this after jaxlib v0.4.32 is released.
       permutation_size=np.int32(permutation_size),
       vectorized=vectorized,
   )

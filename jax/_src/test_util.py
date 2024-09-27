@@ -39,6 +39,7 @@ from absl.testing import parameterized
 import jax
 from jax import lax
 from jax._src import api
+from jax._src import array
 from jax._src import config
 from jax._src import core
 from jax._src import dispatch
@@ -172,7 +173,7 @@ def _normalize_tolerance(tol):
   if isinstance(tol, dict):
     return {np.dtype(k): v for k, v in tol.items()}
   else:
-    return {k: tol for k in _default_tolerance}
+    return dict.fromkeys(_default_tolerance, tol)
 
 def join_tolerance(tol1, tol2):
   tol1 = _normalize_tolerance(tol1)
@@ -365,7 +366,7 @@ def count_aot_jit_cpp_cache_miss():
 
 
 @contextmanager
-def count_jit_and_pmap_compiles():
+def count_jit_and_pmap_lowerings():
   # No need to clear any caches since we generally jit and pmap fresh callables
   # in tests.
 
@@ -381,6 +382,44 @@ def count_jit_and_pmap_compiles():
     yield count
   finally:
     mlir.lower_jaxpr_to_module = mlir_lower
+
+
+@contextmanager
+def count_jax_array_shard_arg_calls():
+  # No need to clear any caches since we generally jit and pmap fresh callables
+  # in tests.
+
+  array_shard_arg = array._array_shard_arg
+  count = [0]
+
+  def array_shard_arg_and_count(*args, **kwargs):
+    count[0] += 1
+    return array_shard_arg(*args, **kwargs)
+
+  pxla.shard_arg_handlers[array.ArrayImpl] = array_shard_arg_and_count
+  try:
+    yield count
+  finally:
+    pxla.shard_arg_handlers[array.ArrayImpl] = array_shard_arg
+
+
+@contextmanager
+def count_jit_compilation_cache_miss():
+  # No need to clear any caches since we generally jit and pmap fresh callables
+  # in tests.
+
+  jit_compilation = pxla._cached_compilation
+  count = [0]
+
+  def compile_and_count(*args, **kwargs):
+    count[0] += 1
+    return jit_compilation(*args, **kwargs)
+
+  pxla._cached_compilation = compile_and_count
+  try:
+    yield count
+  finally:
+    pxla._cached_compilation = jit_compilation
 
 
 @contextmanager
@@ -405,7 +444,7 @@ def count_subjaxpr_to_hlo_conversion(fun_name: str):
 
 @contextmanager
 def assert_num_jit_and_pmap_compilations(times):
-  with count_jit_and_pmap_compiles() as count:
+  with count_jit_and_pmap_lowerings() as count:
     yield
   if count[0] != times:
     raise AssertionError(f"Expected exactly {times} XLA compilations, "
@@ -487,6 +526,8 @@ def is_device_tpu(version: int | None = None, variant: str = "") -> bool:
   # Special case v5e until the name is updated in device_kind
   if expected_version == "v5e":
     return "v5 lite" in device_kind
+  elif expected_version == "v6e":
+    return "v6 lite" in device_kind
   return expected_version in device_kind
 
 def is_cuda_compute_capability_at_least(capability: str) -> bool:
@@ -1167,7 +1208,7 @@ class JaxTestCase(parameterized.TestCase):
     y = np.asarray(y)
 
     if (not allow_object_dtype) and (x.dtype == object or y.dtype == object):
-      # See https://github.com/google/jax/issues/17867
+      # See https://github.com/jax-ml/jax/issues/17867
       raise TypeError(
         "assertArraysEqual may be poorly behaved when np.asarray casts to dtype=object. "
         "If comparing PRNG keys, consider random_test.KeyArrayTest.assertKeysEqual. "
@@ -1356,15 +1397,16 @@ def with_and_without_mesh(f):
       ('Mesh', (('x', 2),), (('i', 'x'),))
     ))(with_mesh_from_kwargs(f))
 
-def create_global_mesh(mesh_shape, axis_names):
+def create_mesh(mesh_shape, axis_names, iota_order=False):
   size = math.prod(mesh_shape)
   if len(jax.devices()) < size:
     raise unittest.SkipTest(f"Test requires {size} global devices.")
-  devices = sorted(jax.devices(), key=lambda d: d.id)
-  mesh_devices = np.array(devices[:size]).reshape(mesh_shape)
-  global_mesh = jax.sharding.Mesh(mesh_devices, axis_names)
-  return global_mesh
-
+  if iota_order:
+    devices = sorted(jax.devices(), key=lambda d: d.id)
+    mesh_devices = np.array(devices[:size]).reshape(mesh_shape)
+    return jax.sharding.Mesh(mesh_devices, axis_names)
+  else:
+    return jax.make_mesh(mesh_shape, axis_names)
 
 class _cached_property:
   null = object()
@@ -1943,7 +1985,7 @@ class numpy_with_mpmath:
       # On branch cut, mpmath.mp.asin returns different value compared
       # to mpmath.fp.asin and numpy.arcsin (see
       # mpmath/mpmath#786). The following if-block ensures
-      # compatibiliy with numpy.arcsin.
+      # compatibility with numpy.arcsin.
       if x.real > 1 and x.imag == 0:
         return ctx.asin(x).conjugate()
 
@@ -1975,7 +2017,7 @@ class numpy_with_mpmath:
         return ctx.make_mpc((real._mpf_, (-sign_imag * inf)._mpf_))
       # On branch cut, mpmath.mp.acos returns different value
       # compared to mpmath.fp.acos and numpy.arccos. The
-      # following if-block ensures compatibiliy with
+      # following if-block ensures compatibility with
       # numpy.arccos.
       if x.imag == 0 and x.real > 1:
         return -ctx.acos(x)
@@ -2004,7 +2046,7 @@ class numpy_with_mpmath:
       # On branch cut, mpmath.mp.asinh returns different value
       # compared to mpmath.fp.asinh and numpy.arcsinh (see
       # mpmath/mpmath#786).  The following if-block ensures
-      # compatibiliy with numpy.arcsinh.
+      # compatibility with numpy.arcsinh.
       if x.real == 0 and x.imag < -1:
         return (-ctx.asinh(x)).conjugate()
     return ctx.asinh(x)
@@ -2031,6 +2073,51 @@ class numpy_with_mpmath:
         imag = sign_imag * pi / 2
         return ctx.make_mpc((inf._mpf_, imag._mpf_))
     return ctx.acosh(x)
+
+  def arctan(self, x):
+    ctx = x.context
+
+    if isinstance(x, ctx.mpc):
+      # Workaround mpmath 1.3 bug in atan(+-inf+-infj) evaluation
+      # (see mpmath/mpmath#775 with the fix).
+      # TODO(pearu): remove the if-block below when mpmath 1.4 or
+      # newer will be the required test dependency.
+      pi = ctx.pi
+      zero = ctx.zero
+      if ctx.isinf(x.real) or ctx.isinf(x.imag):
+        if x.real < 0:
+          return ctx.make_mpc(((-pi / 2)._mpf_, zero._mpf_))
+        return ctx.make_mpc(((pi / 2)._mpf_, zero._mpf_))
+
+      # On branch cut, mpmath.mp.atan returns different value compared
+      # to mpmath.fp.atan and numpy.arctan (see mpmath/mpmath#865).
+      # The following if-block ensures compatibility with
+      # numpy.arctan.
+      if x.real == 0 and x.imag < -1:
+        return (-ctx.atan(x)).conjugate()
+    return ctx.atan(x)
+
+  def arctanh(self, x):
+    ctx = x.context
+
+    if isinstance(x, ctx.mpc):
+      # Workaround mpmath 1.3 bug in atanh(+-inf+-infj) evaluation
+      # (see mpmath/mpmath#775 with the fix).
+      # TODO(pearu): remove the if-block below when mpmath 1.4 or
+      # newer will be the required test dependency.
+      pi = ctx.pi
+      zero = ctx.zero
+      if ctx.isinf(x.real) or ctx.isinf(x.imag):
+        if x.imag < 0:
+          return ctx.make_mpc((zero._mpf_, (-pi / 2)._mpf_))
+        return ctx.make_mpc((zero._mpf_, (pi / 2)._mpf_))
+
+      # On branch cut, mpmath.mp.atanh returns different value
+      # compared to mpmath.fp.atanh and numpy.arctanh.  The following
+      # if-block ensures compatibility with numpy.arctanh.
+      if x.imag == 0 and x.real > 1:
+        return ctx.atanh(x).conjugate()
+    return ctx.atanh(x)
 
   def normalize(self, exact, reference, value):
     """Normalize reference and value using precision defined by the

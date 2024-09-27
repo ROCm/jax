@@ -57,20 +57,6 @@ config_setting(
     },
 )
 
-# When `build_cuda_plugin_from_source` is true, it assumes running `bazel test` without preinstalled
-# cuda plugin.
-bool_flag(
-    name = "build_cuda_plugin_from_source",
-    build_setting_default = False,
-)
-
-config_setting(
-    name = "enable_build_cuda_plugin_from_source",
-    flag_values = {
-        ":build_cuda_plugin_from_source": "True",
-    },
-)
-
 exports_files([
     "LICENSE",
     "version.py",
@@ -90,39 +76,32 @@ package_group(
     packages = [
         # Intentionally avoid jax dependencies on jax.extend.
         # See https://jax.readthedocs.io/en/latest/jep/15856-jex.html
-        "//third_party/py/jax/tests/...",
+        "//tests/...",
     ] + jax_extend_internal_users,
 )
 
 package_group(
     name = "mosaic_users",
-    packages = [
-        "//...",
-    ] + mosaic_internal_users,
+    includes = [":internal"],
+    packages = mosaic_internal_users,
 )
 
 package_group(
     name = "pallas_gpu_users",
-    packages = [
-        "//...",
-        "//learning/brain/research/jax",
-    ] + pallas_gpu_internal_users,
+    includes = [":internal"],
+    packages = pallas_gpu_internal_users,
 )
 
 package_group(
     name = "pallas_tpu_users",
-    packages = [
-        "//...",
-        "//learning/brain/research/jax",
-    ] + pallas_tpu_internal_users,
+    includes = [":internal"],
+    packages = pallas_tpu_internal_users,
 )
 
 package_group(
     name = "mosaic_gpu_users",
-    packages = [
-        "//...",
-        "//learning/brain/research/jax",
-    ] + mosaic_gpu_internal_users,
+    includes = [":internal"],
+    packages = mosaic_gpu_internal_users,
 )
 
 # JAX-private test utilities.
@@ -295,6 +274,7 @@ py_library_providing_imports_info(
         ":dtypes",
         ":effects",
         ":environment_info",
+        ":internal_mesh_utils",
         ":jaxpr_util",
         ":layout",
         ":lazy_loader",
@@ -319,6 +299,7 @@ py_library_providing_imports_info(
         ":version",
         ":xla",
         ":xla_bridge",
+        ":xla_metadata",
         "//jax/_src/lib",
     ] + py_deps("numpy") + py_deps("scipy") + py_deps("opt_einsum") + py_deps("flatbuffers") + jax_extra_deps,
 )
@@ -471,6 +452,7 @@ pytype_strict_library(
         ":tree_util",
         ":typing",
         ":util",
+        ":xla_metadata",
         "//jax/_src/lib",
     ] + py_deps("numpy"),
 )
@@ -670,9 +652,9 @@ pytype_strict_library(
         ":pallas_gpu_users",
     ],
     deps = [
-        ":pallas",
         "//jax/_src/pallas/mosaic_gpu:core",  # build_cleaner: keep
         "//jax/_src/pallas/mosaic_gpu:pallas_call_registration",  # build_cleaner: keep
+        "//jax/_src/pallas/triton:core",
         "//jax/_src/pallas/triton:pallas_call_registration",  # build_cleaner: keep
         "//jax/_src/pallas/triton:primitives",
     ],
@@ -723,6 +705,7 @@ pytype_strict_library(
         ":state_types",
         ":tree_util",
         ":util",
+        ":xla_metadata",
     ] + py_deps("numpy"),
 )
 
@@ -785,7 +768,15 @@ pytype_strict_library(
 pytype_strict_library(
     name = "compute_on",
     srcs = ["_src/compute_on.py"],
-    deps = [],
+    deps = [":config"],
+)
+
+pytype_strict_library(
+    name = "xla_metadata",
+    srcs = ["_src/xla_metadata.py"],
+    deps = [
+        ":config",
+    ],
 )
 
 pytype_strict_library(
@@ -805,6 +796,7 @@ pytype_strict_library(
     deps = [
         ":config",
         ":core",
+        ":internal_mesh_utils",
         ":mesh",
         ":op_shardings",
         ":partition_spec",
@@ -828,6 +820,14 @@ pytype_strict_library(
     ] + py_deps("numpy"),
 )
 
+pytype_library(
+    name = "internal_mesh_utils",
+    srcs = ["_src/mesh_utils.py"],
+    deps = [
+        ":xla_bridge",
+    ],
+)
+
 pytype_strict_library(
     name = "source_info_util",
     srcs = ["_src/source_info_util.py"],
@@ -848,6 +848,7 @@ pytype_strict_library(
     ],
     deps = [
         ":core",
+        ":dtypes",
         ":effects",
         ":pretty_printer",
         ":tree_util",
@@ -943,6 +944,7 @@ pytype_strict_library(
         "_src/clusters/__init__.py",
         "_src/clusters/cloud_tpu_cluster.py",
         "_src/clusters/cluster.py",
+        "_src/clusters/k8s_cluster.py",
         "_src/clusters/mpi4py_cluster.py",
         "_src/clusters/ompi_cluster.py",
         "_src/clusters/slurm_cluster.py",
@@ -1085,7 +1087,7 @@ pytype_library(
     srcs = ["experimental/mesh_utils.py"],
     visibility = ["//visibility:public"],
     deps = [
-        ":xla_bridge",
+        ":internal_mesh_utils",
     ],
 )
 

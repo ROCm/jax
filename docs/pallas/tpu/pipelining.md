@@ -5,11 +5,13 @@ jupytext:
     extension: .md
     format_name: myst
     format_version: 0.13
-    jupytext_version: 1.16.1
+    jupytext_version: 1.16.4
 kernelspec:
   display_name: Python 3
   name: python3
 ---
+
+(pallas_tpu_pipelining)=
 
 +++ {"id": "teoJ_fUwlu0l"}
 
@@ -29,6 +31,7 @@ pipelines in Pallas that overlap memory I/O with compute.
 
 import jax
 from jax.experimental import pallas as pl
+from jax.experimental.pallas import tpu as pltpu
 import jax.numpy as jnp
 import numpy as np
 ```
@@ -465,7 +468,7 @@ def add_matrices_pipelined_megacore(x: jax.Array, y: jax.Array) -> jax.Array:
       in_specs=[block_spec, block_spec],
       out_specs=block_spec,
       grid=(2,),
-      compiler_params=dict(mosaic=dict(dimension_semantics=("parallel",)))
+      compiler_params=pltpu.TPUCompilerParams(dimension_semantics=("parallel",))
   )(x, y)
 
 x, y = jnp.ones((512, 512)), jnp.ones((512, 512))

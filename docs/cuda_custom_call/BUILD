@@ -16,7 +16,7 @@ load(
     "//jaxlib:jax.bzl",
     "cuda_library",
     "jax_generate_backend_suites",
-    "jax_test",
+    "jax_multiplatform_test",
 )
 
 licenses(["notice"])
@@ -28,14 +28,11 @@ package(
 
 jax_generate_backend_suites()
 
-jax_test(
+jax_multiplatform_test(
     name = "cuda_custom_call_test",
     srcs = ["cuda_custom_call_test.py"],
     data = [":foo"],
-    disable_backends = [
-        "cpu",
-        "tpu",
-    ],
+    enable_backends = ["gpu"],
     tags = ["notap"],
     deps = [
         "//jax:extend",
@@ -56,8 +53,8 @@ cuda_library(
     name = "foo_",
     srcs = ["foo.cu.cc"],
     deps = [
+        "@local_config_cuda//cuda:cuda_headers",
         "@xla//xla/ffi/api:c_api",
         "@xla//xla/ffi/api:ffi",
-        "@local_config_cuda//cuda:cuda_headers",
     ],
 )

@@ -513,6 +513,7 @@ class Compiled(Stage):
     shardings_flat = self._executable.output_shardings()
     return tree_util.tree_unflatten(self.out_tree, shardings_flat)  # pytype: disable=attribute-error
 
+  @property
   def input_layouts(self):
     layouts_flat = self._executable.input_layouts()
     assert all(isinstance(l, Layout) for l in layouts_flat)
@@ -523,6 +524,7 @@ class Compiled(Stage):
                       else Layout() for i in range(self.in_tree.num_leaves)]
     return tree_util.tree_unflatten(self.in_tree, layouts_flat)  # pytype: disable=attribute-error
 
+  @property
   def output_layouts(self):
     layouts_flat = self._executable.output_layouts()
     assert all(isinstance(l, Layout) for l in layouts_flat)
@@ -732,12 +734,22 @@ class Traced(Stage):
 
   def lower(self, *, lowering_platforms: tuple[str, ...] | None = None,
             _private_parameters: mlir.LoweringParameters | None = None):
+    from jax._src.interpreters import pxla
+    from jax._src import pjit
+
     if _private_parameters is None:
       _private_parameters = mlir.LoweringParameters()
     new_callable = functools.partial(
         self._lower_callable, lowering_platforms=lowering_platforms,
         lowering_parameters=_private_parameters)
-    return Lowered(new_callable(), self.args_info, self._out_tree)
+    try:
+      lowering = new_callable()
+    except pxla.DeviceAssignmentMismatchError as e:
+      fails, = e.args
+      msg = pjit._device_assignment_mismatch_error(
+          self.fun_name, fails, self._args_flat, 'jit', self._arg_names)
+      raise ValueError(msg) from None
+    return Lowered(lowering, self.args_info, self._out_tree)
 
 
 @runtime_checkable

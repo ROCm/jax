@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import dataclasses
 import functools
+import math
 from typing import Any, NamedTuple
 
 import jax
@@ -565,6 +566,40 @@ def _flash_attention_kernel_single_batch_single_step(
   ).astype(o_tile_ref.dtype)
 
 
+def _bytes(x: jax.Array | jax.ShapeDtypeStruct) -> int:
+  return math.prod(x.shape) * x.dtype.itemsize
+
+
+def _fwd_cost_estimate(
+    q: jax.Array,
+    k: jax.Array,
+    v: jax.Array,
+    ab: jax.Array | None,
+    segment_ids: SegmentIds | None,
+    *,
+    causal: bool,
+    sm_scale: jax.Array | None,
+    kernel_inputs_specs,
+    kernel_outputs_specs,
+) -> pl.CostEstimate | None:
+  full_cost = (
+      mha_reference.lower(
+          q, k, v, ab, segment_ids, causal=causal, sm_scale=sm_scale
+      )
+      .compile()
+      .cost_analysis()
+  )
+  if not full_cost:
+    return None
+  input_bytes = sum(_bytes(x) for x in jax.tree.leaves(kernel_inputs_specs))
+  output_bytes = sum(_bytes(x) for x in jax.tree.leaves(kernel_outputs_specs))
+  return pl.CostEstimate(
+      flops=full_cost[0]["flops"],
+      transcendentals=full_cost[0]["transcendentals"],
+      bytes_accessed=input_bytes + output_bytes,
+  )
+
+
 def _flash_attention_impl(
     q,
     k,
@@ -745,15 +780,24 @@ def _flash_attention_impl(
       ),
       out_shape=out_shape,
       debug=debug,
-      compiler_params=dict(
-          mosaic=dict(
-              dimension_semantics=(
-                  "parallel",
-                  "parallel",
-                  "parallel",
-                  "arbitrary",
-              )
+      compiler_params=pltpu.TPUCompilerParams(
+          dimension_semantics=(
+              "parallel",
+              "parallel",
+              "parallel",
+              "arbitrary",
           )
+      ),
+      cost_estimate=_fwd_cost_estimate(
+          q,
+          k,
+          v,
+          ab,
+          segment_ids,
+          causal=causal,
+          sm_scale=sm_scale,
+          kernel_inputs_specs=(q, k, v, ab, q_segment_ids, kv_segment_ids),
+          kernel_outputs_specs=out_shape,
       ),
   )(q, k, v, ab, q_segment_ids, kv_segment_ids)
   if save_residuals:
@@ -1105,15 +1149,13 @@ def _flash_attention_bwd_dkv(
         ),
         out_shape=out_shapes,
         debug=debug,
-        compiler_params=dict(
-            mosaic=dict(
+        compiler_params=pltpu.TPUCompilerParams(
                 dimension_semantics=(
                     "parallel",
                     "parallel",
                     "parallel",
                     "arbitrary",
                 )
-            )
         ),
     )(q, k, v, ab, q_segment_ids, kv_segment_ids, l, m, do, di)
     assert dk.shape == k.shape
@@ -1450,15 +1492,13 @@ def _flash_attention_bwd_dq(
         ),
         out_shape=out_shapes,
         debug=debug,
-        compiler_params=dict(
-            mosaic=dict(
+        compiler_params=pltpu.TPUCompilerParams(
                 dimension_semantics=(
                     "parallel",
                     "parallel",
                     "parallel",
                     "arbitrary",
                 )
-            )
         ),
     )(q, k, v, ab, q_segment_ids, kv_segment_ids, l, m, do, di)
 

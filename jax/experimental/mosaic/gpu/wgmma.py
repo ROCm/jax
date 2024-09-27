@@ -21,13 +21,11 @@ import itertools
 import jax
 from jaxlib.mlir import ir
 from jaxlib.mlir.dialects import arith
-from jaxlib.mlir.dialects import builtin
 from jaxlib.mlir.dialects import llvm
-from jaxlib.mlir.dialects import nvvm
 from jaxlib.mlir.dialects import vector
 import numpy as np
 
-from . import dsl as mgpu
+import jax.experimental.mosaic.gpu as mgpu
 from . import utils
 
 # mypy: ignore-errors
@@ -55,15 +53,19 @@ class WGMMAAccumulator:
       self.value = wgmma_fence(_value)
 
   @classmethod
-  def zero(cls, m, n, dtype=None):
+  def zero(cls, m, n, dtype=None, *, is_signed: bool | None = None):
     if m % 64 or n % 8:
       raise ValueError
+    if is_signed is False:
+      raise TypeError("PTX does not support unsigned WGMMA accumulators")
     f32 = ir.F32Type.get()
     if dtype is None:
       dtype = f32
     zero = arith.constant(dtype, ir.FloatAttr.get(dtype, 0.0))
     return cls(
-        _value=mgpu.FragmentedArray.splat(zero, (m, n), mgpu.WGMMA_LAYOUT)
+        _value=mgpu.FragmentedArray.splat(
+            zero, (m, n), mgpu.WGMMA_LAYOUT, is_signed=is_signed
+        )
     )
 
   @classmethod
@@ -156,13 +158,13 @@ def wgmma_m64(
   out_ty = ir.VectorType(acc.flat[0].type).element_type
   if not _supported_wgmma_types(out_ty, element_type):
     raise ValueError(f"Usupported wgmma types {(out_ty, element_type)=}")
+  if n % 8:
+    raise ValueError
 
   i32 = ir.IntegerType.get_signless(32)
   i64 = ir.IntegerType.get_signless(64)
   index = ir.IndexType.get()
   if b_k_stride % 16:
-    raise ValueError
-  if n % (swizzle // bytewidth(element_type)):
     raise ValueError
   # Only 16-bit types support transposes
   supports_transpose = bytewidth(element_type) == 2
@@ -326,7 +328,15 @@ def wgmma(
   kn_tile = swizzle // element_bytewidth
 
   groups_k, groups_n = b_ty.shape[:2]
-  if b_ty.shape[2:] != [kn_tile, kn_tile]:
+  k_group_size, n_group_size = (
+      b_ty.shape[2:] if b_order == WGMMALayout.ROW_MAJOR else b_ty.shape[:1:-1]
+  )
+  # Note that while this technically allows n to be smaller than kn_tile,
+  # the stride checks below will still enforce that the memory region is padded.
+  # It might be possible to relax that requirement, but I haven't tested it.
+  if n_group_size > kn_tile and n_group_size % kn_tile:
+    raise ValueError(n_group_size, kn_tile)
+  if k_group_size != kn_tile:
     raise ValueError(b_ty.shape)
 
   if a_in_regs:
@@ -353,6 +363,12 @@ def wgmma(
   if a_order == WGMMALayout.COL_MAJOR and swizzle != 128:
     # Not sure what the layout is like, since the tiles aren't square.
     raise NotImplementedError
+  expected_acc_shape = (groups_m * 64, groups_n * n_group_size)
+  if acc.value.shape != expected_acc_shape:
+    raise ValueError(
+        f"Accumulator shape mismatch: expected {expected_acc_shape}, got"
+        f" {acc.value.shape}"
+    )
 
   row_major = WGMMALayout.ROW_MAJOR
   col_major = WGMMALayout.COL_MAJOR
@@ -375,7 +391,7 @@ def wgmma(
       b_transpose=b_order == row_major,
       a_k_stride=(2 if a_order == row_major else 128) << 4,
       b_k_stride=(swizzle if b_order == row_major else 2) << 4,
-      n=(groups_n * kn_tile),
+      n=(groups_n * n_group_size),
       swizzle=swizzle,
       element_type=ir.FloatTF32Type.get()
       if ir.F32Type.isinstance(element_type)
@@ -418,7 +434,9 @@ def wgmma(
       )
   return WGMMAAccumulator(
       _value=mgpu.FragmentedArray(
-          _registers=new_acc_regs, _layout=mgpu.WGMMA_LAYOUT
+          _registers=new_acc_regs,
+          _layout=mgpu.WGMMA_LAYOUT,
+          _is_signed=acc.value.is_signed,
       ),
       _sync=False,
   )
@@ -478,7 +496,7 @@ def wgmma_fence(array: mgpu.FragmentedArray):
     registers = np.asarray(regs, dtype=object).reshape(array.registers.shape)
   else:
     raise NotImplementedError(dtype)
-  return mgpu.FragmentedArray(_registers=registers, _layout=array.layout)
+  return mgpu.FragmentedArray(_registers=registers, _layout=array.layout, _is_signed=array.is_signed)
 
 
 def _as_fragmented_reg_ndarray(flat_regs, dtype: ir.Type, shape: tuple[int, ...]):

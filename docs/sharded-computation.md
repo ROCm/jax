@@ -5,14 +5,14 @@ jupytext:
     extension: .md
     format_name: myst
     format_version: 0.13
-    jupytext_version: 1.16.1
+    jupytext_version: 1.16.4
 kernelspec:
   display_name: Python 3
   name: python3
 ---
 
 (sharded-computation)=
-# Introduction to sharded computation
+# Introduction to parallel programming
 
 <!--* freshness: { reviewed: '2024-05-10' } *-->
 
@@ -39,7 +39,7 @@ jax.devices()
 
 Key to all of the distributed computation approaches below is the concept of *data sharding*, which describes how data is laid out on the available devices.
 
-How can JAX can understand how the data is laid out across devices? JAX's datatype, the {class}`jax.Array` immutable array data structure, represents arrays with physical storage spanning one or multiple devices, and helps make parallelism a core feature of JAX.  The {class}`jax.Array` object is designed with distributed data and computation in mind. Every `jax.Array` has an associated {mod}`jax.sharding.Sharding` object, which describes which shard of the global data is required by each global device. When you create a {class}`jax.Array` from scratch, you also need to create its `Sharding`.
+How can JAX understand how the data is laid out across devices? JAX's datatype, the {class}`jax.Array` immutable array data structure, represents arrays with physical storage spanning one or multiple devices, and helps make parallelism a core feature of JAX.  The {class}`jax.Array` object is designed with distributed data and computation in mind. Every `jax.Array` has an associated {mod}`jax.sharding.Sharding` object, which describes which shard of the global data is required by each global device. When you create a {class}`jax.Array` from scratch, you also need to create its `Sharding`.
 
 In the simplest cases, arrays are sharded on a single device, as demonstrated below:
 
@@ -72,15 +72,9 @@ Here, define a {class}`~jax.sharding.NamedSharding`, which specifies an N-dimens
 ```{code-cell}
 :outputId: 0b397dba-3ddc-4aca-f002-2beab7e6b8a5
 
-# Pardon the boilerplate; constructing a sharding will become easier in future!
-from jax.sharding import Mesh
-from jax.sharding import PartitionSpec
-from jax.sharding import NamedSharding
-from jax.experimental import mesh_utils
+from jax.sharding import PartitionSpec as P
 
-P = jax.sharding.PartitionSpec
-devices = mesh_utils.create_device_mesh((2, 4))
-mesh = jax.sharding.Mesh(devices, ('x', 'y'))
+mesh = jax.make_mesh((2, 4), ('x', 'y'))
 sharding = jax.sharding.NamedSharding(mesh, P('x', 'y'))
 print(sharding)
 ```
@@ -139,7 +133,7 @@ The result is partially replicated: that is, the first two elements of the array
 
 ## 2. Semi-automated sharding with constraints
 
-If you'd like to have some control over the sharding used within a particular computation, JAX offers the {func}`~jax.lax.with_sharding_constraint` function. You can use {func}`jax.lax.with_sharding_constraint` (in place of (func}`jax.device_put()`) together with {func}`jax.jit` for more control over how the compiler constraints how the intermediate values and outputs are distributed.
+If you'd like to have some control over the sharding used within a particular computation, JAX offers the {func}`~jax.lax.with_sharding_constraint` function. You can use {func}`jax.lax.with_sharding_constraint` (in place of {func}`jax.device_put()`) together with {func}`jax.jit` for more control over how the compiler constraints how the intermediate values and outputs are distributed.
 
 For example, suppose that within `f_contract` above, you'd prefer the output not to be partially-replicated, but rather to be fully sharded across the eight devices:
 
@@ -149,9 +143,7 @@ For example, suppose that within `f_contract` above, you'd prefer the output not
 @jax.jit
 def f_contract_2(x):
   out = x.sum(axis=0)
-  # mesh = jax.create_mesh((8,), 'x')
-  devices = mesh_utils.create_device_mesh(8)
-  mesh = jax.sharding.Mesh(devices, 'x')
+  mesh = jax.make_mesh((8,), ('x',))
   sharding = jax.sharding.NamedSharding(mesh, P('x'))
   return jax.lax.with_sharding_constraint(out, sharding)
 
@@ -177,8 +169,7 @@ In the automatic parallelism methods explored above, you can write a function as
 :outputId: 435c32f3-557a-4676-c11b-17e6bab8c1e2
 
 from jax.experimental.shard_map import shard_map
-P = jax.sharding.PartitionSpec
-mesh = jax.sharding.Mesh(jax.devices(), 'x')
+mesh = jax.make_mesh((8,), ('x',))
 
 f_elementwise_sharded = shard_map(
     f_elementwise,
@@ -268,8 +259,7 @@ If you shard the leading axis of both `x` and `weights` in the same way, then th
 ```{code-cell}
 :outputId: 80be899e-8dbc-4bfc-acd2-0f3d554a0aa5
 
-P = jax.sharding.PartitionSpec
-mesh = jax.sharding.Mesh(jax.devices(), 'x')
+mesh = jax.make_mesh((8,), ('x',))
 sharding = jax.sharding.NamedSharding(mesh, P('x'))
 
 x_sharded = jax.device_put(x, sharding)

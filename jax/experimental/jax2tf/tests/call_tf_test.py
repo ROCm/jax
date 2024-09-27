@@ -88,6 +88,17 @@ class CallTfTest(tf_test_util.JaxToTfTestCase):
     # bug in TensorFlow.
     _ = tf.add(1, 1)
     super().setUp()
+    self.warning_ctx = jtu.ignore_warning(
+        message=(
+            "(jax2tf.convert with native_serialization=False is deprecated"
+            "|Calling from_dlpack with a DLPack tensor is deprecated)"
+        )
+    )
+    self.warning_ctx.__enter__()
+
+  def tearDown(self):
+    self.warning_ctx.__exit__(None, None, None)
+    super().tearDown()
 
   @_parameterized_jit
   def test_eval_scalar_arg(self, with_jit=True):
@@ -304,7 +315,7 @@ class CallTfTest(tf_test_util.JaxToTfTestCase):
     self.assertAllClose(x * outer_var_array + 1., res, check_dtypes=False)
 
   def test_with_var_different_shape(self):
-    # See https://github.com/google/jax/issues/6050
+    # See https://github.com/jax-ml/jax/issues/6050
     v = tf.Variable((4., 2.), dtype=tf.float32)
 
     def tf_func(x):
@@ -428,7 +439,7 @@ class CallTfTest(tf_test_util.JaxToTfTestCase):
     self.assertAllClose(g_jax, g_tf)
 
   def test_grad_int_argument(self):
-    # Similar to https://github.com/google/jax/issues/6975
+    # Similar to https://github.com/jax-ml/jax/issues/6975
     # state is a pytree that contains an integer and a boolean.
     # The function returns an integer and a boolean.
     def f(param, state, x):
@@ -862,6 +873,7 @@ class CallTfTest(tf_test_util.JaxToTfTestCase):
 
 class RoundTripToJaxTest(tf_test_util.JaxToTfTestCase):
   "Reloading output of jax2tf into JAX with call_tf"
+
   def setUp(self):
     if tf is None:
       raise unittest.SkipTest("Test requires tensorflow")
@@ -869,6 +881,17 @@ class RoundTripToJaxTest(tf_test_util.JaxToTfTestCase):
     # bug in TensorFlow.
     _ = tf.add(1, 1)
     super().setUp()
+    self.warning_ctx = jtu.ignore_warning(
+        message=(
+            "(jax2tf.convert with native_serialization=False is deprecated"
+            "|Calling from_dlpack with a DLPack tensor is deprecated)"
+        )
+    )
+    self.warning_ctx.__enter__()
+
+  def tearDown(self):
+    self.warning_ctx.__exit__(None, None, None)
+    super().tearDown()
 
   def test_simple(self):
     f_jax = jnp.sin
@@ -1136,6 +1159,16 @@ class RoundTripToJaxTest(tf_test_util.JaxToTfTestCase):
     # Jit mode
     self.assertAllClose(jax.jit(grad_fun_jax)(x), jax.jit(grad_fun_jax_rt)(x))
 
+  def test_grad_pytree_arg_with_none_leaf(self):
+    def tf_f(x, params):
+      return x * params["y"]
+
+    x = jnp.array(1.0)
+    y = jnp.array(2.0)
+    actual = jax.grad(
+        jax2tf.call_tf(tf_f), argnums=(1,))(x, {"y": y, "other": None})
+    self.assertDictEqual(actual[0], {"y": x, "other": None})
+
 
 class RoundTripToTfTest(tf_test_util.JaxToTfTestCase):
   "Reloading output of call_tf into TF with jax2tf."
@@ -1147,6 +1180,17 @@ class RoundTripToTfTest(tf_test_util.JaxToTfTestCase):
     # bug in TensorFlow.
     _ = tf.add(1, 1)
     super().setUp()
+    self.warning_ctx = jtu.ignore_warning(
+        message=(
+            "(jax2tf.convert with native_serialization=False is deprecated"
+            "|Calling from_dlpack with a DLPack tensor is deprecated)"
+        )
+    )
+    self.warning_ctx.__enter__()
+
+  def tearDown(self):
+    self.warning_ctx.__exit__(None, None, None)
+    super().tearDown()
 
   def test_alternate(self):
     # Alternate sin/cos with sin in TF and cos in JAX

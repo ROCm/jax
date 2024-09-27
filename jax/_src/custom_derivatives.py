@@ -17,7 +17,6 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 import dataclasses
 from functools import update_wrapper, reduce, partial, wraps
-import inspect
 from typing import Any, Generic, TypeVar
 
 from jax._src import config
@@ -30,7 +29,8 @@ from jax._src import linear_util as lu
 from jax._src import traceback_util
 from jax._src.ad_util import (
     stop_gradient_p, SymbolicZero, Zero, zeros_like_aval)
-from jax._src.api_util import argnums_partial, flatten_fun_nokwargs
+from jax._src.api_util import (
+    argnums_partial, flatten_fun_nokwargs, resolve_kwargs)
 from jax._src.core import raise_to_shaped
 from jax._src.errors import UnexpectedTracerError
 from jax._src.interpreters import ad
@@ -56,17 +56,6 @@ zip = safe_zip
 
 ### util
 
-def _resolve_kwargs(fun, args, kwargs):
-  if isinstance(fun, partial):
-    # functools.partial should have an opaque signature.
-    fun = lambda *args, **kwargs: None
-  ba = inspect.signature(fun).bind(*args, **kwargs)
-  ba.apply_defaults()
-  if ba.kwargs:
-    raise TypeError("keyword arguments could not be resolved to positions")
-  else:
-    return ba.args
-
 def _initial_style_jaxpr(fun, in_avals):
   jaxpr, _, consts, () = pe.trace_to_jaxpr_dynamic(fun, in_avals)
   return jaxpr, consts
@@ -78,7 +67,7 @@ def _sum_tangents(_, x, *xs):
   return reduce(ad.add_tangents, xs, x)
 
 def _zeros_like_pytree(x):
-  return tree_map(Zero.from_value, x)
+  return tree_map(Zero.from_primal_value, x)
 
 _stop_gradient = partial(
     tree_map,
@@ -163,10 +152,11 @@ class custom_jvp(Generic[ReturnValue]):
         ``nondiff_argnums``, the ``jvp`` function should accept two arguments,
         where the first is a tuple of primal inputs and the second is a tuple of
         tangent inputs. The lengths of both tuples are equal to the number of
-        parameters of the ``custom_jvp`` function. The ``jvp`` function should
-        produce as output a pair where the first element is the primal output
-        and the second element is the tangent output. Elements of the input and
-        output tuples may be arrays or any nested tuples/lists/dicts thereof.
+        parameters of the :class:`~jax.custom_jvp` function. The ``jvp`` function
+        should produce as output a pair where the first element is the primal
+        output and the second element is the tangent output. Elements of the
+        input and output tuples may be arrays or any nested tuples/lists/dicts
+        thereof.
       symbolic_zeros: boolean, indicating whether the rule should be passed
         objects representing static symbolic zeros in its tangent argument in
         correspondence with unperturbed values; otherwise, only standard JAX
@@ -177,48 +167,60 @@ class custom_jvp(Generic[ReturnValue]):
         ``False``.
 
     Returns:
-      None.
+      Returns ``jvp`` so that ``defjvp`` can be used as a decorator.
 
     Examples:
 
-      @jax.custom_jvp
-      def f(x, y):
-        return jnp.sin(x) * y
+      >>> @jax.custom_jvp
+      ... def f(x, y):
+      ...   return jnp.sin(x) * y
+      ...
+      >>> @f.defjvp
+      ... def f_jvp(primals, tangents):
+      ...   x, y = primals
+      ...   x_dot, y_dot = tangents
+      ...   primal_out = f(x, y)
+      ...   tangent_out = jnp.cos(x) * x_dot * y + jnp.sin(x) * y_dot
+      ...   return primal_out, tangent_out
 
-      @f.defjvp
-      def f_jvp(primals, tangents):
-        x, y = primals
-        x_dot, y_dot = tangents
-        primal_out = f(x, y)
-        tangent_out = jnp.cos(x) * x_dot * y + jnp.sin(x) * y_dot
-        return primal_out, tangent_out
+      >>> x = jnp.float32(1.0)
+      >>> y = jnp.float32(2.0)
+      >>> with jnp.printoptions(precision=2):
+      ...   print(jax.value_and_grad(f)(x, y))
+      (Array(1.68, dtype=float32), Array(1.08, dtype=float32))
     """
     self.jvp = jvp
     self.symbolic_zeros = symbolic_zeros
     return jvp
 
-  def defjvps(self, *jvps: Callable[..., ReturnValue] | None):
+  def defjvps(self, *jvps: Callable[..., ReturnValue] | None) -> None:
     """Convenience wrapper for defining JVPs for each argument separately.
 
     This convenience wrapper cannot be used together with ``nondiff_argnums``.
 
     Args:
       *jvps: a sequence of functions, one for each positional argument of the
-        ``custom_jvp`` function. Each function takes as arguments the tangent
-        value for the corresponding primal input, the primal output, and the
-        primal inputs. See the example below.
+        :class:`~jax.custom_jvp` function. Each function takes as arguments
+        the tangent value for the corresponding primal input, the primal
+        output, and the ßprimal inputs. See the example below.
 
     Returns:
       None.
 
     Examples:
 
-      @jax.custom_jvp
-      def f(x, y):
-        return jnp.sin(x) * y
+      >>> @jax.custom_jvp
+      ... def f(x, y):
+      ...   return jnp.sin(x) * y
+      ...
+      >>> f.defjvps(lambda x_dot, primal_out, x, y: jnp.cos(x) * x_dot * y,
+      ...           lambda y_dot, primal_out, x, y: jnp.sin(x) * y_dot)
 
-      f.defjvps(lambda x_dot, primal_out, x, y: jnp.cos(x) * x_dot * y,
-                lambda y_dot, primal_out, x, y: jnp.sin(x) * y_dot)
+      >>> x = jnp.float32(1.0)
+      >>> y = jnp.float32(2.0)
+      >>> with jnp.printoptions(precision=2):
+      ...   print(jax.value_and_grad(f)(x, y))
+      (Array(1.68, dtype=float32), Array(1.08, dtype=float32))
     """
     if self.nondiff_argnums:
       raise TypeError("Can't use ``defjvps`` with ``nondiff_argnums``.")
@@ -240,7 +242,7 @@ class custom_jvp(Generic[ReturnValue]):
       msg = f"No JVP defined for custom_jvp function {primal_name} using defjvp."
       raise AttributeError(msg)
     jvp_name    = getattr(self.jvp, '__name__', str(self.jvp))
-    args = _resolve_kwargs(self.fun, args, kwargs)
+    args = resolve_kwargs(self.fun, args, kwargs)
     if self.nondiff_argnums:
       nondiff_argnums = set(self.nondiff_argnums)
       args = tuple(_stop_gradient(x) if i in nondiff_argnums else x
@@ -325,24 +327,27 @@ def _flatten_jvp(primal_name, jvp_name, in_tree, maybe_out_type, *args):
            "shapes/dtypes of:\n"
            f"""    {str(ty_tree_).replace("'", "")}""")
       raise TypeError(m)
-  # TODO(mattjj): compare primals' tangent types to tangent objects' types
-  primal_avals_out = [raise_to_shaped(core.get_aval(x), weak_type=False)
-                      for x in primals_out]
+  primal_avals_out = [raise_to_shaped(core.get_aval(x), weak_type=False) for x in primals_out]
+  expected_tangent_avals_out = [
+    raise_to_shaped(core.get_aval(x), weak_type=False).to_tangent_aval()
+    for x in primals_out]
   tangent_avals_out = [raise_to_shaped(core.get_aval(t), weak_type=False)
                        if type(t) is not SymbolicZero else t.aval.strip_weak_type()
                        for t in tangents_out]
-  if primal_avals_out != tangent_avals_out:
-    if len(primal_avals_out) == 1:
-      (av1,), (av2,) = primal_avals_out, tangent_avals_out
+  if expected_tangent_avals_out != tangent_avals_out:
+    if len(expected_tangent_avals_out) == 1:
+      (av_p,), (av_et,), (av_t,) = primal_avals_out, expected_tangent_avals_out, tangent_avals_out
       msg = ("Custom JVP rule must produce primal and tangent outputs with "
-             "equal shapes and dtypes, but got {} and {} respectively.")
-      raise TypeError(msg.format(av1.str_short(), av2.str_short()))
+             "corresponding shapes and dtypes. Expected {} (tangent type of {}) but got {}.")
+      raise TypeError(msg.format(av_et.str_short(), av_p.str_short(), av_t.str_short()))
     else:
       msg = ("Custom JVP rule must produce primal and tangent outputs with "
-             "equal shapes and dtypes, but got:\n{}")
+             "corresponding shapes and dtypes, but got:\n{}")
       disagreements = (
-          f"  primal {av1.str_short()} for tangent {av2.str_short()}"
-          for av1, av2 in zip(primal_avals_out, tangent_avals_out) if av1 != av2)
+          f"  primal {av_p.str_short()} with tangent {av_t.str_short()}, expecting tangent {av_et}"
+          for av_p, av_et, av_t in zip(primal_avals_out, expected_tangent_avals_out, tangent_avals_out)
+          if av_et != av_t)
+
       raise TypeError(msg.format('\n'.join(disagreements)))
   yield primals_out + tangents_out, (out_tree, primal_avals)
 
@@ -390,7 +395,7 @@ def lift_jvp(num_consts: int, jvp_jaxpr_thunk: Callable) -> lu.WrappedFun:
     out = core.eval_jaxpr(jvp_jaxpr, jvp_consts, *primals, *nonzero_tangents)
     out_primals, nz_out_tangents = split_list(out, [len(out_zeros)])
     nz_out_tangents_ = iter(nz_out_tangents)
-    out_tangents = [SymbolicZero(core.get_aval(p).at_least_vspace())
+    out_tangents = [SymbolicZero(core.get_aval(p).to_tangent_aval())
                     if z else next(nz_out_tangents_)
                     for p, z in zip(out_primals, out_zeros)]
     assert next(nz_out_tangents_, None) is None
@@ -571,18 +576,24 @@ class custom_vjp(Generic[ReturnValue]):
 
     Examples:
 
-      @jax.custom_vjp
-      def f(x, y):
-        return jnp.sin(x) * y
+      >>> @jax.custom_vjp
+      ... def f(x, y):
+      ...   return jnp.sin(x) * y
+      ...
+      >>> def f_fwd(x, y):
+      ...   return f(x, y), (jnp.cos(x), jnp.sin(x), y)
+      ...
+      >>> def f_bwd(res, g):
+      ...   cos_x, sin_x, y = res
+      ...   return (cos_x * g * y, sin_x * g)
+      ...
+      >>> f.defvjp(f_fwd, f_bwd)
 
-      def f_fwd(x, y):
-        return f(x, y), (jnp.cos(x), jnp.sin(x), y)
-
-      def f_bwd(res, g):
-        cos_x, sin_x, y = res
-        return (cos_x * g * y, sin_x * g)
-
-      f.defvjp(f_fwd, f_bwd)
+      >>> x = jnp.float32(1.0)
+      >>> y = jnp.float32(2.0)
+      >>> with jnp.printoptions(precision=2):
+      ...   print(jax.value_and_grad(f)(x, y))
+      (Array(1.68, dtype=float32), Array(1.08, dtype=float32))
     """
     self.fwd = fwd
     self.bwd = bwd
@@ -599,7 +610,7 @@ class custom_vjp(Generic[ReturnValue]):
       msg = f"No VJP defined for custom_vjp function {primal_name} using defvjp."
       raise AttributeError(msg)
     fwd_name = getattr(self.fwd, '__name__', str(self.fwd))
-    args = _resolve_kwargs(self.fun, args, kwargs)
+    args = resolve_kwargs(self.fun, args, kwargs)
     if self.optimize_remat:
       fwd = optimize_remat_of_custom_vjp_fwd(
           self.fun, self.fwd, nondiff_argnums=self.nondiff_argnums,
@@ -772,10 +783,10 @@ def _flatten_bwd(in_tree, in_avals, out_trees, *args):
     raise TypeError(msg.format(in_tree2, in_tree)) from None
   results = []
   for kp, a, ct in zip(keypaths, in_avals, cts_in_flat):
-    if ct is zero or a != a.at_least_vspace():
-      results.append(Zero(a.at_least_vspace()))
+    if ct is zero or getattr(a.to_tangent_aval(), 'dtype') == dtypes.float0:
+      results.append(Zero(a.to_tangent_aval()))
     elif type(ct) is SymbolicZero:
-      if not core.typecompat(a.at_least_vspace(), a_ := ct.aval):
+      if not core.typecompat(a.to_tangent_aval(), a_ := ct.aval):
         msg = ("Custom VJP bwd rule produced a SymbolicZero with a shape/dtype "
                "that does not match the corresponding input tangent shape/dtype: "
                f"at output{keystr(kp)} the SymbolicZero had shape/dtype "
@@ -786,7 +797,7 @@ def _flatten_bwd(in_tree, in_avals, out_trees, *args):
         raise ValueError(msg)
       results.append(Zero(ct.aval))
     else:
-      if (not core.typecompat(a.at_least_vspace(), a_ := core.get_aval(ct))
+      if (not core.typecompat(a.to_tangent_aval(), a_ := core.get_aval(ct))
           and not (_temporary_dtype_exception(a, a_) or
                    _temporary_shape_exception(a, a_))):
         msg = ("Custom VJP bwd rule must produce an output with the same "
@@ -900,16 +911,12 @@ def _custom_vjp_call_jaxpr_jvp(
   _, res_tree = out_trees()
   res_and_primals_out = core.eval_jaxpr(fwd_jaxpr, fwd_consts, *args)
   res, primals_out = split_list(res_and_primals_out, [res_tree.num_leaves])
-  avals_out = [raise_to_shaped(core.get_aval(x)) for x in primals_out]
+  avals_out = [raise_to_shaped(core.get_aval(x)).to_tangent_aval() for x in primals_out]
   args_dot = map(ad.instantiate_zeros, args_dot)
-  # Cast float0 to zeros with the primal dtype because custom vjp rules don't
-  # currently handle float0s
-  args_dot = map(ad.replace_float0s, args, args_dot)
   tangents_out = ad.custom_lin_p.bind(
       *res, *args_dot, num_res=res_tree.num_leaves, bwd=bwd,
       out_avals=avals_out, symbolic_zeros=symbolic_zeros)
   tangents_out = map(lax.tie_p.bind, primals_out, tangents_out)
-  tangents_out = map(ad.recast_to_float0, primals_out, tangents_out)
   return primals_out, tangents_out
 ad.primitive_jvps[custom_vjp_call_jaxpr_p] = _custom_vjp_call_jaxpr_jvp
 
@@ -1031,7 +1038,7 @@ def custom_gradient(fun):
     ans, rule = fun(*args, **kwargs)
     ans_flat, out_tree = tree_flatten((ans,))
     rule, in_tree = flatten_fun_nokwargs(lu.wrap_init(rule), out_tree)
-    ans_avals = [core.get_aval(x).at_least_vspace() for x in ans_flat]
+    ans_avals = [core.get_aval(x).to_tangent_aval() for x in ans_flat]
     jaxpr, _, consts, () = pe.trace_to_jaxpr_dynamic(rule, ans_avals)
     return ans, Residuals(jaxpr, in_tree(), out_tree, consts)
 
@@ -1137,7 +1144,7 @@ def closure_convert(fun: Callable, *example_args) -> tuple[Callable, list[Any]]:
 def _maybe_perturbed(x: Any) -> bool:
   # False if x can't represent an AD-perturbed value (i.e. a value
   # with a nontrivial tangent attached), up to heuristics, and True otherwise.
-  # See https://github.com/google/jax/issues/6415 for motivation.
+  # See https://github.com/jax-ml/jax/issues/6415 for motivation.
   x = core.full_lower(x)
   if not isinstance(x, core.Tracer):
     # If x is not a Tracer, it can't be perturbed.
@@ -1145,7 +1152,7 @@ def _maybe_perturbed(x: Any) -> bool:
   elif isinstance(x, pe.DynamicJaxprTracer):
     # If x is a DynamicJaxprTracer then we're staging out; differentiation could
     # happen later, but some types always have trivial tangents.
-    vspace = x.aval.at_least_vspace()
+    vspace = x.aval.to_tangent_aval()
     return not (vspace is core.abstract_token or
                 getattr(vspace, 'dtype', None) == dtypes.float0)
   elif not isinstance(x, ad.JVPTracer):
@@ -1168,7 +1175,12 @@ def _closure_convert_for_avals(fun, in_tree, in_avals):
     args, hoisted_consts = split_list(args_hconsts, [num_args])
     consts = merge(closure_consts, hoisted_consts)
     all_args, in_tree2 = tree_flatten(tuple(args))
-    assert in_tree == in_tree2
+    if in_tree != in_tree2:
+      msg = ("The inputs to the closure produced by closure_convert must have "
+             "the same Pytree structure as the example arguments passed when "
+             f"closure_convert was called. Expected {in_tree}, but got "
+             f"{in_tree2}")
+      raise TypeError(msg)
     out_flat = core.eval_jaxpr(jaxpr, consts, *all_args)
     return tree_unflatten(out_tree, out_flat)
 
@@ -1412,7 +1424,7 @@ def custom_vjp_by_custom_transpose(fun, fwd, bwd):
   @fun.defjvp
   def jvp(primals, tangents):
     outs, residuals = fwd(*primals)
-    tan_out_types = tree_map(lambda o: core.get_aval(o).at_least_vspace(), outs)
+    tan_out_types = tree_map(lambda o: core.get_aval(o).to_tangent_aval(), outs)
     tan_fn = custom_transpose(partial(disallow_jvp, out_avals=tan_out_types))
     tan_fn.def_transpose(bwd)
     return outs, tan_fn(tan_out_types, residuals, tangents)
@@ -1451,7 +1463,9 @@ def optimize_remat_of_custom_vjp_fwd(
     # above and it would be good to consolidate it.
     primal_name = getattr(fun, "__name__", str(fun))
     fwd_name = getattr(fwd, "__name__", str(fwd))
-    args = _resolve_kwargs(fwd, args, kwargs)
+    # Note: we use `fun` instead of `fwd` here for consistency with
+    # custom_vjp.__call__ above.
+    args = resolve_kwargs(fun, args, kwargs)
     if nondiff_argnums:
       for i in nondiff_argnums: _check_for_tracers(args[i])
       nondiff_argnums_ = set(nondiff_argnums)
@@ -1532,6 +1546,9 @@ def _remat_opt_vmap(
   batched_fwd_jaxpr, out_batched = batching.batch_jaxpr(
       fwd_jaxpr, axis_size, in_batched, False,
       axis_name, spmd_axis_name, main_type)
+  extra_consts = batched_fwd_jaxpr.consts
+  batched_fwd_jaxpr = pe.close_jaxpr(
+      pe.convert_constvars_jaxpr(batched_fwd_jaxpr.jaxpr))
   out_dims = [0 if b else not_mapped for b in out_batched]
 
   _, prim_batched = split_list(in_batched, [num_consts])
@@ -1544,7 +1561,8 @@ def _remat_opt_vmap(
         main_type)
     return batched_fun_jaxpr.jaxpr, batched_fun_jaxpr.consts
 
-  batched_outs = remat_opt_p.bind(*args, num_consts=num_consts,
+  batched_outs = remat_opt_p.bind(*extra_consts, *args,
+                                  num_consts=num_consts + len(extra_consts),
                                   num_res=num_res,
                                   fwd_jaxpr=batched_fwd_jaxpr,
                                   fun_jaxpr_thunk=batched_fun_jaxpr_thunk)
@@ -1612,6 +1630,7 @@ def _remat_opt_dce(used_outs: list[bool], eqn: core.JaxprEqn):
     instantiate += [True] * (len(eqn.invars) - eqn.params["num_consts"])
     new_jaxpr, used_ins = pe.dce_jaxpr(eqn.params["fwd_jaxpr"].jaxpr, used_outs,
                                        instantiate=instantiate)
+    assert not new_jaxpr.constvars
     closed_jaxpr = pe.close_jaxpr(new_jaxpr)
     invars = [v for used, v in zip(used_ins, eqn.invars) if used]
     new_params = dict(eqn.params)

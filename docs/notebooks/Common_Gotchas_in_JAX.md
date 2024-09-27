@@ -5,7 +5,7 @@ jupytext:
     extension: .md
     format_name: myst
     format_version: 0.13
-    jupytext_version: 1.16.1
+    jupytext_version: 1.16.4
 kernelspec:
   display_name: Python 3
   language: python
@@ -18,11 +18,9 @@ kernelspec:
 
 <!--* freshness: { reviewed: '2024-06-03' } *-->
 
-[![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/google/jax/blob/main/docs/notebooks/Common_Gotchas_in_JAX.ipynb) [![Open in Kaggle](https://kaggle.com/static/images/open-in-kaggle.svg)](https://kaggle.com/kernels/welcome?src=https://github.com/google/jax/blob/main/docs/notebooks/Common_Gotchas_in_JAX.ipynb)
+[![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/jax-ml/jax/blob/main/docs/notebooks/Common_Gotchas_in_JAX.ipynb) [![Open in Kaggle](https://kaggle.com/static/images/open-in-kaggle.svg)](https://kaggle.com/kernels/welcome?src=https://github.com/jax-ml/jax/blob/main/docs/notebooks/Common_Gotchas_in_JAX.ipynb)
 
 +++ {"id": "4k5PVzEo2uJO"}
-
-*levskaya@ mattjj@*
 
 When walking about the countryside of Italy, the people will not hesitate to tell you that __JAX__ has [_"una anima di pura programmazione funzionale"_](https://www.sscardapane.it/iaml-backup/jax-intro/).
 
@@ -130,7 +128,6 @@ It is not recommended to use iterators in any JAX function you want to `jit` or 
 :outputId: 52d885fd-0239-4a08-f5ce-0c38cc008903
 
 import jax.numpy as jnp
-import jax.lax as lax
 from jax import make_jaxpr
 
 # lax.fori_loop
@@ -158,7 +155,7 @@ iter_operand = iter(range(10))
 
 +++ {"id": "oBdKtkVW8Lha"}
 
-## 🔪 In-Place Updates
+## 🔪 In-place updates
 
 +++ {"id": "JffAqnEW4JEb"}
 
@@ -268,7 +265,7 @@ For more details on indexed array updates, see the [documentation for the `.at` 
 
 +++ {"id": "oZ_jE2WAypdL"}
 
-## 🔪 Out-of-Bounds Indexing
+## 🔪 Out-of-bounds indexing
 
 +++ {"id": "btRFwEVzypdN"}
 
@@ -315,7 +312,7 @@ jnp.arange(10.0).at[11].get(mode='fill', fill_value=jnp.nan)
 
 Note that due to this behavior for index retrieval, functions like `jnp.nanargmin` and `jnp.nanargmax` return -1 for slices consisting of NaNs whereas Numpy would throw an error.
 
-Note also that, as the two behaviors described above are not inverses of each other, reverse-mode automatic differentiation (which turns index updates into index retrievals and vice versa) [will not preserve the semantics of out of bounds indexing](https://github.com/google/jax/issues/5760). Thus it may be a good idea to think of out-of-bounds indexing in JAX as a case of [undefined behavior](https://en.wikipedia.org/wiki/Undefined_behavior).
+Note also that, as the two behaviors described above are not inverses of each other, reverse-mode automatic differentiation (which turns index updates into index retrievals and vice versa) [will not preserve the semantics of out of bounds indexing](https://github.com/jax-ml/jax/issues/5760). Thus it may be a good idea to think of out-of-bounds indexing in JAX as a case of [undefined behavior](https://en.wikipedia.org/wiki/Undefined_behavior).
 
 +++ {"id": "LwB07Kx5sgHu"}
 
@@ -385,7 +382,7 @@ jnp.sum(jnp.array(x))
 
 +++ {"id": "MUycRNh6e50W"}
 
-## 🔪 Random Numbers
+## 🔪 Random numbers
 
 +++ {"id": "O8vvaVt3MRG2"}
 
@@ -395,7 +392,7 @@ jnp.sum(jnp.array(x))
 
 +++ {"id": "Qikt9pPW9L5K"}
 
-### RNGs and State
+### RNGs and state
 You're used to _stateful_ pseudorandom number generators (PRNGs) from numpy and other libraries, which helpfully hide a lot of details under the hood to give you a ready fountain of pseudorandomness:
 
 ```{code-cell} ipython3
@@ -463,7 +460,7 @@ The Mersenne Twister PRNG is also known to have a [number](https://cs.stackexcha
 
 +++ {"id": "COjzGBpO4tzL"}
 
-JAX instead implements an _explicit_ PRNG where entropy production and consumption are handled by explicitly passing and iterating PRNG state.  JAX uses a modern [Threefry counter-based PRNG](https://github.com/google/jax/blob/main/docs/jep/263-prng.md) that's __splittable__.  That is, its design allows us to __fork__ the PRNG state into new PRNGs for use with parallel stochastic generation.
+JAX instead implements an _explicit_ PRNG where entropy production and consumption are handled by explicitly passing and iterating PRNG state.  JAX uses a modern [Threefry counter-based PRNG](https://github.com/jax-ml/jax/blob/main/docs/jep/263-prng.md) that's __splittable__.  That is, its design allows us to __fork__ the PRNG state into new PRNGs for use with parallel stochastic generation.
 
 The random state is described by a special array element that we call a __key__:
 
@@ -471,7 +468,6 @@ The random state is described by a special array element that we call a __key__:
 :id: yPHE7KTWgAWs
 :outputId: ae8af0ee-f19e-474e-81b6-45e894eb2fc3
 
-from jax import random
 key = random.key(0)
 key
 ```
@@ -504,8 +500,8 @@ Instead, we __split__ the PRNG to get usable __subkeys__ every time we need a ne
 print("old key", key)
 key, subkey = random.split(key)
 normal_pseudorandom = random.normal(subkey, shape=(1,))
-print("    \---SPLIT --> new key   ", key)
-print("             \--> new subkey", subkey, "--> normal", normal_pseudorandom)
+print(r"    \---SPLIT --> new key   ", key)
+print(r"             \--> new subkey", subkey, "--> normal", normal_pseudorandom)
 ```
 
 +++ {"id": "tqtFVE4MthO3"}
@@ -519,8 +515,8 @@ We propagate the __key__ and make new __subkeys__ whenever we need a new random 
 print("old key", key)
 key, subkey = random.split(key)
 normal_pseudorandom = random.normal(subkey, shape=(1,))
-print("    \---SPLIT --> new key   ", key)
-print("             \--> new subkey", subkey, "--> normal", normal_pseudorandom)
+print(r"    \---SPLIT --> new key   ", key)
+print(r"             \--> new subkey", subkey, "--> normal", normal_pseudorandom)
 ```
 
 +++ {"id": "0KLYUluz3lN3"}
@@ -538,11 +534,11 @@ for subkey in subkeys:
 
 +++ {"id": "rg4CpMZ8c3ri"}
 
-## 🔪 Control Flow
+## 🔪 Control flow
 
 +++ {"id": "izLTvT24dAq0"}
 
-### ✔ python control_flow + autodiff ✔
+### ✔ Python control_flow + autodiff ✔
 
 If you just want to apply `grad` to your python functions, you can use regular python control-flow constructs with no problems, as if you were using [Autograd](https://github.com/hips/autograd) (or Pytorch or TF Eager).
 
@@ -562,7 +558,7 @@ print(grad(f)(4.))  # ok!
 
 +++ {"id": "hIfPT7WMmZ2H"}
 
-### python control flow + JIT
+### Python control flow + JIT
 
 Using control flow with `jit` is more complicated, and by default it has more constraints.
 
@@ -627,7 +623,7 @@ When we `jit`-compile a function, we usually want to compile a version of the fu
 
 For example, if we evaluate an `@jit` function on the array `jnp.array([1., 2., 3.], jnp.float32)`, we might want to compile code that we can reuse to evaluate the function on `jnp.array([4., 5., 6.], jnp.float32)` to save on compile time.
 
-To get a view of your Python code that is valid for many different argument values, JAX traces it on _abstract values_ that represent sets of possible inputs. There are [multiple different levels of abstraction](https://github.com/google/jax/blob/main/jax/_src/abstract_arrays.py), and different transformations use different abstraction levels.
+To get a view of your Python code that is valid for many different argument values, JAX traces it on _abstract values_ that represent sets of possible inputs. There are [multiple different levels of abstraction](https://github.com/jax-ml/jax/blob/main/jax/_src/abstract_arrays.py), and different transformations use different abstraction levels.
 
 By default, `jit` traces your code on the `ShapedArray` abstraction level, where each abstract value represents the set of all array values with a fixed shape and dtype. For example, if we trace using the abstract value `ShapedArray((3,), jnp.float32)`, we get a view of the function that can be reused for any concrete value in the corresponding set of arrays. That means we can save on compile time.
 
@@ -805,7 +801,7 @@ def while_loop(cond_fun, body_fun, init_val):
 :outputId: 552fe42f-4d32-4e25-c8c2-b951160a3f4e
 
 init_val = 0
-cond_fun = lambda x: x<10
+cond_fun = lambda x: x < 10
 body_fun = lambda x: x+1
 lax.while_loop(cond_fun, body_fun, init_val)
 # --> array(10, dtype=int32)
@@ -865,7 +861,7 @@ $\ast$ = argument-<b>value</b>-independent loop condition - unrolls the loop
 
 +++ {"id": "OxLsZUyRt_kF"}
 
-## 🔪 Dynamic Shapes
+## 🔪 Dynamic shapes
 
 +++ {"id": "1tKXcAMduDR1"}
 
@@ -1130,7 +1126,7 @@ x.dtype # --> dtype('float64')
 
 +++ {"id": "WAHjmL0E2XwO"}
 
-## 🔪 Miscellaneous Divergences from NumPy
+## 🔪 Miscellaneous divergences from NumPy
 
 While `jax.numpy` makes every attempt to replicate the behavior of numpy's API, there do exist corner cases where the behaviors differ.
 Many such cases are discussed in detail in the sections above; here we list several other known places where the APIs diverge.

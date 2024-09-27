@@ -21,7 +21,6 @@ os.environ["XLA_PYTHON_CLIENT_MEM_FRACTION"] = "0.5"
 from absl.testing import absltest
 import jax
 from jax import random
-from jax._src.lib import xla_extension
 from jax._src import config
 from jax._src import test_util as jtu
 from jax._src.pallas.pallas_call import _trace_kernel_to_jaxpr
@@ -63,7 +62,7 @@ class PallasCallVmapTest(PallasBaseTest):
   def setUp(self):
     super().setUp()
     if jtu.test_device_matches(["tpu"]):
-      # TODO: most tests fail on TPU in non-interpreter mode
+      # TODO: most tests fail on TPU in non-interpret mode
       self.skipTest("On TPU the test works only in interpret mode")
 
   def test_vmap_of_simple_kernel(self):
@@ -208,11 +207,9 @@ class PallasCallVmapTest(PallasBaseTest):
     np.testing.assert_allclose(out, out_ref, atol=1e-3, rtol=1e-3)
 
   @jtu.skip_on_flag("jax_skip_slow_tests", True)
+  @jtu.skip_on_devices("cpu")  # Test is very slow on CPU
   def test_small_large_vmap(self):
-    if xla_extension.is_tsan() and jtu.test_device_matches(["cpu"]):
-      self.skipTest("Test is very slow under TSAN")
-
-    # Catches https://github.com/google/jax/issues/18361
+    # Catches https://github.com/jax-ml/jax/issues/18361
     @functools.partial(
         self.pallas_call, out_shape=jax.ShapeDtypeStruct((2,), jnp.int32),
         grid=(2,))
@@ -229,9 +226,8 @@ class PallasCallVmapTest(PallasBaseTest):
 
     np.testing.assert_allclose(out, out_ref)
 
+  @jtu.skip_on_devices("cpu")  # Test is very slow on CPU
   def test_small_small_large_vmap(self):
-    if xla_extension.is_tsan() and jtu.test_device_matches(["cpu"]):
-      self.skipTest("Test is very slow under TSAN")
 
     @functools.partial(
         self.pallas_call, out_shape=jax.ShapeDtypeStruct((2,), jnp.int32),
@@ -250,7 +246,7 @@ class PallasCallVmapTest(PallasBaseTest):
     np.testing.assert_allclose(out, out_ref)
 
 
-class PallasCallVmapInterpreterTest(PallasCallVmapTest):
+class PallasCallVmapInterpretTest(PallasCallVmapTest):
   INTERPRET = True
 
   def setUp(self):

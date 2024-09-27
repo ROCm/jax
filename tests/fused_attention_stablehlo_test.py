@@ -47,7 +47,8 @@ def sdpa_train(query: Array,
                scale: float = 0.5,
                mask_type: MaskType = MaskType.NO_MASK,
                is_bnth: bool = False,
-               dropout_rate: float = 0.1) -> Array:
+               dropout_rate: float = 0.1,
+               sliding_window_length: int | None = None) -> Array:
   if mask_type == MaskType.PADDING:
     if is_bnth:
       B, _, S, _ = query.shape
@@ -59,7 +60,8 @@ def sdpa_train(query: Array,
   out, sdpa_vjp = jax.vjp(
       partial(dot_product_attention, scale=scale, mask_type=mask_type,
               dropout_rate=dropout_rate,
-              qkv_layout="BNTH" if is_bnth else "BTNH"),
+              qkv_layout="BNTH" if is_bnth else "BTNH",
+              sliding_window_length=sliding_window_length),
       query, key, value, bias, mask, q_seqlen, kv_seqlen)
   query_grad, key_grad, value_grad, bias_grad, _, _, _ = sdpa_vjp(grad)
   if bias is not None and len(bias.shape) == 3:
@@ -74,7 +76,8 @@ def sdpa_ref(query: Array,
       mask: Array | None = None,
       scale: float = 0.5,
       mask_type: MaskType = MaskType.NO_MASK,
-      dropout_rate: float = 0.1) -> Array:
+      dropout_rate: float = 0.1,
+      sliding_window_length: int | None = None) -> Array:
 
   def get_causal_mask(logits):
     large_negative_number = get_large_negative_number(logits.dtype)
@@ -99,6 +102,16 @@ def sdpa_ref(query: Array,
     return jax.lax.broadcast_in_dim(
       encoded_padding, encoded.shape, broadcast_dimensions=[1])
 
+  def get_sliding_window_mask(logits, window_length):
+    large_negative_number = get_large_negative_number(logits.dtype)
+    T = logits.shape[-2]
+    col_idx = jax.lax.broadcasted_iota(np.int32, (T, T), 1)
+    row_idx = jax.lax.broadcasted_iota(np.int32, (T, T), 0)
+    mask = jnp.logical_or(
+      row_idx < col_idx,
+      col_idx <= row_idx - window_length).astype(logits.dtype) * large_negative_number
+    return mask[(*([jnp.newaxis]*(len(logits.shape) - 2)), ...)]
+
   B, T, qN, H = query.shape
   _, _, kN, _ = key.shape
   logits = jnp.einsum("bqhd,bkhd->bhqk", query, key)
@@ -108,6 +121,11 @@ def sdpa_ref(query: Array,
     bias = get_causal_mask(logits)
   elif mask_type == MaskType.PADDING:
     bias = get_padding_mask(logits)
+  elif sliding_window_length is not None:
+    if sliding_window_length <= 0:
+      raise ValueError(
+        f"Expect sliding_window_length > 0, got {sliding_window_length}.")
+    bias = get_sliding_window_mask(logits, sliding_window_length)
   if mask is not None:
     large_negative_number = get_large_negative_number(logits.dtype)
     mask = jnp.where(mask, jnp.asarray(0, query.dtype), large_negative_number)
@@ -141,10 +159,12 @@ def sdpa_train_ref(query: Array,
             mask: Array | None = None,
             scale: float = 0.5,
             mask_type: MaskType = MaskType.NO_MASK,
-            dropout_rate: float = 0.1) -> Array:
+            dropout_rate: float = 0.1,
+            sliding_window_length: int | None = None) -> Array:
   out_ref, sdpa_vjp_ref = jax.vjp(
     partial(
-      sdpa_ref, scale=scale, mask_type=mask_type, dropout_rate=dropout_rate),
+      sdpa_ref, scale=scale, mask_type=mask_type, dropout_rate=dropout_rate,
+      sliding_window_length=sliding_window_length),
     query, key, value, bias, mask)
   query_grad_ref, key_grad_ref, value_grad_ref, bias_grad_ref, _ = sdpa_vjp_ref(grad)
   if bias is not None and len(bias.shape) == 3:
@@ -399,6 +419,78 @@ class DotProductAttentionTest(jtu.JaxTestCase):
       self.assertArraysAllClose(value_grad_ref, value_grad, rtol=1e-5, atol=1e-5)
       self.assertArraysAllClose(bias_grad_ref, bias_grad, rtol=1e-5, atol=1e-5)
 
+  @jtu.sample_product(
+      batch_size=[1, 16],
+  )
+  @jtu.run_on_devices("cuda")
+  def test_sdpa_dbias(self, batch_size: int):
+    # cuDNN only supports dbias when batch size is 1. If the batch size is
+    # greater, dbias is silently set to all zeros. This test verifies this
+    # behavior for both vmap and regular use cases.
+    # TODO: Remove this test once cuDNN adds broader dbias support.
+    dtype = jnp.bfloat16
+    x_shape = (batch_size, 512, 16, 48)
+    bias_shape = (batch_size, 16, 512, 512)
+    mask_shape = (1, 1, 512)
+
+    keys = jax.random.split(jax.random.key(0), 2)
+    x = jax.random.normal(keys[0], x_shape, dtype=dtype)
+    bias = jax.random.normal(keys[1], bias_shape, dtype=dtype)
+    mask = jnp.ones(mask_shape, dtype=jnp.bool_)
+
+    def attn(x, bias, mask):
+      return dot_product_attention(x, x, x, bias, mask)
+
+    def attn_vjp(x, bias, mask, target_fn):
+      _, f_vjp = jax.vjp(target_fn, x, bias, mask)
+      return f_vjp(x)
+
+    attn_vmap = jax.vmap(attn, in_axes=(0, 0, None))
+    attn_ref = jax.jit(partial(attn_vjp, target_fn=attn))
+    attn_ans = jax.jit(partial(attn_vjp, target_fn=attn_vmap))
+
+    _, dbias_ref, _ = attn_ref(x, bias, mask)
+    x = jnp.expand_dims(x, axis=1)
+    bias = jnp.expand_dims(bias, axis=1)
+    _, dbias_ans, _ = attn_ans(x, bias, mask)
+    dbias_ans = jnp.squeeze(dbias_ans, axis=1)
+    self.assertArraysAllClose(dbias_ans, dbias_ref)
+    if batch_size != 1:
+      self.assertTrue(not jnp.any(dbias_ans))
+
+  @jtu.run_on_devices("cuda")
+  def test_sdpa_sliding_window_length(self):
+    k1, k2, k3, k4 = jax.random.split(jax.random.key(0), 4)
+    query = jax.random.normal(
+        k1, (4, 1024, 4, 64), dtype=jnp.bfloat16)
+    key = jax.random.normal(
+        k2, (4, 1024, 4, 64), dtype=jnp.bfloat16)
+    value = jax.random.normal(
+        k3, (4, 1024, 4, 64), dtype=jnp.bfloat16)
+    grad = jax.random.normal(
+        k4, (4, 1024, 4, 64), dtype=jnp.bfloat16)
+    jitted_sdpa_train = jax.jit(
+      partial(
+        sdpa_train, scale=1.0, mask_type=MaskType.CAUSAL, dropout_rate=0,
+        sliding_window_length=64),
+    )
+    # for reference implementation
+    # sliding_window_length option itself will setup correct mask
+    jitted_sdpa_train_ref = jax.jit(
+      partial(
+        sdpa_train_ref, scale=1.0, mask_type=MaskType.NO_MASK, dropout_rate=0,
+        sliding_window_length=64),
+    )
+
+    out, (query_grad, key_grad, value_grad) = \
+      jitted_sdpa_train(query, key, value, grad, None, None)
+    out_ref, (query_grad_ref, key_grad_ref, value_grad_ref) = \
+      jitted_sdpa_train_ref(query, key, value, grad, None, None)
+    self.assertArraysAllClose(out_ref, out, rtol=1e-5, atol=1e-5)
+    self.assertArraysAllClose(query_grad_ref, query_grad, rtol=1e-2, atol=1e-2)
+    self.assertArraysAllClose(key_grad_ref, key_grad, rtol=1e-5, atol=1e-5)
+    self.assertArraysAllClose(value_grad_ref, value_grad, rtol=1e-5, atol=1e-5)
+
   @jtu.run_on_devices("cuda")
   def test_layouts(self):
     dtype = "bfloat16"
@@ -429,18 +521,27 @@ class DotProductAttentionTest(jtu.JaxTestCase):
 
   def test_sdpa_utils(self):
     test_cases = [
-      (1, 257, 64, 8905, False, True),
-      (1, 1024, 64, 8905, False, False),
-      (1024, 1024, 64, 8905, False, False),
-      (1024, 1024, 128, 8905, False, False),
+      (1, 257, 64, 8905, False, True, True),
+      (1, 1024, 64, 8905, False, False, True),
+      (1024, 1024, 64, 8905, False, False, True),
+      (1024, 1024, 128, 8905, False, False, True),
+      (1024, 1024, 127, 8905, False, False, False),
     ]
 
     for k in test_cases:
-      sql_q, sql_v, head_dim, cudnn_version, has_bias, is_training = k
+      sql_q, sql_v, head_dim, cudnn_version, has_bias, is_training, \
+        expected_pass = k
       query = jnp.empty((4, sql_q, 4, head_dim))
       key = jnp.empty((4, sql_v, 4, head_dim))
-      check_is_flash_attention(
-        query, key, AttentionLayout.BNTH, cudnn_version, has_bias, is_training)
+      if expected_pass:
+        check_is_flash_attention(
+          query, key, AttentionLayout.BNTH.value, cudnn_version, has_bias,
+          is_training)
+      else:
+        with self.assertRaises(NotImplementedError):
+          check_is_flash_attention(
+            query, key, AttentionLayout.BNTH.value, cudnn_version, has_bias,
+            is_training)
 
 if __name__ == "__main__":
   absltest.main(testLoader=jtu.JaxTestLoader())

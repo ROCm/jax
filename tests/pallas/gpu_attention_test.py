@@ -21,7 +21,10 @@ import jax
 from jax import random
 from jax._src import config
 from jax._src import test_util as jtu
-from jax.experimental.pallas.ops.gpu import decode_attention
+if sys.platform != "win32":
+  from jax.experimental.pallas.ops.gpu import decode_attention
+else:
+  decode_attention = None
 import jax.numpy as jnp
 import numpy as np
 
@@ -48,7 +51,7 @@ class PallasBaseTest(jtu.JaxTestCase):
     if (jtu.test_device_matches(["cuda"]) and
         not jtu.is_cuda_compute_capability_at_least("8.0")):
       self.skipTest("Only works on GPU with capability >= sm80")
-    if sys.platform == "win32" and not self.INTERPRET:
+    if sys.platform == "win32":
       self.skipTest("Only works on non-Windows platforms")
 
     super().setUp()
@@ -148,7 +151,7 @@ class DecodeAttentionTest(PallasBaseTest):
     o_ref = decode_attention.gqa_reference(q, k, v)
     np.testing.assert_allclose(o, o_ref, atol=0.05)
 
-class DecodeAttentionInterpreterTest(DecodeAttentionTest):
+class DecodeAttentionInterpretTest(DecodeAttentionTest):
   INTERPRET = True
 
 

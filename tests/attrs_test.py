@@ -323,7 +323,7 @@ class AttrsTest(jtu.JaxTestCase):
     self.assertEqual(count, 1)
 
   def test_tracer_lifetime_bug(self):
-    # regression test for https://github.com/google/jax/issues/20082
+    # regression test for https://github.com/jax-ml/jax/issues/20082
     class StatefulRNG:
       key: jax.Array
 
@@ -343,6 +343,21 @@ class AttrsTest(jtu.JaxTestCase):
       rng.split()
 
     jax.jit(jitted)()  # don't crash
+
+  def test_scan_carry(self):
+    class A:
+      ...
+
+    a = A()
+
+    jax_setattr(a, 'x', jnp.zeros(3))
+
+    def body(i, _):
+      x = jax_getattr(a, 'x')
+      x = x.at[i].set(x[i] + 1)
+      jax_setattr(a, 'x', x)
+      return i + 1, None
+    _, _ = jax.lax.scan(body, 0, None, length=3)  # don't crash
 
 
 class AttrsJVPTest(jtu.JaxTestCase):

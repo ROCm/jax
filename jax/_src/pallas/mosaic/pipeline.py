@@ -16,12 +16,13 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from contextlib import contextmanager
 import dataclasses
 import enum
 import functools
 import itertools
 import operator
-from typing import Union, Any
+from typing import Any, Union
 
 import jax
 from jax import lax
@@ -39,7 +40,7 @@ import numpy as np
 SMEM = tpu_core.TPUMemorySpace.SMEM
 VMEM = tpu_core.TPUMemorySpace.VMEM
 DMA = tpu_core.SemaphoreType.DMA
-REF = tpu_core.MemoryRef
+REF = pallas_core.MemoryRef
 SemaphoreType = tpu_core.SemaphoreType
 SemaphoreTuple = jax.Array
 ArrayRef = Union[REF, jax.Array]
@@ -72,6 +73,7 @@ def _broadcast_pytree_to(from_pytree, to_pytree):
   return tree_util.tree_unflatten(treedef, broadcast_leaves)
 
 
+@jax_util.cache(trace_context_in_key=False)
 def _get_tpu_generation() -> int:
   kind = jax.devices()[0].device_kind
   if kind.endswith(' lite'):
@@ -157,6 +159,8 @@ def _grid_size(grid):
 
 def _get_indices(step, grid, offsets):
   """Get indices for a given step and grid."""
+  # TODO(enriqueps): Implement using bitwise ops, avoid div/rem since they are
+  # expensive.
   extended_grid = grid + (1,)
   strides = tuple(
       itertools.accumulate(extended_grid[::-1], func=operator.mul))[::-1]
@@ -174,6 +178,8 @@ class BufferType(enum.Enum):
   ACCUMULATOR = 3
   INPUT_OUTPUT = 4
 
+  MANUAL = 5
+
 
 @tree_util.register_pytree_node_class
 @dataclasses.dataclass(frozen=True)
@@ -185,7 +191,7 @@ class BufferedRef:
     dtype: dtype for buffers.
     buffer_type: enum indicating whether this is an input, output, or in/out
       accumulator buffered reference.
-    vmem_ref: a double-buffer to hold a working buffer and a dirty buffer used
+    window_ref: a double-buffer to hold a working buffer and a dirty buffer used
       to copy into and out of.  In the case of a BufferedRef targeting a VMEM
       reference, this simply points to the existing ref.
     accum_ref: accumulating buffer used by accumulator BufferedRefs.
@@ -206,7 +212,7 @@ class BufferedRef:
   spec: pl.BlockSpec       # static metadata
   dtype: Any               # static metadata
   buffer_type: BufferType  # static metadata
-  vmem_ref: REF | None
+  window_ref: REF | None
   accum_ref: REF | None
   current_slot: ArrayRef | None
   next_slot: ArrayRef | None
@@ -214,13 +220,25 @@ class BufferedRef:
   sem_sends: SemaphoreTuple | None
 
   def tree_flatten(self):
-    return ((self.vmem_ref, self.accum_ref, self.current_slot,
-             self.next_slot, self.sem_recvs, self.sem_sends),
-            (self.spec, self.dtype, self.buffer_type))
+    return (
+        (
+            self.window_ref,
+            self.accum_ref,
+            self.current_slot,
+            self.next_slot,
+            self.sem_recvs,
+            self.sem_sends,
+        ),
+        (self.spec, self.dtype, self.buffer_type),
+    )
 
   @classmethod
   def tree_unflatten(cls, meta, data):
     return cls(*meta, *data)
+
+  @staticmethod
+  def buffer_types() -> type[BufferType]:
+    return BufferType
 
   @classmethod
   def create(cls, spec, dtype, buffer_type) -> BufferedRef:
@@ -235,7 +253,7 @@ class BufferedRef:
     Returns:
       Initialized BufferedRef
     """
-    block_shape = tuple([1 if x is None else x for x in spec.block_shape])
+    block_shape = tuple(1 if x is None else x for x in spec.block_shape)
     if buffer_type is BufferType.ACCUMULATOR:
       accum_ref = VMEM(block_shape, dtype)
     else:
@@ -248,7 +266,7 @@ class BufferedRef:
           spec=spec,
           dtype=dtype,
           buffer_type=buffer_type,
-          vmem_ref=None,  # to be bound to existing ref by the pipeline routine
+          window_ref=None,  # to be bound to existing ref by the pipeline routine
           accum_ref=accum_ref,
           current_slot=None,
           next_slot=None,
@@ -256,11 +274,12 @@ class BufferedRef:
           sem_sends=None,
       )
     else:
+      memory_space = SMEM if spec.memory_space == SMEM else VMEM
       return cls(
           spec=spec,
           dtype=dtype,
           buffer_type=buffer_type,
-          vmem_ref=VMEM((2,) + block_shape, dtype),
+          window_ref=memory_space((2,) + block_shape, dtype),
           accum_ref=accum_ref,
           current_slot=SMEM((1,), jnp.int32),
           next_slot=SMEM((1,), jnp.int32),
@@ -307,11 +326,11 @@ class BufferedRef:
   @property
   def current_ref(self):
     buffer_slice = tuple(
-        [0 if x is None else slice(None) for x in self.block_shape])
+        0 if x is None else slice(None) for x in self.block_shape)
     if self.memory_space == VMEM:
-      return self.vmem_ref.at[buffer_slice]
+      return self.window_ref.at[buffer_slice]
     else:
-      return self.vmem_ref.at[(self.current_slot[0], *buffer_slice)]
+      return self.window_ref.at[(self.current_slot[0], *buffer_slice)]
 
   @property
   def is_input(self):
@@ -337,16 +356,17 @@ class BufferedRef:
   def is_input_output(self):
     return self.buffer_type == BufferType.INPUT_OUTPUT
 
-  def bind_existing_ref(self, vmem_ref, indices):
+  def bind_existing_ref(self, window_ref, indices):
     """For handling VMEM references, the pipeline aliases the existing ref."""
     if self.memory_space == VMEM:
       return dataclasses.replace(
-          self, vmem_ref=vmem_ref.at[self.compute_slice(indices)])
+          self, window_ref=window_ref.at[self.compute_slice(indices)]
+      )
     return self
 
   def compute_slice(self, grid_indices):
     """Compute DMA slice from grid indices."""
-    block_shape = tuple([1 if x is None else x for x in self.block_shape])
+    block_shape = tuple(1 if x is None else x for x in self.block_shape)
     indices = self.compute_index(*grid_indices)
     return jax.tree.map(_make_ds, indices, block_shape)
 
@@ -428,8 +448,9 @@ class BufferedRef:
     dst_slice = tuple(pl.ds(0, s.size) for s in src_slice)
     tpu_primitives.make_async_copy(
         src_ref.at[src_slice],
-        self.vmem_ref.at[next_slot].at[dst_slice],
-        self.sem_recvs.at[next_slot]).start()
+        self.window_ref.at[next_slot].at[dst_slice],
+        self.sem_recvs.at[next_slot],
+    ).start()
 
   def copy_out(self, dst_ref, grid_indices):
     """Starts copy of HBM dma slice from the current slot."""
@@ -440,9 +461,10 @@ class BufferedRef:
     dst_slice = self.get_dma_slice(dst_ref.shape, dst_ref.dtype, grid_indices)
     src_slice = tuple(pl.ds(0, s.size) for s in dst_slice)
     tpu_primitives.make_async_copy(
-        self.vmem_ref.at[slot].at[src_slice],
+        self.window_ref.at[slot].at[src_slice],
         dst_ref.at[dst_slice],
-        self.sem_sends.at[slot]).start()
+        self.sem_sends.at[slot],
+    ).start()
 
   def wait_in(self, src_ref, grid_indices):
     """Waits for input copy to finish."""
@@ -452,9 +474,12 @@ class BufferedRef:
     dst_slice = tuple(pl.ds(0, s.size) for s in src_slice)
     current_slot = self.current_slot[0]
     tpu_primitives.make_async_copy(
-        src_ref.at[src_slice],                   # nb: doesn't matter
-        self.vmem_ref.at[current_slot].at[dst_slice],  # only dst shape is important
-        self.sem_recvs.at[current_slot]).wait()
+        src_ref.at[src_slice],  # nb: doesn't matter
+        self.window_ref.at[current_slot].at[
+            dst_slice
+        ],  # only dst shape is important
+        self.sem_recvs.at[current_slot],
+    ).wait()
 
   def wait_out(self, dst_ref, grid_indices):
     """Waits for output copy to finish."""
@@ -464,9 +489,10 @@ class BufferedRef:
     dst_slice = self.get_dma_slice(dst_ref.shape, dst_ref.dtype, grid_indices)
     src_slice = tuple(pl.ds(0, s.size) for s in dst_slice)
     tpu_primitives.make_async_copy(
-        self.vmem_ref.at[prev_slot].at[src_slice],  # nb: doesn't matter
-        dst_ref.at[dst_slice],        # only dst shape is important
-        self.sem_sends.at[prev_slot]).wait()
+        self.window_ref.at[prev_slot].at[src_slice],  # nb: doesn't matter
+        dst_ref.at[dst_slice],  # only dst shape is important
+        self.sem_sends.at[prev_slot],
+    ).wait()
 
   # Accumulator methods
   #
@@ -486,7 +512,7 @@ class BufferedRef:
       def _init():
         self.accum_ref[...] = jnp.zeros_like(self.accum_ref[...])
       def _set():
-        self.accum_ref[...] = self.current_ref[...].astype(self.accum_ref)
+        self.accum_ref[...] = self.current_ref[...].astype(self.accum_ref.dtype)
       lax.cond(init, _init, _set)
 
   def accumulate(self):
@@ -494,14 +520,14 @@ class BufferedRef:
     assert self.is_accumulator
     if self.accum_ref is not None:
       accum_dtype = jnp.float32
-      if self.vmem_ref.dtype == jnp.int32:
+      if self.window_ref.dtype == jnp.int32:
         accum_dtype = jnp.int32
       # TODO(levskaya): we could generalize init and reduction functions,
       # could it ever be useful to support more generic monoids?
       self.current_ref[...] = (
-          self.current_ref[...].astype(accum_dtype) +
-          self.accum_ref[...].astype(accum_dtype)
-      ).astype(self.vmem_ref.dtype)
+          self.current_ref[...].astype(accum_dtype)
+          + self.accum_ref[...].astype(accum_dtype)
+      ).astype(self.window_ref.dtype)
 
 
 # Helper to tree map over BufferedRefs as leaves.
@@ -513,30 +539,34 @@ map_brefs = functools.partial(
 class Scheduler:
   """Sequences input and output copies and waits for a pipeline."""
 
-  def __init__(self,
-               step: jax.Array,
-               grid: tuple[int | jax.Array, ...],
-               grid_offsets: tuple[int | jax.Array, ...],
-               first_cycle=None,
-               last_cycle=None,
-               init_accumulators=None,
-              ):
+  def __init__(
+      self,
+      step: jax.Array,
+      grid: tuple[int | jax.Array, ...],
+      grid_offsets: tuple[int | jax.Array, ...],
+      first_cycle=None,
+      last_cycle=None,
+      init_accumulators=None,
+      trace_scopes=True,
+  ):
     """Initializes scheduler.
 
-      Args:
-        step: inner step number.
-        grid: pallas grid for BufferedRefs.
-        grid_offsets: offsets for grid indices (used for megacore).
-        first_cycle: whether this is the first invocation of the pipeline.
-        last_cycle: whether this is the last invocation of the pipeline.
-        init_accumulators: do we zero-initialize accumulator state for this
-          invocation of the pipeline.
+    Args:
+      step: inner step number.
+      grid: pallas grid for BufferedRefs.
+      grid_offsets: offsets for grid indices (used for megacore).
+      first_cycle: whether this is the first invocation of the pipeline.
+      last_cycle: whether this is the last invocation of the pipeline.
+      init_accumulators: do we zero-initialize accumulator state for this
+        invocation of the pipeline.
+      trace_scopes: whether to use named_scope to trace blocks in the pipeline.
     """
     self.step = step
     self.grid = grid
     self.first_cycle = first_cycle
     self.last_cycle = last_cycle
     self.init_accumulators = init_accumulators
+    self.trace_scopes = trace_scopes
 
     # Total number of linear steps.
     self.num_steps = _grid_size(grid)
@@ -561,6 +591,14 @@ class Scheduler:
     self.next_indices = _get_indices(
         self.next_step, grid, grid_offsets
     )
+
+  @contextmanager
+  def _named_scope(self, name):
+    if self.trace_scopes:
+      with jax.named_scope(name):
+        yield
+    else:
+      yield
 
   def grid_env(self):
     return pallas_core.grid_env(
@@ -589,7 +627,7 @@ class Scheduler:
       schedule = _default_schedule
     pred = schedule["prologue_copy_in"](self, buffered_ref, src_ref)
 
-    with jax.named_scope("ep_initialize"):
+    with self._named_scope("ep_initialize"):
       @pl.when(self.first_step_ever)
       def _init_slots():
         buffered_ref.init_slots()
@@ -608,7 +646,7 @@ class Scheduler:
       schedule = _default_schedule
     pred = schedule["wait_in"](self, buffered_ref, src_ref)
 
-    @jax.named_scope("ep_wait_in")
+    @self._named_scope("ep_wait_in")
     def _wait():
       if buffered_ref.is_input:
         buffered_ref.wait_in(src_ref, self.indices)
@@ -616,7 +654,8 @@ class Scheduler:
         # In most cases we won't be waiting when init_accumulators is True,
         # so this is usually just setting what we just copied.
         buffered_ref.set_accumulator(self.init_accumulators)
-    @jax.named_scope("ep_set_accum")
+
+    @self._named_scope("ep_set_accum")
     def _no_wait():
       if buffered_ref.is_accumulator:
 
@@ -633,7 +672,7 @@ class Scheduler:
     pred = schedule['copy_in'](self, buffered_ref, src_ref)
 
     @pl.when(pred)
-    @jax.named_scope("ep_copy_in")
+    @self._named_scope("ep_copy_in")
     def _send():
       if buffered_ref.is_input:
         # We skip the last step because that's what prefetch is for.
@@ -650,7 +689,7 @@ class Scheduler:
     pred = schedule['prefetch'](self, buffered_ref, src_ref)
 
     @pl.when(pred)
-    @jax.named_scope("ep_prefetch")
+    @self._named_scope("ep_prefetch")
     def _send():
       if buffered_ref.is_input:
         # Prefetch should only run on the last step.
@@ -664,7 +703,7 @@ class Scheduler:
     pred = schedule['wait_out'](self, buffered_ref, dst_ref)
 
     @pl.when(pred)
-    @jax.named_scope("ep_wait_out")
+    @self._named_scope("ep_wait_out")
     def _wait():
       if buffered_ref.is_output:
         buffered_ref.wait_out(dst_ref, self.prev_indices)
@@ -677,13 +716,14 @@ class Scheduler:
       schedule = _default_schedule
     pred = schedule['copy_out'](self, buffered_ref, dst_ref)
 
-    @jax.named_scope("ep_copy_out")
+    @self._named_scope("ep_copy_out")
     def _copy_out_and_accumulate():
       if buffered_ref.is_accumulator:
         buffered_ref.accumulate()
       if buffered_ref.is_output:
         buffered_ref.copy_out(dst_ref, self.indices)
-    @jax.named_scope("ep_accum")
+
+    @self._named_scope("ep_accum")
     def _just_accumulate():
       if buffered_ref.is_accumulator:
         # We accumulate on the last step because we will set the accumulator
@@ -702,7 +742,7 @@ class Scheduler:
     pred = schedule['epilogue_wait_out'](self, buffered_ref, dst_ref)
 
     @pl.when(pred)
-    @jax.named_scope("ep_finalize")
+    @self._named_scope("ep_finalize")
     def _end():
       if buffered_ref.is_output:
         buffered_ref.swap_slots()  # formally correct, not actually necessary.
@@ -945,7 +985,8 @@ def emit_pipeline(
     out_specs=None,
     should_accumulate_out=False,
     core_axis: int | None = None,
-    dimension_semantics: tuple[GridDimensionSemantics, ...] | None = None
+    dimension_semantics: tuple[GridDimensionSemantics, ...] | None = None,
+    trace_scopes: bool = True,
 ):
   """Creates a function to emit a manual pallas pipeline.
 
@@ -968,6 +1009,8 @@ def emit_pipeline(
       along the core axis.
     dimension_semantics: optional tuple of GridDimensionSemantics (e.g. PARALLEL
       or ARBITRARY).
+    trace_scopes: optional bool, indicates whether to annotate each region in
+      the pipeline using named_scope.
   """
   if any(not isinstance(d, (int, jax.Array)) for d in grid):
     grid_types = tuple(type(d) for d in grid)
@@ -997,6 +1040,7 @@ def emit_pipeline(
     prefetch=None,
     postyeet=None,
     schedule=None,
+    body_prologue=None,
   ):
     """
     Run the pipeline.
@@ -1019,6 +1063,8 @@ def emit_pipeline(
         Called during the outputs phase in the first inner step.
       schedule: manually specified pipeline schedules for brefs, None indicates
         default schedule.
+      body_prologue: For running code within the grid environment before the
+        body is run. Useful for updating manual refs.
     """
     if scratches is None:
       scratches = ()
@@ -1062,7 +1108,9 @@ def emit_pipeline(
           grid_offsets=grid_offsets,
           first_cycle=first_cycle,
           last_cycle=last_cycle,
-          init_accumulators=init_accumulators)
+          init_accumulators=init_accumulators,
+          trace_scopes=trace_scopes,
+      )
 
       # prepare any local VMEM aliases
       brefs = map_brefs(scheduler.alias_local_refs, allocations, refs)
@@ -1073,15 +1121,18 @@ def emit_pipeline(
       map_brefs(scheduler.wait_in, brefs, refs, schedule)
 
       # prefetch inputs for the *next* invocation of this pipeline
-      with jax.named_scope("ep_prefetch"):
+      with scheduler._named_scope("ep_prefetch"):
         if prefetch is not None:
           lax.cond(step == num_steps - 1,
                   lambda: prefetch(*brefs, scheduler),
                   lambda: None)
 
       # run the kernel!
+      if body_prologue is not None:
+        with scheduler.grid_env():
+          body_prologue()
       current_refs = map_brefs(lambda x: x.current_ref, brefs)
-      with jax.named_scope("ep_run_kernel"):
+      with scheduler._named_scope("ep_run_kernel"):
         with scheduler.grid_env():
           body(*current_refs, *scratches)
 
@@ -1089,7 +1140,7 @@ def emit_pipeline(
       map_brefs(scheduler.copy_out, brefs, refs, schedule)
       map_brefs(scheduler.wait_out, brefs, refs, schedule)
       # handle writes for the *last* invocation of this pipeline's outputs
-      with jax.named_scope("ep_postyeet"):
+      with scheduler._named_scope("ep_postyeet"):
         if postyeet is not None:
           lax.cond(step == 0,
                   lambda: postyeet(*brefs, scheduler),

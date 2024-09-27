@@ -19,14 +19,14 @@ from collections.abc import Sequence
 import dataclasses
 import enum
 import functools
-from typing import Any, Hashable
+from typing import Any, ClassVar, Literal
 
 import jax
 from jax._src import core as jax_core
 from jax._src import dtypes
 from jax._src import util
-import jax.numpy as jnp
 from jax._src.pallas import core as pallas_core
+import jax.numpy as jnp
 import numpy as np
 
 map, unsafe_map = util.safe_map, map
@@ -39,14 +39,47 @@ BlockSpec = pallas_core.BlockSpec
 BlockSpecTree = pallas_core.BlockSpecTree
 GridMapping = pallas_core.GridMapping
 NoBlockSpec = pallas_core.NoBlockSpec
+ScratchShapeTree = pallas_core.ScratchShapeTree
 AbstractMemoryRef = pallas_core.AbstractMemoryRef
 no_block_spec = pallas_core.no_block_spec
 _convert_block_spec_to_block_mapping = pallas_core._convert_block_spec_to_block_mapping
 split_list = util.split_list
 
+@dataclasses.dataclass(frozen=True)
+class TPUCompilerParams(pallas_core.CompilerParams):
+  """Mosaic TPU compiler parameters.
+
+  Attributes:
+    dimension_semantics: A list of dimension semantics for each grid
+      dimension of the kernel. Either "parallel" for dimensions that can
+      execute in any order, or "arbitrary" for dimensions that must be
+      executed sequentially.
+    allow_input_fusion: A list of booleans indicating whether input fusion is
+      allowed for each argument.
+    vmem_limit_bytes: Overrides the default VMEM limit for a kernel. Note
+      that this must be used in conjunction with the
+      --xla_tpu_scoped_vmem_limit_kib=N flag with N*1kib > vmem_limit_bytes.
+    collective_id: Indicates which barrier semaphore to use for the kernel.
+      Note that using the same collective_id does not guarantee that
+      the same barrier semaphore will be allocated between kernels.
+    internal_scratch_in_bytes: The size of the internal scratch space used by
+      Mosaic.
+    flags: A dictionary of command line flags for the kernel.
+    serialization_format: The serialization format for the kernel body.
+    device_type: The device type to compile for.
+  """
+  PLATFORM: ClassVar[str] = "mosaic"
+  dimension_semantics: Sequence[Literal["parallel", "arbitrary"]] | None = None
+  allow_input_fusion: Sequence[bool] | None = None
+  vmem_limit_bytes: int | None = None
+  collective_id: int | None = None
+  flags: dict[str, Any] | None = None
+  internal_scratch_in_bytes: int | None = None
+  serialization_format: int = 1
+  device_type: str | None = None
 
 class TPUMemorySpace(enum.Enum):
-  ANY = "any"
+  ANY = "any"  # TODO(b/368401328): Remove this and just use pl.ANY.
   VMEM = "vmem"
   SMEM = "smem"
   CMEM = "cmem"
@@ -57,7 +90,7 @@ class TPUMemorySpace(enum.Enum):
 
   def __call__(self, shape: tuple[int, ...], dtype: jnp.dtype):
     # A convenience function for constructing MemoryRef types.
-    return MemoryRef(shape, dtype, self)
+    return pallas_core.MemoryRef(shape, dtype, self)
 
 class semaphore_dtype(dtypes.extended): pass
 class semaphore(semaphore_dtype): pass
@@ -67,7 +100,11 @@ class barrier_semaphore(semaphore_dtype): pass
 class AbstractSemaphoreTyRules:
   @staticmethod
   def pallas_interpret_element_aval(_) -> jax_core.ShapedArray:
-    return pallas_core.index_map_grid_aval
+    return jax_core.ShapedArray((), pallas_core.SEMAPHORE_INTERPRET_DTYPE)
+
+  @staticmethod
+  def physical_element_aval(_) -> jax_core.ShapedArray:
+    return jax_core.ShapedArray((), jnp.int32)
 
 class AbstractSemaphoreTy(dtypes.ExtendedDType):
   name: str
@@ -109,10 +146,15 @@ class SemaphoreType(enum.Enum):
       dtype = BarrierSemaphoreTy()
     else:
       dtype = SemaphoreTy()
-    return MemoryRef(shape, dtype, TPUMemorySpace.SEMAPHORE)
+    if pallas_core.is_interpret_mode():
+      dtype = pallas_core.SEMAPHORE_INTERPRET_DTYPE
+    return pallas_core.MemoryRef(shape, dtype, TPUMemorySpace.SEMAPHORE)
 
-  def get_aval(self) -> AbstractMemoryRef:
-    return self(()).get_aval()
+  def get_array_aval(self) -> pallas_core.ShapedArrayWithMemorySpace:
+    return self(()).get_array_aval()
+
+  def get_ref_aval(self) -> AbstractMemoryRef:
+    return self(()).get_ref_aval()
 
 @dataclasses.dataclass(frozen=True)
 class AbstractSemaphore(jax_core.AbstractValue):
@@ -128,26 +170,9 @@ class AbstractSemaphore(jax_core.AbstractValue):
 jax_core.raise_to_shaped_mappings[AbstractSemaphore] = lambda aval, _: aval
 
 
-@dataclasses.dataclass(frozen=True)
-class MemoryRef:
-  """Like jax.ShapeDtypeStruct but with memory spaces."""
-  shape: tuple[int, ...]
-  dtype: jnp.dtype
-  memory_space: TPUMemorySpace = TPUMemorySpace.ANY
-
-  def get_aval(self) -> AbstractMemoryRef:
-    return AbstractMemoryRef(
-        jax_core.ShapedArray(self.shape, self.dtype), self.memory_space)
-
-
-@dataclasses.dataclass(init=False, unsafe_hash=True)
+@dataclasses.dataclass(init=False, kw_only=True, unsafe_hash=True)
 class PrefetchScalarGridSpec(pallas_core.GridSpec):
-  grid: TupleGrid
-  grid_names: tuple[Hashable, ...] | None
   num_scalar_prefetch: int
-  in_specs: pallas_core.BlockSpecTree
-  out_specs: pallas_core.BlockSpecTree
-  scratch_shapes: tuple[Any, ...]
 
   def __init__(
       self,
@@ -155,23 +180,15 @@ class PrefetchScalarGridSpec(pallas_core.GridSpec):
       grid: Grid = (),
       in_specs: BlockSpecTree = no_block_spec,
       out_specs: BlockSpecTree = no_block_spec,
-      scratch_shapes: Any | Sequence[Any] = ()
+      scratch_shapes: ScratchShapeTree = ()
   ):
-    super().__init__(grid, in_specs, out_specs)
+    super().__init__(grid, in_specs, out_specs, scratch_shapes)
     self.num_scalar_prefetch = num_scalar_prefetch
     self.scratch_shapes = tuple(scratch_shapes)
 
   def _make_scalar_ref_aval(self, aval):
     return AbstractMemoryRef(jax_core.ShapedArray(aval.shape, aval.dtype),
                              TPUMemorySpace.SMEM)
-
-  def _make_scratch_aval(self, obj: object) -> jax_core.AbstractValue:
-    if isinstance(obj, MemoryRef):
-      return obj.get_aval()
-    if isinstance(obj, SemaphoreType):
-      return obj.get_aval()
-    raise ValueError(f"No registered conversion for {type(obj)}. "
-                     "Only VMEM and SemaphoreType are supported.")
 
 
 @dataclasses.dataclass(frozen=True)

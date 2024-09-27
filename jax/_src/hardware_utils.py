@@ -20,20 +20,16 @@ _GOOGLE_PCI_VENDOR_ID = '0x1ae0'
 _TPU_PCI_DEVICE_IDS = [
     # TPU v2, v3
     '0x0027',
+    # No public name (plc)
+    '0x0056',
     # TPU v4
     '0x005e',
+    # TPU v5p
+    '0x0062',
     # TPU v5e
     '0x0063',
-    # Testing only
-    '0x0056',
-    '0x0062',
-]
-
-_TPU_ENHANCED_BARRIER_SUPPORTED = [
-    # TPU v2, v3
-    '0x0027',
-    # TPU v4
-    '0x005e',
+    # TPU v6e
+    '0x006f',
 ]
 
 _NVIDIA_GPU_DEVICES = [
@@ -57,12 +53,6 @@ def num_available_tpu_chips_and_device_id():
       num_chips += 1
 
   return num_chips, device_id
-
-
-def tpu_enhanced_barrier_supported() -> bool:
-  """Returns if tpu_enhanced_barrier flag is supported on this TPU version."""
-  _, device_id = num_available_tpu_chips_and_device_id()
-  return device_id in _TPU_ENHANCED_BARRIER_SUPPORTED
 
 
 def has_visible_nvidia_gpu() -> bool:

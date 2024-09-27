@@ -22,7 +22,6 @@ import operator
 from typing import Any, TypeVar
 import weakref
 
-import jax
 from jax._src import ad_checkpoint
 from jax._src import ad_util
 from jax._src import api
@@ -42,6 +41,7 @@ from jax._src.interpreters import batching
 from jax._src.interpreters import mlir
 from jax._src.interpreters import partial_eval as pe
 from jax._src.interpreters import pxla
+from jax._src import sharding_impls as sharding
 from jax._src.interpreters import xla
 from jax._src.lax import lax
 from jax._src.lax import slicing
@@ -50,9 +50,9 @@ from jax._src.lax.control_flow.common import (
     _abstractify, _avals_short, _initial_style_jaxpr,
     _initial_style_jaxpr_attrs, _make_closed_jaxpr_attrs, _prune_zeros,
     _typecheck_param)
+from jax._src.lax.other import logaddexp
 from jax._src.lib.mlir import ir
 from jax._src.lib.mlir.dialects import hlo
-from jax._src.numpy.ufuncs import logaddexp
 from jax._src.state import discharge as state_discharge
 from jax._src.traceback_util import api_boundary
 from jax._src.tree_util import equality_errors
@@ -67,6 +67,7 @@ from jax._src.util import (
     unzip2,
     weakref_lru_cache,
 )
+from jax._src import xla_bridge as xb
 from jax.tree_util import (
     keystr,
     tree_flatten,
@@ -84,6 +85,9 @@ T = TypeVar('T')
 BooleanNumeric = Any  # A bool, or a Boolean array.
 
 ### Helper functions
+
+def _stack(arrs: Sequence[Array], axis: int=0) -> Array:
+  return lax.concatenate([lax.expand_dims(arr, (axis,)) for arr in arrs], dimension=axis)
 
 def _promote_weak_typed_inputs(in_vals, in_avals, out_avals):
   """Promote weakly-typed in_vals to be compatible with out_avals.
@@ -224,7 +228,11 @@ def scan(f: Callable[[Carry, X], tuple[Carry, Y]],
                            if not hasattr(x, 'shape')))) from err
 
   if length is not None:
-    length = int(length)
+    try:
+      length = int(length)
+    except core.ConcretizationTypeError as err:
+      msg = 'The `length` argument to `scan` expects a concrete `int` value.'
+      raise core.ConcretizationTypeError(length, msg) from None  # type: ignore[arg-type]
     if not all(length == l for l in lengths):
       msg = ("scan got `length` argument of {} which disagrees with "
              "leading axis sizes {}.")
@@ -250,7 +258,7 @@ def scan(f: Callable[[Carry, X], tuple[Carry, Y]],
       xs_slice = [slicing.index_in_dim(x, i, keepdims=False) for x in xs_flat]
       carry, y = f(carry, tree_unflatten(xs_tree, xs_slice))
       ys.append(y)
-    stack = lambda *ys: jax.numpy.stack(ys)
+    stack = lambda *ys: _stack(ys)
     stacked_y = tree_map(stack, *maybe_reversed(ys))
     return carry, stacked_y
 
@@ -268,7 +276,8 @@ def scan(f: Callable[[Carry, X], tuple[Carry, Y]],
     if len(out_tree_children) != 2:
       msg = "scan body output must be a pair, got {}."
       raise TypeError(msg.format(tree_unflatten(out_tree, jaxpr.out_avals)))
-    carry_avals_out = jaxpr.out_avals[:out_tree_children[0].num_leaves]
+    _, carry_avals_out, _ = split_list(
+        jaxpr.out_avals, [len(attrs_tracked), out_tree_children[0].num_leaves])
     return (init_flat, carry_avals, carry_avals_out, init_tree, in_flat, jaxpr,
             consts, out_tree, out_tree_children, attrs_tracked)
 
@@ -291,6 +300,10 @@ def scan(f: Callable[[Carry, X], tuple[Carry, Y]],
     raise NotImplementedError(
         f'Effects not supported in `scan`: {disallowed_effects}')
 
+  unroll = core.concrete_or_error(
+      None, unroll,
+      "The `unroll` argument to `scan` expects a concrete `int` or `bool` "
+      "value.")
   if isinstance(unroll, bool):
     unroll = max(length, 1) if unroll else 1
   if unroll < 1:
@@ -440,11 +453,11 @@ def _scan_impl(*args, reverse, length, num_consts, num_carry, jaxpr, linear,
       carry, y = split_list(carry_y, [num_carry])
       ys.append(y)
     ys = list(reversed(ys)) if reverse else ys
-    return carry, _map(jax.numpy.stack, zip(*ys))
+    return carry, _map(_stack, zip(*ys))
 
   if num_trips:
     i = lax._const(num_trips, 0)
-    _, carry, yss = jax.lax.while_loop(cond_fun, body_fun, (i, carry, yss))
+    _, carry, yss = while_loop(cond_fun, body_fun, (i, carry, yss))
   if unroll != 1:
     ys = [lax.reshape(ys, (num_trips * unroll, *ys.shape[2:])) for ys in yss]
   else:
@@ -534,7 +547,7 @@ def _scan_jvp(primals, tangents, reverse, length, jaxpr, num_consts, num_carry,
   carry, carry_dot, ys, ys_dot = split_list(out_flat, [num_carry, len(init_dot), num_ys])
   primals_out = carry + ys
   tangents_out_iter = iter(carry_dot + ys_dot)
-  tangents_out = [next(tangents_out_iter) if nz else ad_util.Zero.from_value(p)
+  tangents_out = [next(tangents_out_iter) if nz else ad_util.Zero.from_primal_value(p)
                   for p, nz in zip(primals_out, nonzeros_out)]
   return primals_out, tangents_out
 
@@ -685,9 +698,9 @@ def _scan_partial_eval(trace, *tracers, reverse, length, num_consts, num_carry,
 def _maybe_put(x):
   if isinstance(x, np.ndarray):
     aval = shaped_abstractify(x)
-    s = jax.sharding.SingleDeviceSharding(jax.local_devices(backend='cpu')[0])
+    s = sharding.SingleDeviceSharding(xb.local_devices(backend='cpu')[0])
     result_handler = pxla.global_aval_to_result_handler(aval, s, False)
-    return result_handler(pxla.shard_args([s], [x]))
+    return result_handler(pxla.shard_args([s], [None], [x]))
   else:
     return x
 
@@ -702,7 +715,7 @@ def _scan_transpose(cts, *args, reverse, length, num_consts,
   if xs_lin != [True] * (len(xs_lin) - num_eres) + [False] * num_eres:
     raise NotImplementedError
   if not all(init_lin):
-    pass  # TODO(mattjj): error check https://github.com/google/jax/issues/1963
+    pass  # TODO(mattjj): error check https://github.com/jax-ml/jax/issues/1963
 
   consts, _, xs = split_list(args, [num_consts, num_carry])
   ires, _ = split_list(consts, [num_ires])
@@ -1156,7 +1169,7 @@ def _scan_state_discharge_rule(in_avals, out_avals, *args, jaxpr, num_consts,
   if discharged_consts:
     raise NotImplementedError("Discharged jaxpr has consts. If you see this, "
                               "please open an issue at "
-                              "https://github.com/google/jax/issues")
+                              "https://github.com/jax-ml/jax/issues")
   def wrapped(*wrapped_args):
     val_consts, ref_consts_in, carry_in, val_xs, ref_xs_in = split_list_checked(wrapped_args,
       [n_val_consts, n_ref_consts, n_carry, n_val_xs, n_ref_xs])
@@ -1505,7 +1518,7 @@ def _while_loop_jvp(primals, tangents, cond_nconsts, cond_jaxpr, body_nconsts,
 
   out_carry, out_carry_dot = split_list(out, [num_carry])
   out_tangents_iter = iter(out_carry_dot)
-  out_tangents = [next(out_tangents_iter) if nz else ad_util.Zero.from_value(p)
+  out_tangents = [next(out_tangents_iter) if nz else ad_util.Zero.from_primal_value(p)
                   for p, nz in zip(out_carry, nonzeros_out)]
   return out_carry, out_tangents
 
@@ -1825,7 +1838,7 @@ def _while_discharge_rule(in_avals, out_avals, *args, cond_jaxpr, body_jaxpr,
   if body_jaxpr_consts:
     raise NotImplementedError("Body jaxpr has consts. If you see this error, "
                               "please open an issue at "
-                              "https://github.com/google/jax/issues")
+                              "https://github.com/jax-ml/jax/issues")
   # body_jaxpr has the signature (*body_consts, *carry) -> carry.
   # Some of these body_consts are actually `Ref`s so when we discharge
   # them, they also turn into outputs, effectively turning those consts into
@@ -2135,12 +2148,12 @@ def map(
   """
   if batch_size is not None:
     scan_xs, remainder_xs = _batch_and_remainder(xs, batch_size)
-    g = lambda _, x: ((), jax.vmap(f)(x))
+    g = lambda _, x: ((), api.vmap(f)(x))
     _, scan_ys = scan(g, (), scan_xs)
-    remainder_ys = jax.vmap(f)(remainder_xs)
+    remainder_ys = api.vmap(f)(remainder_xs)
     flatten = lambda x: x.reshape(-1, *x.shape[2:])
     ys = tree_map(
-      lambda x, y: jax.numpy.concatenate([flatten(x), y], axis=0), scan_ys, remainder_ys,
+      lambda x, y: lax.concatenate([flatten(x), y], dimension=0), scan_ys, remainder_ys,
     )
   else:
     g = lambda _, x: ((), f(x))
@@ -2158,7 +2171,7 @@ def _rng_bit_generator_batching_rule(batched_args, batch_dims, *, shape, dtype, 
   key = keys[0]
   new_key, bits = lax.rng_bit_generator_p.bind(key, shape=(batch_size, *shape),
                                                dtype=dtype, algorithm=algorithm)
-  new_keys = jax.lax.dynamic_update_index_in_dim(keys, new_key, 0, axis=0)
+  new_keys = slicing.dynamic_update_index_in_dim(keys, new_key, 0, axis=0)
   return (new_keys, bits), (0, 0)
 
 batching.primitive_batchers[lax.rng_bit_generator_p] = _rng_bit_generator_batching_rule

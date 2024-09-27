@@ -21,7 +21,7 @@ import logging
 import os
 import tempfile
 import time
-from typing import Any
+from typing import Any, Callable
 import warnings
 
 from jax._src import compilation_cache
@@ -33,7 +33,6 @@ from jax._src import profiler
 from jax._src import traceback_util
 from jax._src.interpreters import mlir
 from jax._src.lib import xla_client as xc
-from jax._src.lib import xla_extension_version
 from jax._src.lib.mlir import ir
 import numpy as np
 
@@ -157,8 +156,7 @@ def get_compile_options(
   build_options = compile_options.executable_build_options
   build_options.use_spmd_partitioning = use_spmd_partitioning
   build_options.use_auto_spmd_partitioning = use_auto_spmd_partitioning
-  if xla_extension_version >= 280:
-    build_options.use_shardy_partitioner = use_shardy_partitioner
+  build_options.use_shardy_partitioner = use_shardy_partitioner
   if fdo_profile is not None:
     build_options.fdo_profile = fdo_profile
   if use_auto_spmd_partitioning:
@@ -253,15 +251,45 @@ def backend_compile(
   else:
     built_c = module
 
-  # we use a separate function call to ensure that XLA compilation appears
-  # separately in Python profiling results
-  if host_callbacks:
-    return backend.compile(built_c, compile_options=options,
-                           host_callbacks=host_callbacks)
-  # Some backends don't have `host_callbacks` option yet
-  # TODO(sharadmv): remove this fallback when all backends allow `compile`
-  # to take in `host_callbacks`
-  return backend.compile(built_c, compile_options=options)
+  try:
+    # we use a separate function call to ensure that XLA compilation appears
+    # separately in Python profiling results
+    if host_callbacks:
+      return backend.compile(
+          built_c, compile_options=options, host_callbacks=host_callbacks
+      )
+    # Some backends don't have `host_callbacks` option yet
+    # TODO(sharadmv): remove this fallback when all backends allow `compile`
+    # to take in `host_callbacks`
+    return backend.compile(built_c, compile_options=options)
+  except xc.XlaRuntimeError as e:
+    for error_handler in _XLA_RUNTIME_ERROR_HANDLERS:
+      handler_result = error_handler(e)
+      if handler_result is not None:
+        raise handler_result from e
+    raise e
+
+
+_XLA_RUNTIME_ERROR_HANDLERS = []
+
+
+def register_xla_runtime_error_handler(
+    handler_fn: Callable[[xc.XlaRuntimeError], Exception | None],
+):
+  """Registers a custom exception handler for XLA runtime errors.
+
+  Registering a custom handler allows re-raising a more informative exception
+  after encountering an XLARuntimeError.
+
+  Args:
+    handler_fn: A function which returns a new exception to replace the original
+      XLA runtime error, or None if the original error should be propagated.
+
+  Returns:
+    A new exception or None.
+  """
+  _XLA_RUNTIME_ERROR_HANDLERS.append(handler_fn)
+
 
 def compile_or_get_cached(
     backend: xc.Client,

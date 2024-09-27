@@ -217,6 +217,8 @@ class Mesh(contextlib.ContextDecorator):
     super().__setattr__(name, value)
 
   def __enter__(self):
+    if jax_config.disallow_mesh_context_manager.value:
+      raise RuntimeError("Mesh context manager is disabled.")
     new_env = thread_resources.stack[-1].with_mesh(self)
     thread_resources.stack.append(new_env)
     thread_resources.env = new_env
@@ -247,11 +249,11 @@ class Mesh(contextlib.ContextDecorator):
 
   @property
   def size(self):
-    return math.prod(self.shape.values())
+    return math.prod(self.shape.values()) if self.devices.ndim else 0
 
   @property
   def empty(self):
-    return self.devices.ndim == 0
+    return self.size == 0
 
   @functools.cached_property
   def is_multi_process(self):
@@ -308,6 +310,10 @@ class Mesh(contextlib.ContextDecorator):
     return [d for d in self.devices.flat
             if d.process_index == d.client.process_index()]
 
+  @functools.cached_property
+  def abstract_mesh(self):
+    return AbstractMesh(self.shape_tuple)
+
 
 EMPTY_ENV = ResourceEnv(Mesh(np.empty((), dtype=object), ()))
 
@@ -318,3 +324,91 @@ class _ThreadResourcesLocalState(threading.local):
     self.env = self.stack[-1]
 
 thread_resources = _ThreadResourcesLocalState()
+
+
+class AbstractMesh:
+  """AbstractMesh contains only axis names and axis sizes.
+
+  It does not contain concrete devices compared to `jax.sharding.Mesh`. You
+  should use this as an input to the sharding passed to with_sharding_constraint
+  and mesh passed to shard_map to avoid tracing and lowering cache misses when
+  your mesh shape and names stay the same but the devices change.
+  See the description of https://github.com/jax-ml/jax/pull/23022 for more
+  details.
+  """
+
+  def __init__(self, shape_tuple: tuple[tuple[str, int], ...]):
+    self.shape_tuple = shape_tuple
+    if self.shape_tuple:
+      self._axis_names, self._axis_sizes = list(zip(*self.shape_tuple))
+    else:
+      self._axis_names, self._axis_sizes = (), ()
+
+  def __hash__(self):
+    return hash(self.shape_tuple)
+
+  def __eq__(self, other):
+    if not isinstance(other, AbstractMesh):
+      return False
+    if id(self) == id(other):
+      return True
+    return self.shape_tuple == other.shape_tuple
+
+  def __repr__(self):
+    return f"AbstractMesh({self.shape_tuple})"
+
+  @property
+  def axis_names(self):
+    return self._axis_names
+
+  @functools.cached_property
+  def size(self):
+    return math.prod(self._axis_sizes) if self._axis_sizes else 0
+
+  @functools.cached_property
+  def shape(self):
+    return collections.OrderedDict(self.shape_tuple)
+
+  @property
+  def _is_jax_device_mesh(self):
+    return False
+
+  @property
+  def _internal_device_list(self):
+    return None
+
+  @property
+  def empty(self):
+    return self.size == 0
+
+  @property
+  def devices(self):
+    _raise_value_error("devices")
+
+  @property
+  def device_ids(self):
+    _raise_value_error("device_ids")
+
+  @property
+  def is_multi_process(self):
+    _raise_value_error("is_multi_process")
+
+  @property
+  def local_devices(self):
+    _raise_value_error("local_devices")
+
+  @property
+  def local_mesh(self):
+    _raise_value_error("local_mesh")
+
+  def __enter__(self):
+    raise RuntimeError("AbstractMesh is not a context manager")
+
+  def __exit__(self, exc_type, exc_value, traceback):
+    raise RuntimeError("AbstractMesh is not a context manager")
+
+
+# Create this indirection because pytype fails to recognize a property if a
+# property raises an exception unconditionally. Remove this once that is fixed.
+def _raise_value_error(name):
+  raise ValueError(f"AbstractMesh does not implement {name}")

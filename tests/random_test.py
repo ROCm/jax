@@ -436,7 +436,7 @@ class PrngTest(jtu.JaxTestCase):
   @skipIf(not config.threefry_partitionable.value, 'enable after upgrade')
   @parameterized.parameters([{'make_key': ctor} for ctor in KEY_CTORS])
   def test_threefry_split_vmapped_fold_in_symmetry(self, make_key):
-    # See https://github.com/google/jax/issues/7708
+    # See https://github.com/jax-ml/jax/issues/7708
     with jax.default_prng_impl('threefry2x32'):
       key = make_key(72)
       f1, f2, f3 = vmap(lambda k, _: random.fold_in(k, lax.axis_index('batch')),
@@ -450,7 +450,7 @@ class PrngTest(jtu.JaxTestCase):
 
   @skipIf(config.threefry_partitionable.value, 'changed random bit values')
   def test_loggamma_nan_corner_case(self):
-    # regression test for https://github.com/google/jax/issues/17922
+    # regression test for https://github.com/jax-ml/jax/issues/17922
     # This particular key previously led to NaN output.
     # If the underlying implementation ever changes, this test will no longer
     # exercise this corner case, so we compare to a particular output value
@@ -545,7 +545,7 @@ class PrngTest(jtu.JaxTestCase):
 
   @parameterized.parameters([{'make_key': ctor} for ctor in KEY_CTORS])
   def test_key_output_vjp(self, make_key):
-    # See https://github.com/google/jax/issues/14856
+    # See https://github.com/jax-ml/jax/issues/14856
     def f(seed): return make_key(seed)
     jax.vjp(f, 1)  # doesn't crash
 
@@ -578,7 +578,7 @@ class ThreefryPrngTest(jtu.JaxTestCase):
       partial(random.PRNGKey, impl='threefry2x32'),
       partial(random.key, impl='threefry2x32')]])
   def test_seed_no_implicit_transfers(self, make_key):
-    # See https://github.com/google/jax/issues/15613
+    # See https://github.com/jax-ml/jax/issues/15613
     with jax.transfer_guard('disallow'):
       make_key(jax.device_put(42))  # doesn't crash
 
@@ -922,14 +922,14 @@ class KeyArrayTest(jtu.JaxTestCase):
     self.assertEqual(ys.shape, (3, 2))
 
   def test_select_scalar_cond(self):
-    # regression test for https://github.com/google/jax/issues/16422
+    # regression test for https://github.com/jax-ml/jax/issues/16422
     ks = self.make_keys(3)
     ys = lax.select(True, ks, ks)
     self.assertIsInstance(ys, prng_internal.PRNGKeyArray)
     self.assertEqual(ys.shape, (3,))
 
   def test_vmap_of_cond(self):
-    # See https://github.com/google/jax/issues/15869
+    # See https://github.com/jax-ml/jax/issues/15869
     def f(x):
       keys = self.make_keys(*x.shape)
       return lax.select(x, keys, keys)
@@ -957,7 +957,7 @@ class KeyArrayTest(jtu.JaxTestCase):
   def test_make_array_from_callback(self):
     devices = jax.devices()
     shape = (len(devices),)
-    mesh = jtu.create_global_mesh((len(devices),), ('x',))
+    mesh = jtu.create_mesh((len(devices),), ('x',))
     sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec('x'))
     def callback(index):
       i = jnp.arange(len(devices))[index[0]]
@@ -969,7 +969,7 @@ class KeyArrayTest(jtu.JaxTestCase):
   def test_make_array_from_single_device_arrays(self):
     devices = jax.devices()
     shape = (len(devices),)
-    mesh = jtu.create_global_mesh((len(devices),), ('x',))
+    mesh = jtu.create_mesh((len(devices),), ('x',))
     sharding = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec('x'))
     keys = random.split(random.key(0), len(devices))
     arrays = [jax.device_put(keys[i:i + 1], device) for i, device in enumerate(devices)]
@@ -1119,8 +1119,14 @@ class KeyArrayTest(jtu.JaxTestCase):
     with self.assertRaisesRegex(TypeError, 'unrecognized type .* PRNG'):
       jax.random.key(42, impl=A())
 
+  @jtu.sample_product(name=[name for name, _ in PRNG_IMPLS])
+  def test_key_spec_repr(self, name):
+    key = jax.random.key(42, impl=name)
+    spec = jax.random.key_impl(key)
+    self.assertEqual(repr(spec), f"PRNGSpec({name!r})")
+
   def test_keyarray_custom_vjp(self):
-    # Regression test for https://github.com/google/jax/issues/18442
+    # Regression test for https://github.com/jax-ml/jax/issues/18442
     @jax.custom_vjp
     def f(_, state):
       return state

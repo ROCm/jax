@@ -202,17 +202,26 @@ def trace_context():
   tls = jax_jit.thread_local_state()
   axis_env_state = ()
   mesh_context_manager = ()
+  xla_metadata_context_manager = ()
+  compute_on_context_manager = ()
+
   context: Any = tls.extra_jit_context
   if context and context.axis_env_state is not None:
     axis_env_state = context.axis_env_state
   if context and context.mesh_context_manager:
     mesh_context_manager = context.mesh_context_manager
-  return (axis_env_state, mesh_context_manager, enable_x64.value,
+  if context and context.xla_metadata_context_manager:
+    xla_metadata_context_manager = context.xla_metadata_context_manager
+  if context and context.compute_on_context_manager:
+    compute_on_context_manager = context.compute_on_context_manager
+  return (axis_env_state, mesh_context_manager, xla_metadata_context_manager,
+          compute_on_context_manager, enable_x64.value,
           numpy_rank_promotion.value, default_matmul_precision.value,
           dynamic_shapes.value, numpy_dtype_promotion.value,
           default_device.value, random_seed_offset.value,
           threefry_partitionable.value,
           threefry_gpu_kernel_lowering.value,
+          sharding_in_types.value,
           softmax_custom_jvp.value,
           enable_memories.value,
           disable_jit.value,
@@ -826,6 +835,7 @@ class _GlobalExtraJitContext(NamedTuple):
   random_seed_offset: int = 0
   threefry_partitionable: bool = False
   threefry_gpu_kernel_lowering: bool = False
+  sharding_in_types: bool = False
   softmax_custom_jvp: bool = False
   xla_profile_version: int = 0
   pgle_profiling_runs: int = 0
@@ -851,6 +861,8 @@ class _ThreadLocalExtraJitContext(NamedTuple):
   dynamic_trace_state: Any | None = None
   axis_env_state: Hashable = ()
   mesh_context_manager: Hashable = ()
+  compute_on_context_manager: Hashable = ()
+  xla_metadata_context_manager: Hashable = ()
 
   # Values set by _StateContextManager context managers.
   # CAUTION: these must be initialized to `None`! The state context manager
@@ -864,10 +876,12 @@ class _ThreadLocalExtraJitContext(NamedTuple):
   random_seed_offset: int | None = None
   threefry_partitionable: bool | None = None
   threefry_gpu_kernel_lowering: bool | None = None
+  sharding_in_types: bool | None = None
   softmax_custom_jvp: bool | None = None
   xla_profile_version: int | None = None
   pgle_profiling_runs: int | None = None
   enable_pgle: bool | None = None
+  use_shardy_partitioner: bool | None = None
 
 
 class _ThreadLocalStateCache(threading.local):
@@ -1054,7 +1068,7 @@ def _update_jax_memories_thread_local(val):
 
 enable_memories = bool_state(
     'jax_enable_memories',
-    default=False,
+    default=True,
     upgrade=True,
     update_global_hook=_update_jax_memories_global,
     update_thread_local_hook=_update_jax_memories_thread_local,
@@ -1139,6 +1153,16 @@ threefry_gpu_kernel_lowering = bool_state(
     update_thread_local_hook=lambda val: update_thread_local_jit_state(
         threefry_gpu_kernel_lowering=val))
 
+sharding_in_types = bool_state(
+    name='jax_sharding_in_types',
+    default=False,
+    help=('When True, enables forward only sharding propagation in JAX and '
+          'avals have sharding on them.'),
+    update_global_hook=lambda val: _update_global_jit_state(
+        sharding_in_types=val),
+    update_thread_local_hook=lambda val: update_thread_local_jit_state(
+        sharding_in_types=val))
+
 
 softmax_custom_jvp = bool_state(
     name='jax_softmax_custom_jvp',
@@ -1146,7 +1170,7 @@ softmax_custom_jvp = bool_state(
     upgrade=True,
     help=('Use a new custom_jvp rule for jax.nn.softmax. The new rule should '
           'improve memory usage and stability. Set True to use new '
-          'behavior. See https://github.com/google/jax/pull/15677'),
+          'behavior. See https://github.com/jax-ml/jax/pull/15677'),
     update_global_hook=lambda val: _update_global_jit_state(
         softmax_custom_jvp=val),
     update_thread_local_hook=lambda val: update_thread_local_jit_state(
@@ -1323,6 +1347,16 @@ compilation_cache_max_size = int_state(
           'size to grow indefinitely.'),
 )
 
+remove_custom_partitioning_ptr_from_cache_key = bool_state(
+    name='jax_remove_custom_partitioning_ptr_from_cache_key',
+    default=False,
+    help=('If set to True, remove the custom partitioning pointer '
+          'present in the precompiled stableHLO before hashing  '
+          'during cache key computation. This is a potentially '
+          'unsafe flag to set and only users who are sure of '
+          'what they are trying to achieve should set it.'),
+)
+
 default_dtype_bits = enum_state(
     name='jax_default_dtype_bits',
     enum_values=['32', '64'],
@@ -1343,6 +1377,15 @@ numpy_dtype_promotion = enum_state(
       _update_global_jit_state(numpy_dtype_promotion=val),
     update_thread_local_hook=lambda val: \
       update_thread_local_jit_state(numpy_dtype_promotion=val))
+
+disallow_mesh_context_manager = bool_state(
+    name='jax_disallow_mesh_context_manager',
+    default=False,
+    help=(
+        'If set to True, trying to use a mesh as a context manager will'
+        ' result in a RuntimeError.'
+    ),
+)
 
 def _update_x64_global(val):
   lib.jax_jit.global_state().enable_x64 = val
@@ -1500,6 +1543,11 @@ eager_pmap = bool_state(
     default=True,
     upgrade=True,
     help='Enable eager-mode pmap when jax_disable_jit is activated.')
+
+no_tracing = bool_state(
+    name='jax_no_tracing',
+    default=False,
+    help='Disallow tracing for JIT compilation.')
 
 disable_vmap_shmap_error = bool_state(
     name='jax_disable_vmap_shmap_error',
@@ -1681,10 +1729,8 @@ string_state(
 
 pmap_no_rank_reduction = bool_state(
     name='jax_pmap_no_rank_reduction',
-    default=False,
-    help=(
-        "If True, pmap shards have a the same rank as their enclosing array."
-    )
+    default=True,
+    help='If True, pmap shards have a the same rank as their enclosing array.',
 )
 
 use_shardy_partitioner = bool_state(

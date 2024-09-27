@@ -26,7 +26,7 @@ import numpy as np
 
 import jax
 import jax.numpy as jnp
-from jax.sharding import NamedSharding, PartitionSpec, Mesh
+from jax.sharding import NamedSharding, PartitionSpec
 from jax._src import ad_checkpoint
 from jax._src import ad_util
 from jax._src import callback
@@ -46,10 +46,13 @@ from jax._src import source_info_util
 from jax._src import traceback_util
 from jax._src import util
 from jax._src.core import Tracer
+from jax._src.mesh import AbstractMesh, Mesh
 from jax._src.api import _shared_code_pmap, _prepare_pmap
 from jax._src.lax import (lax, parallel as lax_parallel, slicing,
                           windowed_reductions, convolution, fft, linalg,
                           special, control_flow, ann)
+from jax._src.lib.mlir import ir
+from jax._src.lib.mlir.dialects import hlo, sdy
 from jax._src.util import (HashableFunction, HashablePartial, unzip2, unzip3,
                            as_hashable_function, memoize, partition_list,
                            merge_lists, split_list, subs_list2)
@@ -79,8 +82,9 @@ AxisName = Hashable
 
 
 @traceback_util.api_boundary
-def shard_map(f: Callable, mesh: Mesh, in_specs: Specs, out_specs: Specs,
-              check_rep: bool = True, auto: frozenset[AxisName] = frozenset()):
+def shard_map(f: Callable, mesh: Mesh | AbstractMesh, in_specs: Specs,
+              out_specs: Specs, check_rep: bool = True,
+              auto: frozenset[AxisName] = frozenset()):
   """Map a function over shards of data.
 
   Note:
@@ -134,14 +138,15 @@ def shard_map(f: Callable, mesh: Mesh, in_specs: Specs, out_specs: Specs,
   """
   return _shard_map(f, mesh, in_specs, out_specs, check_rep, auto)
 
-def _shard_map(f: Callable, mesh: Mesh, in_specs: Specs,
+def _shard_map(f: Callable, mesh: Mesh | AbstractMesh, in_specs: Specs,
                out_specs: Specs | Callable[[], Specs],
                check_rep: bool, auto: frozenset[AxisName]):
   if not callable(f):
     raise TypeError("shard_map requires a callable for its first argument, "
                     f"but got {f} of type {type(f)}.")
-  if not isinstance(mesh, Mesh):
-    raise TypeError("shard_map requires a `jax.sharding.Mesh` instance for its "
+  if not isinstance(mesh, (Mesh, AbstractMesh)):
+    raise TypeError("shard_map requires a `jax.sharding.Mesh` or a "
+                    "`jax.sharding.AbstractMesh` instance for its "
                     f"second argument, but got {mesh} of type {type(mesh)}.")
   if not auto.issubset(mesh.axis_names):
     raise ValueError(f"shard_map requires auto={auto} to be a subset of "
@@ -163,7 +168,7 @@ def _shard_map(f: Callable, mesh: Mesh, in_specs: Specs,
       raise e('shard_map in_specs') from None
     dyn_argnums, in_specs_flat = unzip2((i, s) for i, s in enumerate(in_specs_flat)
                                         if s is not None)
-    fun, args_flat = argnums_partial(fun, dyn_argnums, args_flat)
+    fun, args_flat = argnums_partial(fun, dyn_argnums, args_flat, False)
     _check_specs_vs_args(f, mesh, in_tree, in_specs, dyn_argnums, in_specs_flat, args_flat)
     in_names_flat = tuple(map(_canonicalize_spec, in_specs_flat))
 
@@ -636,13 +641,75 @@ def _rule_missing(prim: core.Primitive, *_, **__):
   raise NotImplementedError(
       f"No replication rule for {prim}. As a workaround, pass the "
       "`check_rep=False` argument to `shard_map`. To get this fixed, open an "
-      "issue at https://github.com/google/jax/issues")
+      "issue at https://github.com/jax-ml/jax/issues")
 
 # Lowering
+
+def _shardy_shard_map_sharding(
+    ctx: mlir.LoweringRuleContext, mesh, names, aval_in
+  ) -> ir.Attribute:
+  axes = {name: i for i, ns in names.items() for name in ns}
+  ns = _make_scoped_manual_sharding(ctx, mesh, axes)
+  if dtypes.issubdtype(aval_in.dtype, dtypes.extended):
+    ns = sharding_impls.physical_sharding(aval_in, ns)
+    aval_in = core.physical_aval(aval_in)
+  return ns._to_sdy_sharding(aval_in.ndim).build()
+
+
+def _shard_map_lowering_shardy(
+    ctx, in_nodes, jaxpr, mesh, in_names, out_names, auto):
+  in_avals_ = [v.aval for v in jaxpr.invars]
+  if isinstance(ctx.module_context.axis_context, sharding_impls.SPMDAxisContext):
+    # Nested `ManualComputationOp`s cannot refer to axes that are already
+    # manual. So figure out what axes are free thus far and get the new axis
+    # context.
+    free_axis = frozenset(mesh.axis_names) - ctx.module_context.axis_context.manual_axes
+    new_axis_context = sharding_impls.SPMDAxisContext(mesh, free_axis - auto)
+  else:
+    new_axis_context = sharding_impls.SPMDAxisContext(
+        mesh, frozenset(mesh.axis_names) - auto)
+  sub_ctx = ctx.module_context.replace(axis_context=new_axis_context)
+  args = (*ctx.dim_var_values, *in_nodes)
+
+  manual_axes = sub_ctx.axis_context.manual_axes
+  mesh_shape = mesh.shape
+  manual_axes_size = np.prod([mesh_shape[a] for a in manual_axes])
+  if manual_axes_size == 1:
+    # No need for a `ManualComputationOp` if all manual axes are size 1.
+    out_nodes, _ = mlir.jaxpr_subcomp(
+        sub_ctx, jaxpr, ctx.name_stack, mlir.TokenSet(), (), *args,
+        dim_var_values=ctx.dim_var_values)
+    return out_nodes
+
+  in_shardings = sdy.TensorShardingPerValueAttr.get(map(
+      partial(_shardy_shard_map_sharding, ctx, mesh),
+      in_names, ctx.avals_in))
+  out_shardings = sdy.TensorShardingPerValueAttr.get(map(
+      partial(_shardy_shard_map_sharding, ctx, mesh),
+      out_names, ctx.avals_out))
+  output_types = map(mlir.aval_to_ir_type, ctx.avals_out)
+  manual_computation_op = sdy.ManualComputationOp(
+      output_types, args, in_shardings, out_shardings,
+      sdy.ManualAxesAttr.get(
+          ir.ArrayAttr.get([ir.StringAttr.get(i) for i in manual_axes])))
+  block = ir.Block.create_at_start(
+      manual_computation_op.body, map(mlir.aval_to_ir_type, in_avals_))
+  with ir.InsertionPoint(block), core.extend_axis_env_nd(
+      tuple(mesh.shape.items())):
+    out_nodes_, _ = mlir.jaxpr_subcomp(
+        sub_ctx, jaxpr, ctx.name_stack, mlir.TokenSet(), (), *block.arguments,
+        dim_var_values=ctx.dim_var_values)
+    sdy.ReturnOp([ir.Value(x) for x in out_nodes_])
+
+  return manual_computation_op.results
+
 
 def _shard_map_lowering(ctx, *in_nodes, jaxpr, mesh, in_names, out_names,
                         check_rep, rewrite, auto):
   del check_rep, rewrite
+  if config.use_shardy_partitioner.value:
+    return _shard_map_lowering_shardy(
+        ctx, in_nodes, jaxpr, mesh, in_names, out_names, auto)
   in_avals_ = [v.aval for v in jaxpr.invars]
   out_avals_ = [x.aval for x in jaxpr.outvars]
   in_nodes_ = map(partial(_xla_shard, ctx, mesh, auto), in_names, ctx.avals_in,
@@ -711,10 +778,29 @@ def _pspec_mhlo_attrs(names: AxisNames, aval: core.AbstractValue) -> str:
 
 # Eager evaluation
 
+def get_mesh_from_args(args_flat, mesh):
+  for a in args_flat:
+    if hasattr(a, 'sharding') and isinstance(a.sharding, NamedSharding):
+      if a.sharding.mesh.shape_tuple != mesh.shape_tuple:
+        aval = shaped_abstractify(a)
+        raise ValueError(
+            f"Mesh shape of the input {a.sharding.mesh.shape_tuple} does not"
+            " match the mesh shape passed to shard_map "
+            f" {mesh.shape_tuple} for shape {aval.str_short()}")
+      mesh = a.sharding.mesh
+  if isinstance(mesh, AbstractMesh):
+    raise ValueError(
+        "Please pass `jax.Array`s with a `NamedSharding` as input to"
+        " `shard_map` when passing `AbstractMesh` to the mesh argument.")
+  assert isinstance(mesh, Mesh)
+  return mesh
+
 def _shard_map_impl(trace, prim, fun, args, *, mesh, in_names, out_names_thunk,
                     check_rep, rewrite, auto):
   if auto: raise NotImplementedError
   del prim, auto
+  if isinstance(mesh, AbstractMesh):
+    mesh = get_mesh_from_args(args, mesh)
   args = map(partial(_unmatch_spec, mesh), in_names, args)
   in_rep = map(partial(_in_names_to_rep, mesh), in_names)
   with core.new_base_main(ShardMapTrace, mesh=mesh, check=check_rep) as main:
@@ -823,20 +909,20 @@ class ShardMapTrace(core.Trace):
         f"Eager evaluation of `{call_primitive}` inside a `shard_map` isn't "
         "yet supported. Put a `jax.jit` around the `shard_map`-decorated "
         "function, and open a feature request at "
-        "https://github.com/google/jax/issues !")
+        "https://github.com/jax-ml/jax/issues !")
 
   def process_map(self, map_primitive, fun, tracers, params):
     raise NotImplementedError(
         "Eager evaluation of `pmap` inside a `shard_map` isn't yet supported."
         "Put a `jax.jit` around the `shard_map`-decorated function, and open "
-        "a feature request at https://github.com/google/jax/issues !")
+        "a feature request at https://github.com/jax-ml/jax/issues !")
 
   def process_custom_jvp_call(self, prim, fun, jvp, tracers, *, symbolic_zeros):
     # Since ShardMapTrace is only used as a base main, we can drop the jvp.
     if symbolic_zeros:
       msg = ("custom_jvp symbolic_zeros support with shard_map is not "
              "implemented; please open an issue at "
-             "https://github.com/google/jax/issues")
+             "https://github.com/jax-ml/jax/issues")
       raise NotImplementedError(msg)
     del prim, jvp, symbolic_zeros
     in_vals, in_rep = unzip2((t.val, t.rep) for t in tracers)
@@ -854,7 +940,7 @@ class ShardMapTrace(core.Trace):
     if symbolic_zeros:
       msg = ("custom_vjp symbolic_zeros support with shard_map is not "
              "implemented; please open an issue at "
-             "https://github.com/google/jax/issues")
+             "https://github.com/jax-ml/jax/issues")
       raise NotImplementedError(msg)
     del prim, fwd, bwd, out_trees, symbolic_zeros
     in_vals, in_rep = unzip2((t.val, t.rep) for t in tracers)
@@ -1020,13 +1106,17 @@ def _standard_check(prim, mesh, *in_rep, **__):
   if in_rep_ and not in_rep_[:-1] == in_rep_[1:]:
     raise Exception(f"Primitive {prim} requires argument replication types "
                     f"to match, but got {in_rep}. Please open an issue at "
-                    "https://github.com/google/jax/issues and as a temporary "
+                    "https://github.com/jax-ml/jax/issues and as a temporary "
                     "workaround pass the check_rep=False argument to shard_map")
   return in_rep_[0] if in_rep_ else None
 
 def register_standard_collective(prim):
   register_check(prim)(partial(_standard_collective_check, prim))
   register_rewrite(prim)(partial(_standard_collective_rewrite, prim))
+
+def register_reduction_collective(prim):
+  register_check(prim)(partial(_reduction_collective_check, prim))
+  register_rewrite(prim)(partial(_reduction_collective_rewrite, prim))
 
 def _standard_collective_check(prim, mesh, x_rep, *, axis_name, **params):
   # The standard collective check is varying -> varying over axis_name.
@@ -1035,7 +1125,7 @@ def _standard_collective_check(prim, mesh, x_rep, *, axis_name, **params):
     raise Exception(f"Collective {prim} must be applied to a device-varying "
                     f"replication type, but got {x_rep} for collective acting "
                     f"over axis name {axis_name}. Please open an issue at "
-                    "https://github.com/google/jax/issues and as a temporary "
+                    "https://github.com/jax-ml/jax/issues and as a temporary "
                     "workaround pass the check_rep=False argument to shard_map")
   return x_rep
 
@@ -1048,6 +1138,28 @@ def _standard_collective_rewrite(prim, mesh, in_rep, x, axis_name, **params):
     x = pbroadcast(x, tuple(pbroadcast_axis_name))
   out_val = prim.bind(x, axis_name=axis_name, **params)
   return [out_val], [x_rep - axis_name_set]
+
+def _reduction_collective_check(prim, mesh, x_rep, *, axes, **params):
+  # The reduction collective check is varying -> replicated over axes.
+  del mesh, params
+  axes = (axes,) if not isinstance(axes, tuple) else axes
+  if x_rep is None or any(a in x_rep for a in axes):
+    raise Exception(f"Collective {prim} must be applied to a device-varying "
+                    f"replication type, but got {x_rep} for collective acting "
+                    f"over axis name {axes}. Please open an issue at "
+                    "https://github.com/jax-ml/jax/issues and as a temporary "
+                    "workaround pass the check_rep=False argument to shard_map")
+  return x_rep | set(axes)
+
+def _reduction_collective_rewrite(prim, mesh, in_rep, x, axes, **params):
+  # The standard collective rewrite may insert a pbroadcast on the input.
+  axes = (axes,) if not isinstance(axes, tuple) else axes
+  x_rep, = in_rep
+  axes_set = set(axes)
+  if pbroadcast_axes := axes_set & x_rep:
+    x = pbroadcast(x, tuple(pbroadcast_axes))
+  out_val, = prim.bind(x, axes=axes, **params)
+  return [out_val], [x_rep | axes_set]
 
 
 for o in it.chain(lax.__dict__.values(), slicing.__dict__.values(),
@@ -1092,7 +1204,7 @@ def _psum2_check(mesh, *in_rep, axes, axis_index_groups):
     raise Exception("Collective psum must be applied to a device-varying "
                     f"replication type, but got {in_rep} for collective acting "
                     f"over axis name {axes}. Please open an issue at "
-                    "https://github.com/google/jax/issues, and as a temporary "
+                    "https://github.com/jax-ml/jax/issues, and as a temporary "
                     "workaround pass the check_rep=False argument to shard_map")
   in_rep = tuple(set(mesh.axis_names) if r is None else r for r in in_rep)
   return [r | set(axes) for r in in_rep]
@@ -1107,7 +1219,7 @@ def _pbroadcast_check(mesh, *in_rep, axes, axis_index_groups):
                     "non-device-varying "
                     f"replication type, but got {in_rep} for collective acting "
                     f"over axis name {axes}. Please open an issue at "
-                    "https://github.com/google/jax/issues, and as a temporary "
+                    "https://github.com/jax-ml/jax/issues, and as a temporary "
                     "workaround pass the check_rep=False argument to shard_map")
   in_rep = tuple(set(mesh.axis_names) if r is None else r for r in in_rep)
   return [r - set(axes) for r in in_rep]
@@ -1118,6 +1230,8 @@ register_standard_collective(lax_parallel.all_gather_p)
 register_standard_collective(lax_parallel.all_to_all_p)
 register_standard_collective(lax_parallel.ppermute_p)
 register_standard_collective(lax_parallel.reduce_scatter_p)
+register_reduction_collective(lax_parallel.pmin_p)
+register_reduction_collective(lax_parallel.pmax_p)
 
 
 @register_check(lax_parallel.axis_index_p)
@@ -1194,7 +1308,7 @@ def _scan_check(mesh, *in_rep, jaxpr, num_consts, num_carry, **_):
   if not carry_rep_in == carry_rep_out:
     raise Exception("Scan carry input and output got mismatched replication "
                     f"types {carry_rep_in} and {carry_rep_out}. Please open an "
-                    "issue at https://github.com/google/jax/issues, and as a "
+                    "issue at https://github.com/jax-ml/jax/issues, and as a "
                     "temporary workaround pass the check_rep=False argument to "
                     "shard_map")
   return out_rep
@@ -1245,7 +1359,7 @@ def _custom_vjp_call_jaxpr_rewrite(
     mesh, in_rep, *args, fun_jaxpr, fwd_jaxpr_thunk, bwd, num_consts, out_trees,
     symbolic_zeros):
   if symbolic_zeros:
-    msg = ("Please open an issue at https://github.com/google/jax/issues and as"
+    msg = ("Please open an issue at https://github.com/jax-ml/jax/issues and as"
            " a temporary workaround pass the check_rep=False argument to "
            "shard_map")
     raise NotImplementedError(msg)
@@ -1281,7 +1395,7 @@ def _linear_solve_check(mesh, *in_rep, const_lengths, jaxprs):
   assert in_rep
   if not in_rep_[:-1] == in_rep_[1:]:
     msg = ("shard_map check_rep rewrite failed. Please open an issue at "
-           "https://github.com/google/jax/issues and as a workaround pass the "
+           "https://github.com/jax-ml/jax/issues and as a workaround pass the "
            "check_rep=False argument to shard_map")
     raise Exception(msg)
   return [in_rep_[0]] * len(jaxprs.solve.out_avals)
@@ -1383,7 +1497,7 @@ def _shard_map_jvp(trace, shard_map_p, f, tracers, mesh, in_names,
   f_jvp, out_tree = ad.traceable(f_jvp, in_tree)
   result = shard_map_p.bind(f_jvp, *args, **params)
   primal_out, tangent_out = tree_unflatten(out_tree(), result)
-  tangent_out = [ad.Zero(core.get_aval(p).at_least_vspace()) if t is None else t
+  tangent_out = [ad.Zero(core.get_aval(p).to_tangent_aval()) if t is None else t
                  for p, t in zip(primal_out, tangent_out)]
   return [ad.JVPTracer(trace, p, t) for p, t in zip(primal_out, tangent_out)]
 ad.JVPTrace.process_shard_map = _shard_map_jvp
@@ -1856,7 +1970,7 @@ class RewriteTrace(core.Trace):
 
   def process_custom_jvp_call(self, prim, fun, jvp, tracers, *, symbolic_zeros):
     if symbolic_zeros:
-      msg = ("Please open an issue at https://github.com/google/jax/issues and "
+      msg = ("Please open an issue at https://github.com/jax-ml/jax/issues and "
              "as a temporary workaround pass the check_rep=False argument to "
              "shard_map")
       raise NotImplementedError(msg)
@@ -1877,7 +1991,7 @@ class RewriteTrace(core.Trace):
   def process_custom_vjp_call(self, prim, fun, fwd, bwd, tracers, out_trees,
                               symbolic_zeros):
     if symbolic_zeros:
-      msg = ("Please open an issue at https://github.com/google/jax/issues and "
+      msg = ("Please open an issue at https://github.com/jax-ml/jax/issues and "
              "as a temporary workaround pass the check_rep=False argument to "
              "shard_map")
       raise NotImplementedError(msg)
@@ -1906,17 +2020,24 @@ def _efficient_transpose_rewrite(fun, mesh, in_names, out_names_thunk):
   fun, out_reps_src = _efficient_transpose_rewrite_nomatch(fun, mesh, in_reps)
   return _match_rep(fun, mesh, out_reps_src, out_reps_dst)
 
+def _efficient_transpose_rewrite_nomatch(fun, mesh, in_reps):
+  return _efficient_transpose_outer(_efficient_transpose_inner(fun), mesh, in_reps)
+
 @lu.transformation_with_aux
-def _efficient_transpose_rewrite_nomatch(mesh, in_reps, *args):
+def _efficient_transpose_outer(mesh, in_reps, *args):
   lvl = core.dynamic_level()
   with core.new_main(RewriteTrace, dynamic=True, mesh=mesh, dyna=lvl) as main:
-    t = main.with_cur_sublevel()
-    in_tracers = map(partial(RewriteTracer, t), in_reps, args)
-    ans = yield in_tracers, {}
-    out_tracers = map(t.full_raise, ans)
-    out_vals, out_reps = unzip2((t.val, t.rep) for t in out_tracers)
-    del main, t, in_tracers, out_tracers, ans
+    out_vals, out_reps = yield (main, mesh, in_reps, args), {}
+    del main
   yield out_vals, out_reps
+
+@lu.transformation
+def _efficient_transpose_inner(main, mesh, in_reps, args):
+  t = main.with_cur_sublevel()
+  in_tracers = map(partial(RewriteTracer, t), in_reps, args)
+  ans = yield in_tracers, {}
+  out_tracers = map(t.full_raise, ans)
+  yield unzip2((t.val, t.rep) for t in out_tracers)
 
 @lu.transformation
 def _match_rep(mesh, out_reps_src_, out_reps_dst_, *args):
@@ -1982,3 +2103,13 @@ def _match_replication(src, dst, x):
   if src - dst:
     x = pbroadcast(x, tuple(n for n in src if n not in dst))
   return x
+
+# TODO(parkers,mattjj): change implementation when we have sharding-in-types.
+def get_replication(x: jax.Array) -> set[AxisName]:
+  """For a jax.Array, return what axes it is known to be replicated along."""
+
+  if isinstance(x, RewriteTracer):
+    return x.rep
+  if isinstance(x, batching.BatchTracer):
+    return get_replication(x.val)
+  raise ValueError("get_replication not defined on %s" % repr(type(x)))

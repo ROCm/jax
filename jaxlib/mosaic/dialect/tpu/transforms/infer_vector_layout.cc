@@ -196,12 +196,16 @@ class VectorLayoutInferer {
         auto out_ty = dyn_cast<VectorType>(op.getType());
         TPU_CHECK_OP(static_cast<bool>(in_ty) == static_cast<bool>(out_ty),
                      "Input and output are not both vectors?");
-        if (in_ty) {
-          TPU_CHECK_OP(in_ty.getElementTypeBitWidth() == 1,
-                       "Only extending i1 is supported");
-        }
-        if (inferElementwise(&any_op, /*check_bitwidth=*/false).failed()) {
-          return failure();
+        auto in_bitwidth = in_ty ? in_ty.getElementTypeBitWidth()
+                                 : op.getIn().getType().getIntOrFloatBitWidth();
+        if (in_bitwidth == 1) {
+          if (inferElementwise(&any_op, /*check_bitwidth=*/false).failed()) {
+            return failure();
+          }
+        } else {
+          if (inferExt(&any_op).failed()) {
+            return failure();
+          }
         }
       } else if (isa<arith::CmpIOp>(any_op) || isa<arith::CmpFOp>(any_op)) {
         Operation *op = &any_op;  // For TPU_CHECK_OP macros, which use the `op`
@@ -1277,11 +1281,7 @@ class VectorLayoutInferer {
     auto src_ty = op.getSourceVectorType();
     auto dst_ty = dyn_cast<VectorType>(op.getDestType());
     TPU_CHECK_OP(dst_ty, "only reductions with vector results supported");
-    SmallVector<int64_t> dims;
-    dims.reserve(op.getReductionDims().size());
-    for (Attribute dim_attr : op.getReductionDims()) {
-      dims.push_back(cast<IntegerAttr>(dim_attr).getInt());
-    }
+    llvm::ArrayRef<int64_t> dims = op.getReductionDims();
     int64_t src_rank = src_ty.getRank();
     auto acc_layout = getLayout(op.getAcc());
     TPU_CHECK_OP(is_fully_replicated(acc_layout),
@@ -1358,6 +1358,9 @@ class VectorLayoutInferer {
 
     // TODO(tlongeri): Be smarter about trying implicit dims. We should probably
     // only add them when folding dimensions, and remove them when unfolding.
+    // The ordering of candidate implicit dims is important! Inserting an
+    // implicit second minor can make a reshape possible, but also very
+    // inefficient. We should always prefer to try with None first.
     SmallVector<ImplicitDim, 3> candidate_implicit_dims;
     if (res_shape.size() >= 2) {
       candidate_implicit_dims.push_back(ImplicitDim::kNone);
@@ -1386,21 +1389,28 @@ class VectorLayoutInferer {
     for (const ImplicitDim implicit_dim : candidate_implicit_dims) {
       const std::array<int64_t, 2> res_tiled_ishape =
           VectorLayout::getImplicitTiledDims(implicit_dim, res_shape, 1);
-      // Sublane (un)folding.
-      if (src_tiled_ishape[1] == res_tiled_ishape[1] &&
-          src_tiled_ishape[0] % vreg_slice[0] == 0 &&
-          res_tiled_ishape[0] % vreg_slice[0] == 0) {
-        // TODO(b/343808585): We shouldn't force second minor offset to 0 when
-        //                    unfolding, it's still a no-op, but we need to add
-        //                    support in apply-vector-layout.
-        const LayoutOffsets offsets = {0, layout.offsets()[1]};
-        setLayout(op,
-                  VectorLayout(layout.bitwidth(), offsets, layout.tiling(),
-                               layout.implicit_dim()),
-                  VectorLayout(layout.bitwidth(), offsets, layout.tiling(),
-                               implicit_dim));
-        return success();
-      }
+      // Sublane (un)folding. We attempt to reduce the sublane tiling, which
+      // might make this reshape a no-op. We use do-while to handle the packed
+      // 1D tilings that use 1 in the sublane dimension.
+      int64_t sublane_tiling = vreg_slice[0];
+      do {
+        if (src_tiled_ishape[1] == res_tiled_ishape[1] &&
+            src_tiled_ishape[0] % sublane_tiling == 0 &&
+            res_tiled_ishape[0] % sublane_tiling == 0) {
+          std::array<int64_t, 2> tiling = {sublane_tiling, target_shape_[1]};
+          // TODO(b/343808585): We shouldn't force second minor offset to 0 when
+          //                    unfolding, it's still a no-op, but we need to
+          //                    add support in apply-vector-layout.
+          LayoutOffsets offsets = {0, layout.offsets()[1]};
+          setLayout(op,
+                    VectorLayout(layout.bitwidth(), offsets, tiling,
+                                layout.implicit_dim()),
+                    VectorLayout(layout.bitwidth(), offsets, tiling,
+                                implicit_dim));
+          return success();
+        }
+        sublane_tiling /= 2;
+      } while (sublane_tiling >= layout.packing());
       // Lane (un)folding.
       if (src_tiled_ishape[1] != res_tiled_ishape[1] &&
           src_tiled_ishape[1] % layout.tiling()[1] == 0 &&
@@ -1770,9 +1780,8 @@ class VectorLayoutInferer {
       if (auto reduce =
               dyn_cast<vector::MultiDimReductionOp>(operand.getOwner())) {
         bool reduces_tiled_dims = false;
-        for (Attribute dim : reduce.getReductionDims()) {
-          if (cast<IntegerAttr>(dim).getInt() >=
-              reduce.getSourceVectorType().getRank() - 2) {
+        for (int64_t dim : reduce.getReductionDims()) {
+          if (dim >= reduce.getSourceVectorType().getRank() - 2) {
             reduces_tiled_dims = true;
             break;
           }

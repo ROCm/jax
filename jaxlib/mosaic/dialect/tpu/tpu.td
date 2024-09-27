@@ -233,6 +233,37 @@ def TPU_StridedStoreOp : TPU_Op<"strided_store"> {
   let hasVerifier = 1;
 }
 
+def TPU_ShuffledLoadOp : TPU_Op<"shuffled_load"> {
+  let arguments = (ins
+    AnyMemRef:$base,
+    Variadic<Index>:$indices,
+    DenseBoolArrayAttr:$sublane_mask,
+    DenseI32ArrayAttr:$sublane_offsets
+  );
+  let results = (outs TPU_Vreg:$result);
+  let assemblyFormat = [{
+    $base `[` $indices `]` attr-dict `:` type($base) `,` type($result)
+  }];
+  let hasVerifier = 1;
+  let hasCanonicalizeMethod = 1;
+}
+
+def TPU_ShuffledStoreOp : TPU_Op<"shuffled_store"> {
+  let arguments = (ins
+    TPU_Vreg:$valueToStore,
+    AnyMemRef:$base,
+    Variadic<Index>:$indices,
+    DenseBoolArrayAttr:$sublane_mask,
+    DenseI32ArrayAttr:$sublane_offsets
+  );
+  let results = (outs);
+  let assemblyFormat = [{
+    $base `[` $indices `]` `,` $valueToStore attr-dict `:` type($base) `,` type($valueToStore)
+  }];
+  let hasVerifier = 1;
+  let hasCanonicalizeMethod = 1;
+}
+
 // TODO(jevinjiang): deprecate to use dynamic_rotate.
 def TPU_RotateOp : TPU_Op<"rotate", [Pure, SameOperandsAndResultType]> {
   let arguments = (ins
@@ -486,6 +517,16 @@ def TPU_MemRefSqueezeOp : TPU_Op<"memref_squeeze", [Pure]> {
 }
 
 def TPU_MemRefReshapeOp : TPU_Op<"memref_reshape", [Pure]> {
+  let arguments = (ins AnyMemRef:$input);
+  let results = (outs AnyMemRef:$result);
+  let assemblyFormat = [{
+    $input attr-dict `:` type($input) `->` type($result)
+  }];
+  let hasVerifier = 1;
+  let hasCanonicalizeMethod = 1;
+}
+
+def TPU_MemRefBitcastOp : TPU_Op<"memref_bitcast", [Pure]> {
   let arguments = (ins AnyMemRef:$input);
   let results = (outs AnyMemRef:$result);
   let assemblyFormat = [{
@@ -749,6 +790,7 @@ def ApplyVectorLayoutPass : Pass<"tpu-apply-vector-layout", "::mlir::func::FuncO
     Option<"mxu_contracting_size", "mxu-contracting-size", "int", /*default=*/"128", "">,
     Option<"mxu_noncontracting_size", "mxu-noncontracting-size", "int", /*default=*/"128", "">,
     Option<"max_sublanes_in_scratch", "max-sublanes-in-scratch", "int", /*default=*/"0", "">,
+    Option<"vmem_banks", "vmem-banks", "int", /*default=*/"-1", "">,
   ];
 }
 

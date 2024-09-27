@@ -28,8 +28,8 @@ import jax
 from jax import lax
 from jax._src import api
 from jax._src import core
+from jax._src import deprecations
 from jax._src import dtypes
-from jax._src.numpy import ufuncs
 from jax._src.numpy.util import (
     _broadcast_to, check_arraylike, _complex_elem_type,
     promote_dtypes_inexact, promote_dtypes_numeric, _where, implements)
@@ -765,7 +765,8 @@ def _mean(a: ArrayLike, axis: Axis = None, dtype: DTypeLike | None = None,
     else:
       normalizer = core.dimension_as_value(_axis_size(a, axis))
   else:
-    normalizer = sum(_broadcast_to(where, np.shape(a)), axis, dtype=dtype, keepdims=keepdims)
+    normalizer = sum(_broadcast_to(where, np.shape(a)), axis,
+                     dtype=computation_dtype, keepdims=keepdims)
 
   return lax.div(
       sum(a, axis, dtype=computation_dtype, keepdims=keepdims, where=where),
@@ -967,7 +968,7 @@ def _var_promote_types(a_dtype: DTypeLike, dtype: DTypeLike | None) -> tuple[DTy
       msg = ("jax.numpy.var does not yet support real dtype parameters when "
              "computing the variance of an array of complex values. The "
              "semantics of numpy.var seem unclear in this case. Please comment "
-             "on https://github.com/google/jax/issues/2283 if this behavior is "
+             "on https://github.com/jax-ml/jax/issues/2283 if this behavior is "
              "important to you.")
       raise ValueError(msg)
     computation_dtype = dtype
@@ -1786,73 +1787,257 @@ class CumulativeReduction(Protocol):
                dtype: DTypeLike | None = None, out: None = None) -> Array: ...
 
 
-# TODO(jakevdp): should we change these semantics to match those of numpy?
-CUML_REDUCTION_LAX_DESCRIPTION = """
-Unlike the numpy counterpart, when ``dtype`` is not specified the output dtype will always
-match the dtype of the input.
-"""
+def _cumulative_reduction(
+    name: str, reduction: Callable[..., Array],
+    a: ArrayLike, axis: int | None, dtype: DTypeLike | None, out: None,
+    fill_nan: bool = False, fill_value: ArrayLike = 0,
+    promote_integers: bool = False) -> Array:
+  """Helper function for implementing cumulative reductions."""
+  check_arraylike(name, a)
+  if out is not None:
+    raise NotImplementedError(f"The 'out' argument to jnp.{name} is not supported")
+  dtypes.check_user_dtype_supported(dtype, name)
 
-def _make_cumulative_reduction(np_reduction: Any, reduction: Callable[..., Array],
-                               fill_nan: bool = False, fill_value: ArrayLike = 0,
-                               promote_integers: bool = False) -> CumulativeReduction:
-  @implements(np_reduction, skip_params=['out'],
-          lax_description=CUML_REDUCTION_LAX_DESCRIPTION)
-  def cumulative_reduction(a: ArrayLike, axis: Axis = None,
-                           dtype: DTypeLike | None = None, out: None = None) -> Array:
-    return _cumulative_reduction(a, _ensure_optional_axes(axis), dtype, out)
+  if axis is None or _isscalar(a):
+    a = lax.reshape(a, (np.size(a),))
+  if axis is None:
+    axis = 0
 
-  @partial(api.jit, static_argnames=('axis', 'dtype'))
-  def _cumulative_reduction(a: ArrayLike, axis: Axis = None,
-                            dtype: DTypeLike | None = None, out: None = None) -> Array:
-    check_arraylike(np_reduction.__name__, a)
-    if out is not None:
-      raise NotImplementedError(f"The 'out' argument to jnp.{np_reduction.__name__} "
-                                f"is not supported.")
-    dtypes.check_user_dtype_supported(dtype, np_reduction.__name__)
+  a_shape = list(np.shape(a))
+  num_dims = len(a_shape)
+  axis = _canonicalize_axis(axis, num_dims)
 
-    if axis is None or _isscalar(a):
-      a = lax.reshape(a, (np.size(a),))
-    if axis is None:
-      axis = 0
+  if fill_nan:
+    a = _where(lax_internal._isnan(a), _lax_const(a, fill_value), a)
 
-    a_shape = list(np.shape(a))
-    num_dims = len(a_shape)
-    axis = _canonicalize_axis(axis, num_dims)
+  a_type: DType = dtypes.dtype(a)
+  result_type: DTypeLike = dtypes.dtype(dtype or a)
+  if dtype is None and promote_integers or dtypes.issubdtype(result_type, np.bool_):
+    result_type = _promote_integer_dtype(result_type)
+  result_type = dtypes.canonicalize_dtype(result_type)
 
-    if fill_nan:
-      a = _where(lax_internal._isnan(a), _lax_const(a, fill_value), a)
+  if a_type != np.bool_ and dtype == np.bool_:
+    a = lax_internal.asarray(a).astype(np.bool_)
 
-    result_type: DTypeLike = dtypes.dtype(dtype or a)
-    if dtype is None and promote_integers or dtypes.issubdtype(result_type, np.bool_):
-      result_type = _promote_integer_dtype(result_type)
-    result_type = dtypes.canonicalize_dtype(result_type)
+  a = lax.convert_element_type(a, result_type)
+  result = reduction(a, axis)
 
-    a = lax.convert_element_type(a, result_type)
-    result = reduction(a, axis)
-
-    # We downcast to boolean because we accumulate in integer types
-    if dtypes.issubdtype(dtype, np.bool_):
-      result = lax.convert_element_type(result, np.bool_)
-    return result
-
-  return cumulative_reduction
+  # We downcast to boolean because we accumulate in integer types
+  if dtype is not None and dtypes.issubdtype(dtype, np.bool_):
+    result = lax.convert_element_type(result, np.bool_)
+  return result
 
 
-cumsum = _make_cumulative_reduction(np.cumsum, lax.cumsum, fill_nan=False)
-cumprod = _make_cumulative_reduction(np.cumprod, lax.cumprod, fill_nan=False)
-nancumsum = _make_cumulative_reduction(np.nancumsum, lax.cumsum,
-                                       fill_nan=True, fill_value=0)
-nancumprod = _make_cumulative_reduction(np.nancumprod, lax.cumprod,
-                                        fill_nan=True, fill_value=1)
-_cumsum_with_promotion = _make_cumulative_reduction(
-  np.cumsum, lax.cumsum, fill_nan=False, promote_integers=True
-)
+@partial(api.jit, static_argnames=('axis', 'dtype'))
+def cumsum(a: ArrayLike, axis: int | None = None,
+           dtype: DTypeLike | None = None, out: None = None) -> Array:
+  """Cumulative sum of elements along an axis.
 
-@implements(getattr(np, 'cumulative_sum', None))
+  JAX implementation of :func:`numpy.cumsum`.
+
+  Args:
+    a: N-dimensional array to be accumulated.
+    axis: integer axis along which to accumulate. If None (default), then
+      array will be flattened and accumulated along the flattened axis.
+    dtype: optionally specify the dtype of the output. If not specified,
+      then the output dtype will match the input dtype.
+    out: unused by JAX
+
+  Returns:
+    An array containing the accumulated sum along the given axis.
+
+  See also:
+    - :func:`jax.numpy.cumulative_sum`: cumulative sum via the array API standard.
+    - :meth:`jax.numpy.add.accumulate`: cumulative sum via ufunc methods.
+    - :func:`jax.numpy.nancumsum`: cumulative sum ignoring NaN values.
+    - :func:`jax.numpy.sum`: sum along axis
+
+  Examples:
+    >>> x = jnp.array([[1, 2, 3],
+    ...                [4, 5, 6]])
+    >>> jnp.cumsum(x)  # flattened cumulative sum
+    Array([ 1,  3,  6, 10, 15, 21], dtype=int32)
+    >>> jnp.cumsum(x, axis=1)  # cumulative sum along axis 1
+    Array([[ 1,  3,  6],
+           [ 4,  9, 15]], dtype=int32)
+  """
+  return _cumulative_reduction("cumsum", lax.cumsum, a, axis, dtype, out)
+
+
+@partial(api.jit, static_argnames=('axis', 'dtype'))
+def cumprod(a: ArrayLike, axis: int | None = None,
+            dtype: DTypeLike | None = None, out: None = None) -> Array:
+  """Cumulative product of elements along an axis.
+
+  JAX implementation of :func:`numpy.cumprod`.
+
+  Args:
+    a: N-dimensional array to be accumulated.
+    axis: integer axis along which to accumulate. If None (default), then
+      array will be flattened and accumulated along the flattened axis.
+    dtype: optionally specify the dtype of the output. If not specified,
+      then the output dtype will match the input dtype.
+    out: unused by JAX
+
+  Returns:
+    An array containing the accumulated product along the given axis.
+
+  See also:
+    - :meth:`jax.numpy.multiply.accumulate`: cumulative product via ufunc methods.
+    - :func:`jax.numpy.nancumprod`: cumulative product ignoring NaN values.
+    - :func:`jax.numpy.prod`: product along axis
+
+  Examples:
+    >>> x = jnp.array([[1, 2, 3],
+    ...                [4, 5, 6]])
+    >>> jnp.cumprod(x)  # flattened cumulative product
+    Array([  1,   2,   6,  24, 120, 720], dtype=int32)
+    >>> jnp.cumprod(x, axis=1)  # cumulative product along axis 1
+    Array([[  1,   2,   6],
+           [  4,  20, 120]], dtype=int32)
+  """
+  return _cumulative_reduction("cumprod", lax.cumprod, a, axis, dtype, out)
+
+
+@partial(api.jit, static_argnames=('axis', 'dtype'))
+def nancumsum(a: ArrayLike, axis: int | None = None,
+              dtype: DTypeLike | None = None, out: None = None) -> Array:
+  """Cumulative sum of elements along an axis, ignoring NaN values.
+
+  JAX implementation of :func:`numpy.nancumsum`.
+
+  Args:
+    a: N-dimensional array to be accumulated.
+    axis: integer axis along which to accumulate. If None (default), then
+      array will be flattened and accumulated along the flattened axis.
+    dtype: optionally specify the dtype of the output. If not specified,
+      then the output dtype will match the input dtype.
+    out: unused by JAX
+
+  Returns:
+    An array containing the accumulated sum along the given axis.
+
+  See also:
+    - :func:`jax.numpy.cumsum`: cumulative sum without ignoring NaN values.
+    - :func:`jax.numpy.cumulative_sum`: cumulative sum via the array API standard.
+    - :meth:`jax.numpy.add.accumulate`: cumulative sum via ufunc methods.
+    - :func:`jax.numpy.sum`: sum along axis
+
+  Examples:
+    >>> x = jnp.array([[1., 2., jnp.nan],
+    ...                [4., jnp.nan, 6.]])
+
+    The standard cumulative sum will propagate NaN values:
+
+    >>> jnp.cumsum(x)
+    Array([ 1.,  3., nan, nan, nan, nan], dtype=float32)
+
+    :func:`~jax.numpy.nancumsum` will ignore NaN values, effectively replacing
+    them with zeros:
+
+    >>> jnp.nancumsum(x)
+    Array([ 1.,  3.,  3.,  7.,  7., 13.], dtype=float32)
+
+    Cumulative sum along axis 1:
+
+    >>> jnp.nancumsum(x, axis=1)
+    Array([[ 1.,  3.,  3.],
+           [ 4.,  4., 10.]], dtype=float32)
+  """
+  return _cumulative_reduction("nancumsum", lax.cumsum, a, axis, dtype, out,
+                               fill_nan=True, fill_value=0)
+
+
+@partial(api.jit, static_argnames=('axis', 'dtype'))
+def nancumprod(a: ArrayLike, axis: int | None = None,
+               dtype: DTypeLike | None = None, out: None = None) -> Array:
+  """Cumulative product of elements along an axis, ignoring NaN values.
+
+  JAX implementation of :func:`numpy.nancumprod`.
+
+  Args:
+    a: N-dimensional array to be accumulated.
+    axis: integer axis along which to accumulate. If None (default), then
+      array will be flattened and accumulated along the flattened axis.
+    dtype: optionally specify the dtype of the output. If not specified,
+      then the output dtype will match the input dtype.
+    out: unused by JAX
+
+  Returns:
+    An array containing the accumulated product along the given axis.
+
+  See also:
+    - :func:`jax.numpy.cumprod`: cumulative product without ignoring NaN values.
+    - :meth:`jax.numpy.multiply.accumulate`: cumulative product via ufunc methods.
+    - :func:`jax.numpy.prod`: product along axis
+
+  Examples:
+    >>> x = jnp.array([[1., 2., jnp.nan],
+    ...                [4., jnp.nan, 6.]])
+
+    The standard cumulative product will propagate NaN values:
+
+    >>> jnp.cumprod(x)
+    Array([ 1.,  2., nan, nan, nan, nan], dtype=float32)
+
+    :func:`~jax.numpy.nancumprod` will ignore NaN values, effectively replacing
+    them with ones:
+
+    >>> jnp.nancumprod(x)
+    Array([ 1.,  2.,  2.,  8.,  8., 48.], dtype=float32)
+
+    Cumulative product along axis 1:
+
+    >>> jnp.nancumprod(x, axis=1)
+    Array([[ 1.,  2.,  2.],
+           [ 4.,  4., 24.]], dtype=float32)
+  """
+  return _cumulative_reduction("nancumprod", lax.cumprod, a, axis, dtype, out,
+                               fill_nan=True, fill_value=1)
+
+
+@partial(api.jit, static_argnames=('axis', 'dtype'))
+def _cumsum_with_promotion(a: ArrayLike, axis: int | None = None,
+           dtype: DTypeLike | None = None, out: None = None) -> Array:
+  """Utility function to compute cumsum with integer promotion."""
+  return _cumulative_reduction("_cumsum_with_promotion", lax.cumsum,
+                               a, axis, dtype, out, promote_integers=True)
+
+
 def cumulative_sum(
     x: ArrayLike, /, *, axis: int | None = None,
     dtype: DTypeLike | None = None,
     include_initial: bool = False) -> Array:
+  """Cumulative sum along the axis of an array.
+
+  JAX implementation of :func:`numpy.cumulative_sum`.
+
+  Args:
+    x: N-dimensional array
+    axis: integer axis along which to accumulate. If ``x`` is one-dimensional,
+      this argument is optional.
+    dtype: optional dtype of the output.
+    include_initial: if True, then include the initial value in the cumulative
+      sum. Default is False.
+
+  Returns:
+    An array containing the accumulated values.
+
+  See Also:
+    - :func:`jax.numpy.cumsum`: alternative API for cumulative sum.
+    - :func:`jax.numpy.nancumsum`: cumulative sum while ignoring NaN values.
+    - :func:`jax.numpy.add.accumulate`: cumulative sum via the ufunc API.
+
+  Examples:
+    >>> x = jnp.array([[1, 2, 3],
+    ...                [4, 5, 6]])
+    >>> jnp.cumulative_sum(x, axis=1)
+    Array([[ 1,  3,  6],
+           [ 4,  9, 15]], dtype=int32)
+    >>> jnp.cumulative_sum(x, axis=1, include_initial=True)
+    Array([[ 0,  1,  3,  6],
+           [ 0,  4,  9, 15]], dtype=int32)
+  """
   check_arraylike("cumulative_sum", x)
   x = lax_internal.asarray(x)
   if x.ndim == 0:
@@ -1882,36 +2067,116 @@ def cumulative_sum(
 # Quantiles
 
 # TODO(jakevdp): interpolation argument deprecated 2024-05-16
-@implements(np.quantile, skip_params=['out', 'overwrite_input'])
 @partial(api.jit, static_argnames=('axis', 'overwrite_input', 'interpolation', 'keepdims', 'method'))
 def quantile(a: ArrayLike, q: ArrayLike, axis: int | tuple[int, ...] | None = None,
              out: None = None, overwrite_input: bool = False, method: str = "linear",
              keepdims: bool = False, *, interpolation: DeprecatedArg | str = DeprecatedArg()) -> Array:
+  """Compute the quantile of the data along the specified axis.
+
+  JAX implementation of :func:`numpy.quantile`.
+
+  Args:
+    a: N-dimensional array input.
+    q: scalar or 1-dimensional array specifying the desired quantiles. ``q``
+      should contain floating-point values between ``0.0`` and ``1.0``.
+    axis: optional axis or tuple of axes along which to compute the quantile
+    out: not implemented by JAX; will error if not None
+    overwrite_input: not implemented by JAX; will error if not False
+    method: specify the interpolation method to use. Options are one of
+      ``["linear", "lower", "higher", "midpoint", "nearest"]``.
+      default is ``linear``.
+    keepdims: if True, then the returned array will have the same number of
+      dimensions as the input. Default is False.
+    interpolation: deprecated alias of the ``method`` argument. Will result
+      in a :class:`DeprecationWarning` if used.
+
+  Returns:
+    An array containing the specified quantiles along the specified axes.
+
+  See also:
+    - :func:`jax.numpy.nanquantile`: compute the quantile while ignoring NaNs
+    - :func:`jax.numpy.percentile`: compute the percentile (0-100)
+
+  Examples:
+    Computing the median and quartiles of an array, with linear interpolation:
+
+    >>> x = jnp.arange(10)
+    >>> q = jnp.array([0.25, 0.5, 0.75])
+    >>> jnp.quantile(x, q)
+    Array([2.25, 4.5 , 6.75], dtype=float32)
+
+    Computing the quartiles using nearest-value interpolation:
+
+    >>> jnp.quantile(x, q, method='nearest')
+    Array([2., 4., 7.], dtype=float32)
+  """
   check_arraylike("quantile", a, q)
   if overwrite_input or out is not None:
-    msg = ("jax.numpy.quantile does not support overwrite_input=True or "
-           "out != None")
-    raise ValueError(msg)
+    raise ValueError("jax.numpy.quantile does not support overwrite_input=True "
+                     "or out != None")
   if not isinstance(interpolation, DeprecatedArg):
-    warnings.warn("The interpolation= argument to 'quantile' is deprecated. "
-                  "Use 'method=' instead.", DeprecationWarning, stacklevel=2)
+    deprecations.warn(
+      "jax-numpy-quantile-interpolation",
+      ("The interpolation= argument to 'quantile' is deprecated. "
+       "Use 'method=' instead."), stacklevel=2)
     method = interpolation
   return _quantile(lax_internal.asarray(a), lax_internal.asarray(q), axis, method, keepdims, False)
 
 # TODO(jakevdp): interpolation argument deprecated 2024-05-16
-@implements(np.nanquantile, skip_params=['out', 'overwrite_input'])
 @partial(api.jit, static_argnames=('axis', 'overwrite_input', 'interpolation', 'keepdims', 'method'))
 def nanquantile(a: ArrayLike, q: ArrayLike, axis: int | tuple[int, ...] | None = None,
                 out: None = None, overwrite_input: bool = False, method: str = "linear",
                 keepdims: bool = False, *, interpolation: DeprecatedArg | str = DeprecatedArg()) -> Array:
+  """Compute the quantile of the data along the specified axis, ignoring NaNs.
+
+  JAX implementation of :func:`numpy.nanquantile`.
+
+  Args:
+    a: N-dimensional array input.
+    q: scalar or 1-dimensional array specifying the desired quantiles. ``q``
+      should contain floating-point values between ``0.0`` and ``1.0``.
+    axis: optional axis or tuple of axes along which to compute the quantile
+    out: not implemented by JAX; will error if not None
+    overwrite_input: not implemented by JAX; will error if not False
+    method: specify the interpolation method to use. Options are one of
+      ``["linear", "lower", "higher", "midpoint", "nearest"]``.
+      default is ``linear``.
+    keepdims: if True, then the returned array will have the same number of
+      dimensions as the input. Default is False.
+    interpolation: deprecated alias of the ``method`` argument. Will result
+      in a :class:`DeprecationWarning` if used.
+
+  Returns:
+    An array containing the specified quantiles along the specified axes.
+
+  See also:
+    - :func:`jax.numpy.quantile`: compute the quantile without ignoring nans
+    - :func:`jax.numpy.nanpercentile`: compute the percentile (0-100)
+
+  Examples:
+    Computing the median and quartiles of a 1D array:
+
+    >>> x = jnp.array([0, 1, 2, jnp.nan, 3, 4, 5, 6])
+    >>> q = jnp.array([0.25, 0.5, 0.75])
+
+    Because of the NaN value, :func:`jax.numpy.quantile` returns all NaNs,
+    while :func:`~jax.numpy.nanquantile` ignores them:
+
+    >>> jnp.quantile(x, q)
+    Array([nan, nan, nan], dtype=float32)
+    >>> jnp.nanquantile(x, q)
+    Array([1.5, 3. , 4.5], dtype=float32)
+  """
   check_arraylike("nanquantile", a, q)
   if overwrite_input or out is not None:
     msg = ("jax.numpy.nanquantile does not support overwrite_input=True or "
            "out != None")
     raise ValueError(msg)
   if not isinstance(interpolation, DeprecatedArg):
-    warnings.warn("The interpolation= argument to 'nanquantile' is deprecated. "
-                  "Use 'method=' instead.", DeprecationWarning, stacklevel=2)
+    deprecations.warn(
+      "jax-numpy-quantile-interpolation",
+      ("The interpolation= argument to 'nanquantile' is deprecated. "
+       "Use 'method=' instead."), stacklevel=2)
     method = interpolation
   return _quantile(lax_internal.asarray(a), lax_internal.asarray(q), axis, method, keepdims, True)
 
@@ -1957,9 +2222,9 @@ def _quantile(a: Array, q: Array, axis: int | tuple[int, ...] | None,
   a_shape = a.shape
 
   if squash_nans:
-    a = _where(ufuncs.isnan(a), np.nan, a) # Ensure nans are positive so they sort to the end.
+    a = _where(lax_internal._isnan(a), np.nan, a) # Ensure nans are positive so they sort to the end.
     a = lax.sort(a, dimension=axis)
-    counts = sum(ufuncs.logical_not(ufuncs.isnan(a)), axis=axis, dtype=q.dtype, keepdims=keepdims)
+    counts = sum(lax_internal.bitwise_not(lax_internal._isnan(a)), axis=axis, dtype=q.dtype, keepdims=keepdims)
     shape_after_reduction = counts.shape
     q = lax.expand_dims(
       q, tuple(range(q_ndim, len(shape_after_reduction) + q_ndim)))
@@ -1985,7 +2250,7 @@ def _quantile(a: Array, q: Array, axis: int | tuple[int, ...] | None,
     index[axis] = high
     high_value = a[tuple(index)]
   else:
-    a = _where(any(ufuncs.isnan(a), axis=axis, keepdims=True), np.nan, a)
+    a = _where(any(lax_internal._isnan(a), axis=axis, keepdims=True), np.nan, a)
     a = lax.sort(a, dimension=axis)
     n = lax.convert_element_type(a_shape[axis], lax_internal._dtype(q))
     q = lax.mul(q, n - 1)
@@ -2038,33 +2303,116 @@ def _quantile(a: Array, q: Array, axis: int | tuple[int, ...] | None,
   return lax.convert_element_type(result, a.dtype)
 
 # TODO(jakevdp): interpolation argument deprecated 2024-05-16
-@implements(np.percentile, skip_params=['out', 'overwrite_input'])
 @partial(api.jit, static_argnames=('axis', 'overwrite_input', 'interpolation', 'keepdims', 'method'))
 def percentile(a: ArrayLike, q: ArrayLike,
                axis: int | tuple[int, ...] | None = None,
                out: None = None, overwrite_input: bool = False, method: str = "linear",
                keepdims: bool = False, *, interpolation: str | DeprecatedArg = DeprecatedArg()) -> Array:
+  """Compute the percentile of the data along the specified axis.
+
+  JAX implementation of :func:`numpy.percentile`.
+
+  Args:
+    a: N-dimensional array input.
+    q: scalar or 1-dimensional array specifying the desired quantiles. ``q``
+      should contain integer or floating point values between ``0`` and ``100``.
+    axis: optional axis or tuple of axes along which to compute the quantile
+    out: not implemented by JAX; will error if not None
+    overwrite_input: not implemented by JAX; will error if not False
+    method: specify the interpolation method to use. Options are one of
+      ``["linear", "lower", "higher", "midpoint", "nearest"]``.
+      default is ``linear``.
+    keepdims: if True, then the returned array will have the same number of
+      dimensions as the input. Default is False.
+    interpolation: deprecated alias of the ``method`` argument. Will result
+      in a :class:`DeprecationWarning` if used.
+
+  Returns:
+    An array containing the specified percentiles along the specified axes.
+
+  See also:
+    - :func:`jax.numpy.quantile`: compute the quantile (0.0-1.0)
+    - :func:`jax.numpy.nanpercentile`: compute the percentile while ignoring NaNs
+
+  Examples:
+    Computing the median and quartiles of a 1D array:
+
+    >>> x = jnp.array([0, 1, 2, 3, 4, 5, 6])
+    >>> q = jnp.array([25, 50, 75])
+    >>> jnp.percentile(x, q)
+    Array([1.5, 3. , 4.5], dtype=float32)
+
+    Computing the same percentiles with nearest rather than linear interpolation:
+
+    >>> jnp.percentile(x, q, method='nearest')
+    Array([1., 3., 4.], dtype=float32)
+  """
   check_arraylike("percentile", a, q)
   q, = promote_dtypes_inexact(q)
   if not isinstance(interpolation, DeprecatedArg):
-    warnings.warn("The interpolation= argument to 'percentile' is deprecated. "
-                  "Use 'method=' instead.", DeprecationWarning, stacklevel=2)
+    deprecations.warn(
+      "jax-numpy-quantile-interpolation",
+      ("The interpolation= argument to 'percentile' is deprecated. "
+       "Use 'method=' instead."), stacklevel=2)
     method = interpolation
   return quantile(a, q / 100, axis=axis, out=out, overwrite_input=overwrite_input,
                   method=method, keepdims=keepdims)
 
 # TODO(jakevdp): interpolation argument deprecated 2024-05-16
-@implements(np.nanpercentile, skip_params=['out', 'overwrite_input'])
 @partial(api.jit, static_argnames=('axis', 'overwrite_input', 'interpolation', 'keepdims', 'method'))
 def nanpercentile(a: ArrayLike, q: ArrayLike,
                   axis: int | tuple[int, ...] | None = None,
                   out: None = None, overwrite_input: bool = False, method: str = "linear",
                   keepdims: bool = False, *, interpolation: str | DeprecatedArg = DeprecatedArg()) -> Array:
+  """Compute the percentile of the data along the specified axis, ignoring NaN values.
+
+  JAX implementation of :func:`numpy.nanpercentile`.
+
+  Args:
+    a: N-dimensional array input.
+    q: scalar or 1-dimensional array specifying the desired quantiles. ``q``
+      should contain integer or floating point values between ``0`` and ``100``.
+    axis: optional axis or tuple of axes along which to compute the quantile
+    out: not implemented by JAX; will error if not None
+    overwrite_input: not implemented by JAX; will error if not False
+    method: specify the interpolation method to use. Options are one of
+      ``["linear", "lower", "higher", "midpoint", "nearest"]``.
+      default is ``linear``.
+    keepdims: if True, then the returned array will have the same number of
+      dimensions as the input. Default is False.
+    interpolation: deprecated alias of the ``method`` argument. Will result
+      in a :class:`DeprecationWarning` if used.
+
+  Returns:
+    An array containing the specified percentiles along the specified axes.
+
+  See also:
+    - :func:`jax.numpy.nanquantile`: compute the nan-aware quantile (0.0-1.0)
+    - :func:`jax.numpy.percentile`: compute the percentile without special
+      handling of NaNs.
+
+  Examples:
+    Computing the median and quartiles of a 1D array:
+
+    >>> x = jnp.array([0, 1, 2, jnp.nan, 3, 4, 5, 6])
+    >>> q = jnp.array([25, 50, 75])
+
+    Because of the NaN value, :func:`jax.numpy.percentile` returns all NaNs,
+    while :func:`~jax.numpy.nanpercentile` ignores them:
+
+    >>> jnp.percentile(x, q)
+    Array([nan, nan, nan], dtype=float32)
+    >>> jnp.nanpercentile(x, q)
+    Array([1.5, 3. , 4.5], dtype=float32)
+  """
   check_arraylike("nanpercentile", a, q)
-  q = ufuncs.true_divide(q, 100.0)
+  q, = promote_dtypes_inexact(q)
+  q = q / 100
   if not isinstance(interpolation, DeprecatedArg):
-    warnings.warn("The interpolation= argument to 'nanpercentile' is deprecated. "
-                  "Use 'method=' instead.", DeprecationWarning, stacklevel=2)
+    deprecations.warn(
+      "jax-numpy-quantile-interpolation",
+      ("The interpolation= argument to 'nanpercentile' is deprecated. "
+       "Use 'method=' instead."), stacklevel=2)
     method = interpolation
   return nanquantile(a, q, axis=axis, out=out, overwrite_input=overwrite_input,
                      method=method, keepdims=keepdims)

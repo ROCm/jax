@@ -13,7 +13,7 @@
 # limitations under the License.
 
 # Note: import <name> as <name> is required for names to be exported.
-# See PEP 484 & https://github.com/google/jax/issues/7570
+# See PEP 484 & https://github.com/jax-ml/jax/issues/7570
 
 from jax._src.scipy.special import (
   bernoulli as bernoulli,
@@ -60,4 +60,8 @@ from jax._src.scipy.special import (
   xlog1py as xlog1py,
   xlogy as xlogy,
   zeta as zeta,
+)
+
+from jax._src.third_party.scipy.special import (
+  fresnel as fresnel,
 )

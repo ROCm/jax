@@ -37,29 +37,6 @@ svd::ComputationMode GetSvdComputationMode(bool job_opt_compute_uv,
   return svd::ComputationMode::kComputeFullUVt;
 }
 
-template <DataType dtype>
-int64_t GesddGetWorkspaceSize(lapack_int m, lapack_int n,
-                              bool job_opt_compute_uv,
-                              bool job_opt_full_matrices) {
-  svd::ComputationMode mode =
-      GetSvdComputationMode(job_opt_compute_uv, job_opt_full_matrices);
-  return svd::SVDType<dtype>::GetWorkspaceSize(m, n, mode);
-};
-
-lapack_int GesddGetRealWorkspaceSize(lapack_int m, lapack_int n,
-                                     bool job_opt_compute_uv) {
-  svd::ComputationMode mode = GetSvdComputationMode(job_opt_compute_uv, true);
-  return svd::GetRealWorkspaceSize(m, n, mode);
-}
-
-// Due to enforced kComputeEigenvectors, this assumes a larger workspace size.
-// Could be improved to more accurately estimate the expected size based on the
-// eig::ComputationMode value.
-template <lapack_int (&f)(int64_t, eig::ComputationMode)>
-inline constexpr auto BoundWithEigvecs = +[](lapack_int n) {
-  return f(n, eig::ComputationMode::kComputeEigenvectors);
-};
-
 void GetLapackKernelsFromScipy() {
   static bool initialized = false;  // Protected by GIL
   if (initialized) return;
@@ -165,6 +142,10 @@ void GetLapackKernelsFromScipy() {
   AssignKernelFn<Gehrd<double>>(lapack_ptr("dgehrd"));
   AssignKernelFn<Gehrd<std::complex<float>>>(lapack_ptr("cgehrd"));
   AssignKernelFn<Gehrd<std::complex<double>>>(lapack_ptr("zgehrd"));
+  AssignKernelFn<HessenbergDecomposition<DataType::F32>>(lapack_ptr("sgehrd"));
+  AssignKernelFn<HessenbergDecomposition<DataType::F64>>(lapack_ptr("dgehrd"));
+  AssignKernelFn<HessenbergDecomposition<DataType::C64>>(lapack_ptr("cgehrd"));
+  AssignKernelFn<HessenbergDecomposition<DataType::C128>>(lapack_ptr("zgehrd"));
 
   AssignKernelFn<Sytrd<float>>(lapack_ptr("ssytrd"));
   AssignKernelFn<Sytrd<double>>(lapack_ptr("dsytrd"));
@@ -276,6 +257,10 @@ nb::dict Registrations() {
   dict["lapack_dgeev_ffi"] = EncapsulateFunction(lapack_dgeev_ffi);
   dict["lapack_cgeev_ffi"] = EncapsulateFunction(lapack_cgeev_ffi);
   dict["lapack_zgeev_ffi"] = EncapsulateFunction(lapack_zgeev_ffi);
+  dict["lapack_sgehrd_ffi"] = EncapsulateFunction(lapack_sgehrd_ffi);
+  dict["lapack_dgehrd_ffi"] = EncapsulateFunction(lapack_dgehrd_ffi);
+  dict["lapack_cgehrd_ffi"] = EncapsulateFunction(lapack_cgehrd_ffi);
+  dict["lapack_zgehrd_ffi"] = EncapsulateFunction(lapack_zgehrd_ffi);
 
   return dict;
 }
@@ -351,18 +336,6 @@ NB_MODULE(_lapack, m) {
   m.def("lapack_zhetrd_workspace", &Sytrd<std::complex<double>>::Workspace,
         nb::arg("lda"), nb::arg("n"));
   // FFI Kernel LAPACK Workspace Size Queries
-  m.def("lapack_sgeqrf_workspace_ffi",
-        &QrFactorization<DataType::F32>::GetWorkspaceSize, nb::arg("m"),
-        nb::arg("n"));
-  m.def("lapack_dgeqrf_workspace_ffi",
-        &QrFactorization<DataType::F64>::GetWorkspaceSize, nb::arg("m"),
-        nb::arg("n"));
-  m.def("lapack_cgeqrf_workspace_ffi",
-        &QrFactorization<DataType::C64>::GetWorkspaceSize, nb::arg("m"),
-        nb::arg("n"));
-  m.def("lapack_zgeqrf_workspace_ffi",
-        &QrFactorization<DataType::C128>::GetWorkspaceSize, nb::arg("m"),
-        nb::arg("n"));
   m.def("lapack_sorgqr_workspace_ffi",
         &OrthogonalQr<DataType::F32>::GetWorkspaceSize, nb::arg("m"),
         nb::arg("n"), nb::arg("k"));
@@ -375,26 +348,6 @@ NB_MODULE(_lapack, m) {
   m.def("lapack_zungqr_workspace_ffi",
         &OrthogonalQr<DataType::C128>::GetWorkspaceSize, nb::arg("m"),
         nb::arg("n"), nb::arg("k"));
-  m.def("gesdd_iwork_size_ffi", &svd::GetIntWorkspaceSize, nb::arg("m"),
-        nb::arg("n"));
-  m.def("sgesdd_work_size_ffi", &svd::SVDType<DataType::F32>::GetWorkspaceSize,
-        nb::arg("m"), nb::arg("n"), nb::arg("mode"));
-  m.def("dgesdd_work_size_ffi", &svd::SVDType<DataType::F64>::GetWorkspaceSize,
-        nb::arg("m"), nb::arg("n"), nb::arg("mode"));
-  m.def("gesdd_rwork_size_ffi", &svd::GetRealWorkspaceSize, nb::arg("m"),
-        nb::arg("n"), nb::arg("mode"));
-  m.def("cgesdd_work_size_ffi", &svd::SVDType<DataType::C64>::GetWorkspaceSize,
-        nb::arg("m"), nb::arg("n"), nb::arg("mode"));
-  m.def("zgesdd_work_size_ffi", &svd::SVDType<DataType::C128>::GetWorkspaceSize,
-        nb::arg("m"), nb::arg("n"), nb::arg("mode"));
-  m.def("syevd_work_size_ffi", BoundWithEigvecs<eig::GetWorkspaceSize>,
-        nb::arg("n"));
-  m.def("syevd_iwork_size_ffi", BoundWithEigvecs<eig::GetIntWorkspaceSize>,
-        nb::arg("n"));
-  m.def("heevd_work_size_ffi", BoundWithEigvecs<eig::GetComplexWorkspaceSize>,
-        nb::arg("n"));
-  m.def("heevd_rwork_size_ffi", BoundWithEigvecs<eig::GetRealWorkspaceSize>,
-        nb::arg("n"));
 }
 
 }  // namespace

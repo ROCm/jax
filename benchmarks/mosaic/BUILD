@@ -15,7 +15,7 @@
 load(
     "//jaxlib:jax.bzl",
     "jax_generate_backend_suites",
-    "jax_test",
+    "jax_multiplatform_test",
     "py_deps",
 )
 
@@ -28,29 +28,15 @@ package(
 
 jax_generate_backend_suites()
 
-DISABLED_BACKENDS = [
-    "cpu",
-    "tpu",
-]
-
-DISABLED_CONFIGS = [
-    "gpu",
-    "gpu_a100",
-    "gpu_p100",
-    "gpu_p100_x32",
-    "gpu_x32",
-    "gpu_pjrt_c_api",
-]
-
-jax_test(
+jax_multiplatform_test(
     name = "matmul_bench",
     srcs = ["matmul_bench.py"],
-    disable_backends = DISABLED_BACKENDS,
-    disable_configs = DISABLED_CONFIGS,
+    enable_backends = [],
+    enable_configs = ["gpu_h100"],
     tags = ["notap"],
     deps = [
+        "//jax:mosaic_gpu",
+        "//jax/experimental/mosaic/gpu/examples:matmul",
         "//third_party/py/google_benchmark",
-        "//third_party/py/jax:mosaic_gpu",
-        "//third_party/py/jax/experimental/mosaic/gpu/examples:matmul",
     ] + py_deps("absl/testing") + py_deps("numpy"),
 )

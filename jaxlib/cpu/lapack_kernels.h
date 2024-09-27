@@ -20,8 +20,9 @@ limitations under the License.
 #include <optional>
 #include <type_traits>
 
-#include "xla/ffi/api/ffi.h"
+#include "absl/status/statusor.h"
 #include "xla/ffi/api/c_api.h"
+#include "xla/ffi/api/ffi.h"
 #include "xla/service/custom_call_status.h"
 
 // Underlying function pointers (i.e., KERNEL_CLASS::Fn) are initialized either
@@ -193,9 +194,7 @@ struct QrFactorization {
 
   static ::xla::ffi::Error Kernel(::xla::ffi::Buffer<dtype> x,
                                   ::xla::ffi::ResultBuffer<dtype> x_out,
-                                  ::xla::ffi::ResultBuffer<dtype> tau,
-                                  ::xla::ffi::ResultBuffer<LapackIntDtype> info,
-                                  ::xla::ffi::ResultBuffer<dtype> work);
+                                  ::xla::ffi::ResultBuffer<dtype> tau);
 
   static int64_t GetWorkspaceSize(lapack_int x_rows, lapack_int x_cols);
 };
@@ -227,9 +226,7 @@ struct OrthogonalQr {
 
   static ::xla::ffi::Error Kernel(::xla::ffi::Buffer<dtype> x,
                                   ::xla::ffi::Buffer<dtype> tau,
-                                  ::xla::ffi::ResultBuffer<dtype> x_out,
-                                  ::xla::ffi::ResultBuffer<LapackIntDtype> info,
-                                  ::xla::ffi::ResultBuffer<dtype> work);
+                                  ::xla::ffi::ResultBuffer<dtype> x_out);
 
   static int64_t GetWorkspaceSize(lapack_int x_rows, lapack_int x_cols,
                                   lapack_int tau_size);
@@ -303,6 +300,7 @@ struct SingularValueDecomposition {
   static_assert(!::xla::ffi::IsComplexType<dtype>(),
                 "There exists a separate implementation for Complex types");
   using ValueType = ::xla::ffi::NativeType<dtype>;
+  using RealType = ValueType;
   using FnType = void(char* jobz, lapack_int* m, lapack_int* n, ValueType* a,
                       lapack_int* lda, ValueType* s, ValueType* u,
                       lapack_int* ldu, ValueType* vt, lapack_int* ldvt,
@@ -315,12 +313,11 @@ struct SingularValueDecomposition {
       ::xla::ffi::Buffer<dtype> x, ::xla::ffi::ResultBuffer<dtype> x_out,
       ::xla::ffi::ResultBuffer<dtype> singular_values,
       ::xla::ffi::ResultBuffer<dtype> u, ::xla::ffi::ResultBuffer<dtype> vt,
-      ::xla::ffi::ResultBuffer<LapackIntDtype> info,
-      ::xla::ffi::ResultBuffer<LapackIntDtype> iwork,
-      ::xla::ffi::ResultBuffer<dtype> work, svd::ComputationMode mode);
+      ::xla::ffi::ResultBuffer<LapackIntDtype> info, svd::ComputationMode mode);
 
-  static int64_t GetWorkspaceSize(lapack_int x_rows, lapack_int x_cols,
-                                  svd::ComputationMode mode);
+  static absl::StatusOr<int64_t> GetWorkspaceSize(lapack_int x_rows,
+                                                  lapack_int x_cols,
+                                                  svd::ComputationMode mode);
 };
 
 template <::xla::ffi::DataType dtype>
@@ -341,13 +338,11 @@ struct SingularValueDecompositionComplex {
       ::xla::ffi::Buffer<dtype> x, ::xla::ffi::ResultBuffer<dtype> x_out,
       ::xla::ffi::ResultBuffer<::xla::ffi::ToReal(dtype)> singular_values,
       ::xla::ffi::ResultBuffer<dtype> u, ::xla::ffi::ResultBuffer<dtype> vt,
-      ::xla::ffi::ResultBuffer<LapackIntDtype> info,
-      ::xla::ffi::ResultBuffer<::xla::ffi::ToReal(dtype)> rwork,
-      ::xla::ffi::ResultBuffer<LapackIntDtype> iwork,
-      ::xla::ffi::ResultBuffer<dtype> work, svd::ComputationMode mode);
+      ::xla::ffi::ResultBuffer<LapackIntDtype> info, svd::ComputationMode mode);
 
-  static int64_t GetWorkspaceSize(lapack_int x_rows, lapack_int x_cols,
-                                  svd::ComputationMode mode);
+  static absl::StatusOr<int64_t> GetWorkspaceSize(lapack_int x_rows,
+                                                  lapack_int x_cols,
+                                                  svd::ComputationMode mode);
 };
 
 namespace svd {
@@ -357,9 +352,9 @@ using SVDType = std::conditional_t<::xla::ffi::IsComplexType<dtype>(),
                                    SingularValueDecompositionComplex<dtype>,
                                    SingularValueDecomposition<dtype>>;
 
-lapack_int GetIntWorkspaceSize(int64_t x_rows, int64_t x_cols);
-lapack_int GetRealWorkspaceSize(int64_t x_rows, int64_t x_cols,
-                                ComputationMode mode);
+absl::StatusOr<lapack_int> GetIntWorkspaceSize(int64_t x_rows, int64_t x_cols);
+absl::StatusOr<lapack_int> GetRealWorkspaceSize(int64_t x_rows, int64_t x_cols,
+                                                ComputationMode mode);
 
 }  // namespace svd
 
@@ -398,12 +393,16 @@ struct ComplexHeevd {
 namespace eig {
 
 // Eigenvalue Decomposition
-lapack_int GetWorkspaceSize(int64_t x_cols, ComputationMode mode);
-lapack_int GetIntWorkspaceSize(int64_t x_cols, ComputationMode mode);
+absl::StatusOr<lapack_int> GetWorkspaceSize(int64_t x_cols,
+                                            ComputationMode mode);
+absl::StatusOr<lapack_int> GetIntWorkspaceSize(int64_t x_cols,
+                                               ComputationMode mode);
 
 // Hermitian Eigenvalue Decomposition
-lapack_int GetComplexWorkspaceSize(int64_t x_cols, ComputationMode mode);
-lapack_int GetRealWorkspaceSize(int64_t x_cols, ComputationMode mode);
+absl::StatusOr<lapack_int> GetComplexWorkspaceSize(int64_t x_cols,
+                                                   ComputationMode mode);
+absl::StatusOr<lapack_int> GetRealWorkspaceSize(int64_t x_cols,
+                                                ComputationMode mode);
 
 }  // namespace eig
 
@@ -420,14 +419,12 @@ struct EigenvalueDecompositionSymmetric {
 
   inline static FnType* fn = nullptr;
 
-  static ::xla::ffi::Error Kernel(
-      ::xla::ffi::Buffer<dtype> x, MatrixParams::UpLo uplo,
-      ::xla::ffi::ResultBuffer<dtype> x_out,
-      ::xla::ffi::ResultBuffer<dtype> eigenvalues,
-      ::xla::ffi::ResultBuffer<LapackIntDtype> info,
-      ::xla::ffi::ResultBuffer<dtype> work,
-      ::xla::ffi::ResultBuffer<LapackIntDtype> iwork,
-      eig::ComputationMode mode);
+  static ::xla::ffi::Error Kernel(::xla::ffi::Buffer<dtype> x,
+                                  MatrixParams::UpLo uplo,
+                                  ::xla::ffi::ResultBuffer<dtype> x_out,
+                                  ::xla::ffi::ResultBuffer<dtype> eigenvalues,
+                                  ::xla::ffi::ResultBuffer<LapackIntDtype> info,
+                                  eig::ComputationMode mode);
 };
 
 template <::xla::ffi::DataType dtype>
@@ -447,11 +444,7 @@ struct EigenvalueDecompositionHermitian {
       ::xla::ffi::Buffer<dtype> x, MatrixParams::UpLo uplo,
       ::xla::ffi::ResultBuffer<dtype> x_out,
       ::xla::ffi::ResultBuffer<::xla::ffi::ToReal(dtype)> eigenvalues,
-      ::xla::ffi::ResultBuffer<LapackIntDtype> info,
-      ::xla::ffi::ResultBuffer<dtype> work,
-      ::xla::ffi::ResultBuffer<::xla::ffi::ToReal(dtype)> rwork,
-      ::xla::ffi::ResultBuffer<LapackIntDtype> iwork,
-      eig::ComputationMode mode);
+      ::xla::ffi::ResultBuffer<LapackIntDtype> info, eig::ComputationMode mode);
 };
 
 // lapack geev
@@ -499,10 +492,7 @@ struct EigenvalueDecomposition {
       ::xla::ffi::ResultBuffer<dtype> eigvals_imag,
       ::xla::ffi::ResultBuffer<::xla::ffi::ToComplex(dtype)> eigvecs_left,
       ::xla::ffi::ResultBuffer<::xla::ffi::ToComplex(dtype)> eigvecs_right,
-      ::xla::ffi::ResultBuffer<LapackIntDtype> info,
-      ::xla::ffi::ResultBuffer<dtype> x_work,
-      ::xla::ffi::ResultBuffer<::xla::ffi::ToReal(dtype)> work_eigvecs_left,
-      ::xla::ffi::ResultBuffer<::xla::ffi::ToReal(dtype)> work_eigvecs_right);
+      ::xla::ffi::ResultBuffer<LapackIntDtype> info);
 
   static int64_t GetWorkspaceSize(lapack_int x_cols,
                                   eig::ComputationMode compute_left,
@@ -529,9 +519,7 @@ struct EigenvalueDecompositionComplex {
       ::xla::ffi::ResultBuffer<dtype> eigvals,
       ::xla::ffi::ResultBuffer<dtype> eigvecs_left,
       ::xla::ffi::ResultBuffer<dtype> eigvecs_right,
-      ::xla::ffi::ResultBuffer<LapackIntDtype> info,
-      ::xla::ffi::ResultBuffer<dtype> x_work,
-      ::xla::ffi::ResultBuffer<::xla::ffi::ToReal(dtype)> rwork);
+      ::xla::ffi::ResultBuffer<LapackIntDtype> info);
 
   static int64_t GetWorkspaceSize(lapack_int x_cols,
                                   eig::ComputationMode compute_left,
@@ -590,6 +578,27 @@ struct real_type<std::complex<T>> {
   typedef T type;
 };
 
+// FFI Kernel
+
+template <::xla::ffi::DataType dtype>
+struct HessenbergDecomposition {
+  using ValueType = ::xla::ffi::NativeType<dtype>;
+  using FnType = void(lapack_int* n, lapack_int* ilo, lapack_int* ihi,
+                      ValueType* a, lapack_int* lda, ValueType* tau,
+                      ValueType* work, lapack_int* lwork, lapack_int* info);
+
+  inline static FnType* fn = nullptr;
+
+  static ::xla::ffi::Error Kernel(
+      ::xla::ffi::Buffer<dtype> x, lapack_int low, lapack_int high,
+      ::xla::ffi::ResultBuffer<dtype> x_out,
+      ::xla::ffi::ResultBuffer<dtype> tau,
+      ::xla::ffi::ResultBuffer<LapackIntDtype> info);
+
+  static int64_t GetWorkspaceSize(lapack_int x_rows, lapack_int x_cols,
+                                  lapack_int low, lapack_int high);
+};
+
 //== Tridiagonal Reduction                                           ==//
 //== Reduces a Symmetric/Hermitian square matrix to tridiagonal form ==//
 
@@ -641,6 +650,10 @@ XLA_FFI_DECLARE_HANDLER_SYMBOL(lapack_sgeev_ffi);
 XLA_FFI_DECLARE_HANDLER_SYMBOL(lapack_dgeev_ffi);
 XLA_FFI_DECLARE_HANDLER_SYMBOL(lapack_cgeev_ffi);
 XLA_FFI_DECLARE_HANDLER_SYMBOL(lapack_zgeev_ffi);
+XLA_FFI_DECLARE_HANDLER_SYMBOL(lapack_sgehrd_ffi);
+XLA_FFI_DECLARE_HANDLER_SYMBOL(lapack_dgehrd_ffi);
+XLA_FFI_DECLARE_HANDLER_SYMBOL(lapack_cgehrd_ffi);
+XLA_FFI_DECLARE_HANDLER_SYMBOL(lapack_zgehrd_ffi);
 
 }  // namespace jax
 

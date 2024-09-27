@@ -49,6 +49,7 @@ from jax._src.export import shape_poly_decision
 from jax._src.lax import lax as lax_internal
 from jax._src.lax import control_flow as lax_control_flow
 from jax._src.lib import xla_client
+from jax._src.lib import version as jaxlib_version
 import numpy as np
 
 config.parse_flags_with_absl()
@@ -994,6 +995,16 @@ class DimExprTest(jtu.JaxTestCase):
     self.assertEqual(_bounds(a), (10, np.inf))
     self.assertEqual(_bounds(b), (1, 10))
 
+  def test_constraint_eq_0(self):
+    a, b, c, d = shape_poly.symbolic_shape(
+        "a, b, c, d",
+        constraints=("b == a", "c == a + b", "d == 5"))
+    # Check that we have already applied the normalizaton rules
+    self.assertEqual(a._to_var(), "a")
+    self.assertEqual(b._to_var(), "a")
+    self.assertEqual(c._to_single_term(), (0, 2, a._to_term()))
+    self.assertIs(d, 5)
+
   def test_constraints_eq_1(self):
     # Some constaints override other
     a, b, c = shape_poly.symbolic_shape("a, b, c",
@@ -1072,6 +1083,20 @@ class DimExprTest(jtu.JaxTestCase):
     self.assertEqual(128 * (t1_ceil // 128), t1_ceil)
     self.assertEqual(128 * b1 * (t1_ceil // 128), b1 * t1_ceil)
 
+  def test_constraints_eq_bug_23456(self):
+    b, = jax.export.symbolic_shape('b', constraints=['b==5'])
+    jax.eval_shape(lambda k: jnp.tile(k, 3), jax.ShapeDtypeStruct((b,), jnp.float32))
+
+  def test_constraints_eq_bug_23437(self):
+    def f1(x, y):
+      return x + y
+
+    x = jnp.ones((4,), dtype=jnp.int32)
+    y = jnp.ones((4,), dtype=jnp.int32)
+    args_specs = jax.export.symbolic_args_specs((x, y), ("a*2", "b*2"), constraints=("a==b",))
+    exp = jax.export.export(jax.jit(f1))(*args_specs)
+    self.assertEqual(exp.in_avals[0], exp.in_avals[1])
+
   def test_constraints_eq_threefry(self):
     # Test equalities that arise out of the threefree lowering
     # x : i32[a]  # a may be even or odd
@@ -1105,12 +1130,9 @@ class DimExprTest(jtu.JaxTestCase):
     assumptions1 = ["m1 >= 0", "m1 <= 3", "a1 == 4*d1 + m1"]
     scope1 = shape_poly.SymbolicScope(assumptions1)
     a1, d1, m1 = shape_poly.symbolic_shape("a1, d1, m1", scope=scope1)
-    # TODO: The incompleteness is due to the way we combine external constraints
     self.assertEqual(_bounds(a1 - 4*d1), (1, 3))  # a - 4d = m >= 1
     self.assertEqual(_bounds(a1 - 2*d1), (3, np.inf))  # a - 2d = m + 2d >= 3
-    # TODO: The incompleteness is due to the way we combine external constraints
-    self.assertEqual(_bounds(a1),
-                     _expect(best=(5, np.inf), current=(-np.inf, np.inf)))  # a >= 4d + m >= 5
+    self.assertEqual(_bounds(a1), (5, np.inf))  # a >= 4d + m >= 5
 
   def test_constraints_error_msg(self):
     a, b = shape_poly.symbolic_shape("a, b",
@@ -1641,8 +1663,7 @@ class ShapePolyTest(jtu.JaxTestCase):
     _ = export.export(jax.jit(f))(
         jax.ShapeDtypeStruct(export.symbolic_shape("a, b"), np.int32))
 
-
-  def test_constraints_compile_time_check(self):
+  def test_constraints_ge_compile_time_check(self):
     def f(x):  # x: i32[a]
       a = x.shape[0]
       assert _bounds(a) == (2, 4)
@@ -1668,8 +1689,44 @@ class ShapePolyTest(jtu.JaxTestCase):
 
     with self.assertRaisesRegex(
         ValueError,
-        re.escape("Expected '- a + 4' to be greater or equal to 0, but found -1")):
+        re.escape("Expected '4 - a' to be greater or equal to 0, but found -1")):
       exp.call(np.arange(5, dtype=np.int32))
+
+  def test_constraints_eq_0_compile_time_check(self):
+    def f(x):  # x: i32[a, b]
+      return x
+
+    x_spec = jax.ShapeDtypeStruct(
+        export.symbolic_shape("a, b",
+                              constraints=["max(a, b) == b"]), np.int32)
+    exp = export.export(jax.jit(f))(x_spec)
+    with self.assertRaisesRegex(
+        ValueError,
+        re.escape("Expected 'max(a, b) - b' to be equal to 0, but found 1")):
+      exp.call(np.ones((3, 2), dtype=np.int32))
+
+  def test_constraints_eq_1_compile_time_check(self):
+    def f(x):  # x: i32[a, b]
+      return x
+
+    x_spec = jax.ShapeDtypeStruct(
+        export.symbolic_shape("a, b",
+                              constraints=["a == b"]), np.int32)
+    exp = export.export(jax.jit(f))(x_spec)
+    exp.call(np.ones((3, 3), dtype=np.int32))
+
+  def test_constraints_eq_2_compile_time_check(self):
+    def f(x):  # x: i32[a, b]
+      return x
+
+    x_spec = jax.ShapeDtypeStruct(
+        export.symbolic_shape("a, b",
+                              constraints=["max(a, b) == 4", "a == b"]), np.int32)
+    exp = export.export(jax.jit(f))(x_spec)
+    with self.assertRaisesRegex(
+        ValueError,
+        re.escape("Expected 'max(a, b) - 4' to be equal to 0, but found -1")):
+      exp.call(np.ones((3, 3), dtype=np.int32))
 
   def test_caching_with_scopes(self):
     f_tracing_count = 0
@@ -2732,6 +2789,62 @@ _POLY_SHAPE_TEST_HARNESSES = [
       ]
     ],
     [
+        PolyHarness(
+            "lu_pivots_to_permutation",
+            f"shape={jtu.format_shape_dtype_string(shape, np.int32)}_poly={poly}_{permutation_size=}",
+            lax.linalg.lu_pivots_to_permutation,
+            arg_descriptors=[RandArg(shape, np.int32), StaticArg(permutation_size)],
+            polymorphic_shapes=[poly],
+            symbolic_constraints=constraints,
+        )
+        for shape, poly, permutation_size, constraints in [
+            ((4,), None, 8, ()),
+            ((2, 3, 4), "b1, b2, ...", 8, ()),
+            ((4,), "b", 8, ["b <= 8"]),
+            ((2, 3, 4), "b1, b2, b3", 8, ["b3 <= 8"]),
+        ]
+    ],
+    [
+        # Tracing errors are only thrown when the trailing dimension of pivots
+        # is static. Otherwise, the error is thrown at runtime.
+        PolyHarness(
+            "lu_pivots_to_permutation_error",
+            f"shape={jtu.format_shape_dtype_string(shape, np.int32)}_poly={poly}_{permutation_size=}",
+            lax.linalg.lu_pivots_to_permutation,
+            arg_descriptors=[RandArg(shape, np.int32), StaticArg(permutation_size)],
+            polymorphic_shapes=[poly],
+            symbolic_constraints=constraints,
+            expect_error=(ValueError, "Output permutation size"),
+        )
+        for shape, poly, permutation_size, constraints in [
+            ((4,), None, 3, ()),
+            ((2, 3, 4), "b1, b2, ...", 3, ()),
+            ((4,), "b", 8, ["b >= 9"]),
+            ((2, 3, 4), "b1, b2, b3", 8, ["b3 >= 9"]),
+        ]
+    ],
+    [
+      PolyHarness(  # pylint: disable=g-complex-comprehension
+          "lu", f"shape={jtu.format_shape_dtype_string(shape, dtype)}_poly={poly}",
+          lax.linalg.lu,
+          arg_descriptors=[RandArg(shape, dtype)],
+          polymorphic_shapes=[poly],
+          # TODO(b/360788062): Remove once the forward compatibility window is
+          # closed.
+          override_jax_config_flags={
+              "jax_export_ignore_forward_compatibility": True})
+      for dtype in {np.float32, np.float64, np.complex64, np.complex128} & jtu.supported_dtypes()
+      for shape, poly in [
+          ((5, 4), "m, n"),
+          ((2, 0, 4), "b, ..."),
+          ((2, 4, 0), "b, ..."),
+          ((2, 3, 4, 4), "b1, b2, ..."),
+          ((2, 3, 4, 5), "b1, b2, ..."),
+          ((2, 3, 8, 4), "b1, b2, ..."),
+          ((2, 3, 4, 5), "b1, b2, m, n"),
+      ]
+    ],
+    [
       # The random primitive tests, with threefry (both partitionable and
       # non-partitionable), and unsafe_rbg.
       [
@@ -2860,7 +2973,7 @@ _POLY_SHAPE_TEST_HARNESSES = [
                                             (2, x.shape[0]), (1, 1), "VALID"),
                 arg_descriptors=[RandArg((3, 8), _f32)],
                 polymorphic_shapes=["b, ..."]),
-    # https://github.com/google/jax/issues/11804
+    # https://github.com/jax-ml/jax/issues/11804
     # Use the reshape trick to simulate a polymorphic dimension of 16*b.
     # (See test "conv_general_dilated.1d_1" above for more details.)
     PolyHarness("reduce_window", "add_monoid_strides_window_size=static",
@@ -3354,14 +3467,27 @@ class ShapePolyHarnessesTest(jtu.JaxTestCase):
     custom_call_harnesses = {
         "householder_product:gpu",
         "vmap_geqrf:gpu",  # used for linalg.qr
-        "vmap_lu:gpu",
-        # custom_linear_solve works as long as lu works.
-        "vmap_custom_linear_solve:gpu",
         "vmap_qr:gpu", "qr:gpu",
         "vmap_svd:gpu",
     }
-    if f"{harness.group_name}:{jtu.device_under_test()}" in custom_call_harnesses:
+    name_device_key = f"{harness.group_name}:{jtu.device_under_test()}"
+    if name_device_key in custom_call_harnesses:
       raise unittest.SkipTest("native serialization with shape polymorphism not implemented for custom calls; b/261671778")
+
+    # This list keeps track of the minimum jaxlib version that supports shape
+    # polymorphism for some new primitives as we add them. This check is
+    # required so that we can still run the test suite with older versions of
+    # jaxlib.
+    version_gated = {
+        # TODO(danfm): remove these checks when jaxlib 0.4.32 is released.
+        "lu_pivots_to_permutation:gpu": (0, 4, 32),
+        "lu_pivots_to_permutation_error:gpu": (0, 4, 32),
+        "lu:gpu": (0, 4, 32),
+        "vmap_lu:gpu": (0, 4, 32),
+        "vmap_custom_linear_solve:gpu": (0, 4, 32),
+    }
+    if version_gated.get(name_device_key, jaxlib_version) > jaxlib_version:
+      raise unittest.SkipTest(f"shape polymorphism not supported by jaxlib version {jaxlib_version}")
 
     if harness.group_name == "schur" and not jtu.test_device_matches(["cpu"]):
       raise unittest.SkipTest("schur decomposition is only implemented on CPU.")
@@ -3376,6 +3502,11 @@ class ShapePolyHarnessesTest(jtu.JaxTestCase):
       shape = harness.original_harness.params["shape"]
       if 0 < shape[-1] <= 32:
         harness.check_result = False
+
+    if harness.group_name == "vmap_eigh":
+      raise unittest.SkipTest(
+          "Should not compare eigendecompositions for equality directly"
+          "because eigenvalues are sorted.")
 
     if harness.group_name == "vmap_tan":
       # Tan (b/274462307) require support for custom call stablehlo.tan.
@@ -3412,6 +3543,12 @@ class ShapePolyHarnessesTest(jtu.JaxTestCase):
     # TPU precision is a little lower since we swap the order of matmul operands.
     if "cholesky" in harness.group_name and jtu.test_device_matches(["tpu"]):
       harness.tol = 5e-5
+
+    # TODO(b/360788062): Clean up after the compatibility period.
+    if harness.group_name in [
+        "lu", "vmap_lu", "custom_linear_solve", "vmap_custom_linear_solve"
+        ] and jtu.test_device_matches(["gpu"]):
+      config_flags = {**config_flags, "jax_export_ignore_forward_compatibility": True}
 
     with jtu.global_config_context(**config_flags):
       harness.run_test(self)

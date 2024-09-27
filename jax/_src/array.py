@@ -28,6 +28,7 @@ from jax._src import api_util
 from jax._src import basearray
 from jax._src import config
 from jax._src import core
+from jax._src import deprecations
 from jax._src import dispatch
 from jax._src import dtypes
 from jax._src import errors
@@ -41,7 +42,7 @@ from jax._src.lib import xla_client as xc
 from jax._src.lib import xla_extension as xe
 from jax._src.sharding import Sharding
 from jax._src.sharding_impls import (
-    PmapSharding, SingleDeviceSharding,
+    PmapSharding, SingleDeviceSharding, NamedSharding,
     device_replica_id_map, hashed_index, num_addressable_indices, local_to_global_shape)  # pyformat: disable
 from jax._src.typing import ArrayLike, DLDeviceType
 from jax._src.util import safe_zip, unzip3, use_cpp_class, use_cpp_method, cache
@@ -115,6 +116,16 @@ def _reconstruct_array(fun, args, arr_state, aval_state):
   np_value = fun(*args)
   np_value.__setstate__(arr_state)
   jnp_value = api.device_put(np_value)
+  # TODO(slebedev): Remove this branch after December 10th 2024.
+  if "named_shape" in aval_state:
+    deprecations.warn(
+        "jax-aval-named-shape",
+        "Pickled array contains an aval with a named_shape attribute. This is"
+        " deprecated and the code path supporting such avals will be removed."
+        " Please re-pickle the array.",
+        stacklevel=2,
+    )
+    del aval_state["named_shape"]
   jnp_value.aval = jnp_value.aval.update(**aval_state)
   return jnp_value
 
@@ -339,18 +350,18 @@ class ArrayImpl(basearray.Array):
       except ValueError:
         arr_idx = None
       if arr_idx is not None:
-        a = self._arrays[arr_idx]
-        out = ArrayImpl(
-            a.aval, SingleDeviceSharding(_get_device(a)), [a], committed=False,
-            _skip_checks=True)
+        out = self._arrays[arr_idx]
+        sharding = SingleDeviceSharding(_get_device(out))
 
         if config.pmap_no_rank_reduction.value:
           # If cidx was the index of a single shard, then it corresponds to one
           # shard of the chunked dimension.
           dims = tuple(i for i, x in enumerate(cidx) if isinstance(x, int))
-          return lax.squeeze(out, dimensions=dims)
-        else:
-          return out
+          # Squeeze on committed arrays to avoid data movement to shard 0.
+          out = lax.squeeze(out, dimensions=dims)
+
+        return ArrayImpl(
+            out.aval, sharding, [out], committed=False, _skip_checks=True)
 
     return lax_numpy._rewriting_take(self, idx)
 
@@ -489,7 +500,7 @@ class ArrayImpl(basearray.Array):
     """Returns the total global on-device size of the array in bytes."""
     arr = self._arrays[0]
     per_shard_size = arr.on_device_size_in_bytes()
-    return per_shard_size * len(self.sharding.device_set)
+    return per_shard_size * self.sharding.num_devices
 
   def devices(self) -> set[Device]:
     self._check_if_deleted()
@@ -751,8 +762,7 @@ def make_array_from_callback(
       and sharding.is_fully_replicated
       and first_value.is_fully_replicated
       and first_value.sharding._device_assignment == tuple(devices)
-      and (first_value.layout.device_local_layout ==
-           pxla._maybe_get_default_layout(Layout(dll, sharding), None, sharding, aval))):
+      and first_value.layout.device_local_layout == dll):
     return first_value
 
   if dtypes.issubdtype(aval.dtype, dtypes.extended):
@@ -882,17 +892,20 @@ def make_array_from_process_local_data(
   setting it to (4, 4) in this case.
 
   Args:
-    sharding: sharding of the global tensor.
-    host_local_data: data on the host to be placed on local devices. Each
+    sharding: Sharding of the global array.
+    local_data: Data on the host to be placed on local devices. Each
       dimension should either match global_shape, or match
       num_addressable_indices(dim).
-    global_shape: the target shape of the global tensor. If None,
-      will infer from host_local_data and sharding.
+    global_shape: The target shape of the global array. If None,
+      will infer from local_data and sharding.
 
   Returns:
     Tensor that will have sharding=sharding and of shape global_shape.
   """
   # pyformat: enable
+  if xla_bridge.process_count() == 1:
+    return api.device_put(local_data, sharding)
+
   # TODO(sandler): consider supporting partially specified global_shape or
   # making local_to_global_shape available in the api.
   local_shape = local_data.shape
@@ -1013,7 +1026,13 @@ def make_array_from_single_device_arrays(
 core.pytype_aval_mappings[ArrayImpl] = abstract_arrays.canonical_concrete_aval
 xla.pytype_aval_mappings[ArrayImpl] = op.attrgetter('aval')
 xla.canonicalize_dtype_handlers[ArrayImpl] = pxla.identity
-api_util._shaped_abstractify_handlers[ArrayImpl] = op.attrgetter('aval')
+def _get_aval_array(self):
+  if config.sharding_in_types.value and isinstance(self.sharding, NamedSharding):
+    return self.aval.update(sharding=NamedSharding(
+        self.sharding.mesh.abstract_mesh, self.sharding.spec))
+  else:
+    return self.aval
+api_util._shaped_abstractify_handlers[ArrayImpl] = _get_aval_array
 # TODO(jakevdp) replace this with true inheritance at the C++ level.
 basearray.Array.register(ArrayImpl)
 
@@ -1086,9 +1105,8 @@ def shard_sharded_device_array_slow_path(x, devices, indices, sharding):
     # Look up all buffers that contain the correct slice of the logical array.
     candidates_list = candidates[hashed_index(idx)]
     if not candidates_list:
-      # This array isn't sharded correctly. Reshard it via host roundtrip.
-      # TODO(skye): more efficient reshard?
-      return pxla.shard_args([sharding], [x._value], canonicalize=False)[0]
+      return pxla.shard_args([sharding], [None], [x._value],
+                             canonicalize=False)[0]
     # Try to find a candidate buffer already on the correct device,
     # otherwise copy one of them.
     for buf in candidates_list:
@@ -1097,7 +1115,6 @@ def shard_sharded_device_array_slow_path(x, devices, indices, sharding):
         break
     else:
       bufs.append(buf)
-
   return pxla.batched_device_put(x.aval, sharding, bufs, devices)
 
 
@@ -1108,23 +1125,25 @@ def _sharding_indices_and_eq(src_sharding, shape, dst_sharding):
   return dst_indices, tuple(src_indices) == tuple(dst_indices)
 
 
-def _array_shard_arg(xs, shardings):
+def _array_shard_arg(xs, shardings, layouts):
   results = []
   batch_xs, batch_devs, batch_shardings, batch_indices = [], [], [], []
-  for i, (x, sharding) in enumerate(safe_zip(xs, shardings)):
-    x._check_if_deleted()
 
-    indices, same_indices = _sharding_indices_and_eq(
-        x.sharding, x.shape, sharding)
+  for i, (x, sharding, layout) in enumerate(safe_zip(xs, shardings, layouts)):
+    x._check_if_deleted()
+    indices, same_indices = _sharding_indices_and_eq(x.sharding, x.shape, sharding)
+    same_layout = (True if layout is None else
+                   x.layout.device_local_layout == layout)
+
     if not x.is_fully_addressable:
-      if same_indices:
+      if same_indices and same_layout:
         results.append(x)
       else:
         raise NotImplementedError(
             "Cannot reshard an input that is not fully addressable")
     else:
       devices = sharding._addressable_device_assignment
-      if same_indices:
+      if same_indices and same_layout:
         # Add a placeholder result that will be filled in later.
         results.append(None)
         # Accumulate arguments to `batched_copy_array_to_devices_with_sharding`.
@@ -1133,6 +1152,8 @@ def _array_shard_arg(xs, shardings):
         batch_shardings.append(sharding)
         batch_indices.append(i)
       # Resharding starts here:
+      elif not same_layout:
+        results.append(api.device_put(x, Layout(layout, sharding)))
       elif dispatch.is_single_device_sharding(x.sharding):
         results.append(shard_device_array(x, devices, indices, sharding))
       else:
@@ -1145,8 +1166,6 @@ def _array_shard_arg(xs, shardings):
     assert results[i] is None
     results[i] = copy_out
   return results
-
-
 pxla.shard_arg_handlers[ArrayImpl] = _array_shard_arg
 
 
@@ -1178,8 +1197,8 @@ pxla.local_result_handlers[core.ConcreteArray] = _array_local_result_handler
 
 # Token handlers
 
-def _token_shard_arg(xs, shardings):
-  return _array_shard_arg([x._buf for x in xs], shardings)
+def _token_shard_arg(xs, shardings, layouts):
+  return _array_shard_arg([x._buf for x in xs], shardings, layouts)
 pxla.shard_arg_handlers[core.Token] = _token_shard_arg
 
 

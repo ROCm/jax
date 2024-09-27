@@ -13,7 +13,7 @@
 # limitations under the License.
 
 # Note: import <name> as <name> is required for names to be exported.
-# See PEP 484 & https://github.com/google/jax/issues/7570
+# See PEP 484 & https://github.com/jax-ml/jax/issues/7570
 
 from jax._src.sharding import Sharding as Sharding
 from jax._src.sharding_impls import (
@@ -28,6 +28,7 @@ from jax._src.partition_spec import (
     PartitionSpec as PartitionSpec,
 )
 from jax._src.interpreters.pxla import Mesh as Mesh
+from jax._src.mesh import AbstractMesh
 
 _deprecations = {
     # Added Jun 4, 2024.

@@ -14,7 +14,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Hashable, Sequence
+from collections.abc import Sequence
 from functools import partial
 import math
 from operator import index
@@ -146,11 +146,17 @@ class PRNGSpec:
   def __init__(self, impl):
     self._impl = impl
 
-  def __str__(self)  -> str: return str(self._impl)
-  def __hash__(self) -> int: return hash(self._impl)
+  def __repr__(self) -> str:
+    return f"PRNGSpec({self._impl.name!r})"
+
+  def __str__(self)  -> str:
+    return str(self._impl)
+
+  def __hash__(self) -> int:
+    return hash(self._impl)
 
   def __eq__(self, other) -> bool:
-    return self._impl == other._impl
+    return isinstance(other, PRNGSpec) and self._impl == other._impl
 
 
 # TODO(frostig,vanderplas): remove PRNGImpl from this union when it's
@@ -197,9 +203,10 @@ def key(seed: int | ArrayLike, *,
         impl: PRNGSpecDesc | None = None) -> KeyArray:
   """Create a pseudo-random number generator (PRNG) key given an integer seed.
 
-  The result is a scalar array with a key that indicates the default PRNG
-  implementation, as determined by the optional ``impl`` argument or,
-  otherwise, by the ``jax_default_prng_impl`` config flag.
+  The result is a scalar array containing a key, whose dtype indicates
+  the default PRNG implementation, as determined by the optional
+  ``impl`` argument or, otherwise, by the ``jax_default_prng_impl``
+  config flag at the time when this function is called.
 
   Args:
     seed: a 64- or 32-bit integer used as the value of the key.
@@ -214,11 +221,20 @@ def key(seed: int | ArrayLike, *,
 
 def PRNGKey(seed: int | ArrayLike, *,
             impl: PRNGSpecDesc | None = None) -> KeyArray:
-  """Create a pseudo-random number generator (PRNG) key given an integer seed.
+  """Create a legacy PRNG key given an integer seed.
 
-  The resulting key carries the default PRNG implementation, as
-  determined by the optional ``impl`` argument or, otherwise, by the
-  ``jax_default_prng_impl`` config flag.
+  This function produces old-style legacy PRNG keys, which are arrays
+  of dtype ``uint32``. For more, see the note in the `PRNG keys
+  <https://jax.readthedocs.io/en/latest/jax.random.html#prng-keys>`_
+  section. When possible, :func:`jax.random.key` is recommended for
+  use instead.
+
+  The resulting key does not carry a PRNG implementation. The returned
+  key matches the implementation given by the optional ``impl``
+  argument or, otherwise, determined by the ``jax_default_prng_impl``
+  config flag. Callers must ensure that same implementation is set as
+  the default when passing this key as an argument to other functions
+  (such as ``jax.random.split`` and ``jax.random.normal``).
 
   Args:
     seed: a 64- or 32-bit integer used as the value of the key.
@@ -282,7 +298,7 @@ def _key_impl(keys: KeyArray) -> PRNGImpl:
   keys_dtype = typing.cast(prng.KeyTy, keys.dtype)
   return keys_dtype._impl
 
-def key_impl(keys: KeyArrayLike) -> Hashable:
+def key_impl(keys: KeyArrayLike) -> PRNGSpec:
   typed_keys, _ = _check_prng_key("key_impl", keys, allow_batched=True)
   return PRNGSpec(_key_impl(typed_keys))
 
@@ -492,7 +508,7 @@ def _randint(key, shape, minval, maxval, dtype) -> Array:
   span = lax.convert_element_type(maxval - minval, unsigned_dtype)
 
   # Ensure that span=1 when maxval <= minval, so minval is always returned;
-  # https://github.com/google/jax/issues/222
+  # https://github.com/jax-ml/jax/issues/222
   span = lax.select(maxval <= minval, lax.full_like(span, 1), span)
 
   # When maxval is out of range, the span has to be one larger.
@@ -2031,6 +2047,11 @@ def orthogonal(
 
   Returns:
     A random array of shape `(*shape, n, n)` and specified dtype.
+
+  References:
+    .. [1] Mezzadri, Francesco. (2007). "How to generate random matrices from
+           the classical compact groups". Notices of the American Mathematical
+           Society, 54(5), 592-604. https://arxiv.org/abs/math-ph/0609050.
   """
   shape = core.canonicalize_shape(shape)
   key, _ = _check_prng_key("orthogonal", key)
@@ -2519,7 +2540,7 @@ def _binomial(key, count, prob, shape, dtype) -> Array:
     _btrs(key, count_btrs, q_btrs, shape, dtype, max_iters),
   )
   # ensure nan q always leads to nan output and nan or neg count leads to nan
-  # as discussed in https://github.com/google/jax/pull/16134#pullrequestreview-1446642709
+  # as discussed in https://github.com/jax-ml/jax/pull/16134#pullrequestreview-1446642709
   invalid = (q_l_0 | q_is_nan | count_nan_or_neg)
   samples = lax.select(
     invalid,

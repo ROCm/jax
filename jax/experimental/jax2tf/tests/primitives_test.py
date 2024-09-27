@@ -30,7 +30,7 @@ in Tensorflow errors (for some devices and compilation modes). These limitations
 are captured as jax2tf_limitations.Jax2TfLimitation objects.
 
 From the limitations objects, we generate a
-[report](https://github.com/google/jax/blob/main/jax/experimental/jax2tf/g3doc/primitives_with_limited_support.md).
+[report](https://github.com/jax-ml/jax/blob/main/jax/experimental/jax2tf/g3doc/primitives_with_limited_support.md).
 The report has instructions for how to re-generate it.
 
 If a harness run fails with error, and a limitation that matches the device
@@ -119,6 +119,11 @@ class JaxPrimitiveTest(tf_test_util.JaxToTfTestCase):
         device == "tpu"):
       raise unittest.SkipTest("b/264716764: error on tf.cast from c64 to f32")
 
+    if ("eigh" == harness.group_name and
+        device == "cpu"):
+      raise unittest.SkipTest(
+          "Equality comparisons on eigendecompositions are not stable.")
+
     if (config.jax2tf_default_native_serialization.value and
         device == "gpu" and
         "lu" in harness.fullname):
@@ -178,10 +183,12 @@ class JaxPrimitiveTest(tf_test_util.JaxToTfTestCase):
       if p.name == "debug_callback" or p.name == "debug_print":
         # TODO(sharadmv,necula): enable debug callbacks in TF
         continue
-      if p.name in ("max_contiguous", "multiple_of"):
+      if p.name in ("max_contiguous", "multiple_of", "run_scoped"):
         # Pallas-specific primitives are not supported.
         continue
       if p.name == "pallas_call":
+        continue
+      if p.name == "ffi_call":
         continue
       if p.name == "tpu_custom_call":
         continue

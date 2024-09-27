@@ -18,7 +18,6 @@ import collections
 from collections import OrderedDict
 from collections.abc import Mapping, Sequence
 import dataclasses
-import enum
 import functools
 import itertools
 import math
@@ -31,6 +30,7 @@ from jax._src import sharding_specs
 from jax._src import tree_util
 from jax._src import util
 from jax._src import xla_bridge
+from jax._src import mesh_utils
 from jax._src.lib import xla_client as xc
 from jax._src.op_shardings import (
     are_op_shardings_equal, get_num_ways_dim_sharded, is_op_sharding_replicated)
@@ -53,18 +53,17 @@ class TransferToMemoryKind:
 
 @util.cache(max_size=128, trace_context_in_key=False)
 def _check_mesh_resource_axis(mesh, parsed_pspec, _manual_axes):
-  try:
-    for p in parsed_pspec:
-      if p is not None:
-        for r in p:
-          mesh.shape[r]
-          if r in _manual_axes:
-            raise ValueError(
-                f"Axis: {r} of {parsed_pspec.get_partition_spec()} "
-                f"is also found in manual_axes: {_manual_axes}.") from None
-  except KeyError as e:
-    raise ValueError(f"Resource axis: {e.args[0]} of {parsed_pspec.user_spec} is "
-                     "undefined.") from None
+  for p in parsed_pspec:
+    if p is not None:
+      for r in p:
+        if r not in mesh.shape:
+          raise ValueError(
+              f"Resource axis: {r} of {parsed_pspec.get_partition_spec()} "
+              f"is not found in mesh: {tuple(mesh.shape.keys())}.")
+        if r in _manual_axes:
+          raise ValueError(
+              f"Axis: {r} of {parsed_pspec.get_partition_spec()} "
+              f"is also found in manual_axes: {_manual_axes}.") from None
 
 
 def hashed_index(x) -> int:
@@ -192,7 +191,7 @@ class NamedSharding(sharding.Sharding):
     >>> named_sharding = jax.sharding.NamedSharding(mesh, spec)
   """
 
-  mesh: mesh_lib.Mesh
+  mesh: mesh_lib.Mesh | mesh_lib.AbstractMesh
   spec: PartitionSpec
   _memory_kind: str | None
   _parsed_pspec: ParsedPartitionSpec
@@ -200,7 +199,7 @@ class NamedSharding(sharding.Sharding):
 
   @use_cpp_method()
   def __init__(
-      self, mesh: mesh_lib.Mesh, spec: PartitionSpec, *,
+      self, mesh: mesh_lib.Mesh | mesh_lib.AbstractMesh, spec: PartitionSpec, *,
       memory_kind: str | None = None, _parsed_pspec=None,
       _manual_axes=frozenset()):
     self.mesh = mesh
@@ -259,21 +258,37 @@ class NamedSharding(sharding.Sharding):
                 _manual_axes=_manual_axes)
 
   @property
+  def num_devices(self) -> int:
+    return self.mesh.size
+
+  @property
   def device_set(self) -> set[Device]:
+    if isinstance(self.mesh, mesh_lib.AbstractMesh):
+      raise ValueError(
+          'device_set is not implemented for `jax.sharding.AbstractMesh`.')
     return self.mesh._flat_devices_set
 
   @property
   def _device_assignment(self) -> XLADeviceAssignment:
+    if isinstance(self.mesh, mesh_lib.AbstractMesh):
+      raise ValueError('_device_assignment is not implemented for'
+                       ' `jax.sharding.AbstractMesh`.')
     return self.mesh._flat_devices_tuple
 
   @property
   def is_fully_addressable(self) -> bool:
+    if isinstance(self.mesh, mesh_lib.AbstractMesh):
+      raise ValueError('is_fully_addressable is not implemented for '
+                       '`jax.sharding.AbstractMesh`.')
     # Speed up `is_fully_addressable` since there is a high chance that the
     # mesh across multiple NamedSharding objects will be the same.
     return not self.mesh.is_multi_process
 
   @property
   def addressable_devices(self) -> set[Device]:
+    if isinstance(self.mesh, mesh_lib.AbstractMesh):
+      raise ValueError('addressable_devices is not implemented for '
+                       '`jax.sharding.AbstractMesh`.')
     # Override addressable devices because there is a high chance that the mesh
     # across multiple NamedSharding objects will be the same.
     return self.mesh._local_devices_set
@@ -354,6 +369,10 @@ class SingleDeviceSharding(sharding.Sharding):
       return True
     return (self._device == other._device and
             self.memory_kind == other.memory_kind)
+
+  @property
+  def num_devices(self) -> int:
+    return len(self.device_set)
 
   @property
   def device_set(self) -> set[Device]:
@@ -489,6 +508,10 @@ class PmapSharding(sharding.Sharding):
     else:
       pmap_devices = np.array(devices)
     return cls(pmap_devices, sharding_spec)
+
+  @property
+  def num_devices(self) -> int:
+    return len(self.device_set)
 
   @functools.cached_property
   def device_set(self) -> set[Device]:
@@ -667,13 +690,9 @@ class PositionalSharding(sharding.Sharding):
   def _remake(
       cls, devices: tuple[xc.Device, ...], ids: np.ndarray,
       *, memory_kind: str | None = None) -> PositionalSharding:
-    self = cls.__new__(cls)
-    self._devices = devices
-    self._ids = ids
-    self._internal_device_list = xc.DeviceList(self._devices)
-    self._memory_kind = xc.check_and_canonicalize_memory_kind(
-        memory_kind, self._internal_device_list)
-    return self
+    sharding = cls(devices, memory_kind=memory_kind)
+    sharding._ids = ids
+    return sharding
 
   # Hashable
 
@@ -695,6 +714,10 @@ class PositionalSharding(sharding.Sharding):
             self._internal_device_list == other._internal_device_list)
 
   # Sharding interface
+
+  @property
+  def num_devices(self) -> int:
+    return len(self.device_set)
 
   @functools.cached_property
   def device_set(self) -> set[xc.Device]:
@@ -815,6 +838,10 @@ class GSPMDSharding(sharding.Sharding):
           f"{len(num_ways_dim_sharded)}, but was applied to a value of rank "
           f"{len(aval_shape)}")
 
+  @property
+  def num_devices(self) -> int:
+    return len(self.device_set)
+
   @functools.cached_property
   def device_set(self) -> set[Device]:
     return set(self._devices)
@@ -927,43 +954,20 @@ get_single_pspec = lambda p: array_mapping_to_axis_resources(
     cast(ArrayMapping, get_array_mapping(p)))
 
 
-class SpecSync(enum.IntEnum):
-  """Encodes how much out of sync the real value of partitions is compared to the user specified one.
-
-  We use this to make sure we don't show garbage modified values while claiming
-  that the users have specified them like that.
-  """
-  OUT_OF_SYNC = 0  # Arbitrary changes, including new axes inserted
-  DIM_PERMUTE = 1  # Dimensions permuted, but no new sharding axes
-  IN_SYNC = 2  # Entirely in sync
-
 class ParsedPartitionSpec:
-  __slots__ = ('unsafe_user_spec', 'partitions', 'sync')
+  __slots__ = ('_user_spec', 'partitions')
 
-  def __init__(self, user_spec, partitions, sync=SpecSync.IN_SYNC):
-    self.unsafe_user_spec = user_spec
+  def __init__(self, user_spec, partitions):
+    self._user_spec = user_spec
     # None in partitions represents unconstrained dim.
     # TODO(yashkatariya): May use a sentinel value.
     self.partitions = tuple(partitions)
-    self.sync = sync
-
-  @property
-  def user_spec(self):
-    return self.unsynced_user_spec(SpecSync.IN_SYNC)
 
   def get_partition_spec(self) -> PartitionSpec:
-    if self.sync < SpecSync.IN_SYNC:
-      return get_single_pspec(self)
+    if isinstance(self._user_spec, PartitionSpec):
+      return self._user_spec
     else:
-      if isinstance(self.unsafe_user_spec, PartitionSpec):
-        return self.unsafe_user_spec
-      else:
-        return get_single_pspec(self)
-
-  def unsynced_user_spec(self, min_sync):
-    if self.sync < min_sync:
-      raise AssertionError(f"Please open a bug report! ({self.sync} >= {min_sync})")
-    return self.unsafe_user_spec
+      return get_single_pspec(self)
 
   def insert_axis_partitions(self, dim, val):
     parts = self.partitions
@@ -971,8 +975,7 @@ class ParsedPartitionSpec:
     if too_short > 0:
       parts += ((),) * too_short
     new_partitions = util.tuple_insert(parts, dim, val)
-    new_sync = SpecSync.DIM_PERMUTE if (val == () or val is None) else SpecSync.OUT_OF_SYNC
-    return ParsedPartitionSpec(self.unsafe_user_spec, new_partitions, sync=new_sync)
+    return ParsedPartitionSpec(None, new_partitions)
 
   @classmethod
   def from_user_input(cls, entry, arg_name, allow_unconstrained_dims=False):
@@ -999,11 +1002,12 @@ class ParsedPartitionSpec:
     return cls(new_entry, axis_specs)
 
   def __hash__(self):
-    return hash((self.partitions, self.sync))
+    return hash(self.partitions)
 
   def __eq__(self, other):
-    return (self.partitions == other.partitions and
-            self.sync == other.sync)
+    if not isinstance(other, ParsedPartitionSpec):
+      return False
+    return self.partitions == other.partitions
 
   def __len__(self):
     return len(self.partitions)
@@ -1015,58 +1019,19 @@ class ParsedPartitionSpec:
     return iter(self.partitions)
 
   def __repr__(self):
-    return (f"ParsedPartitionSpec(partitions={self.partitions}, "
-            f"unsafe_user_spec={self.unsafe_user_spec}, "
-            f"sync={self.sync})")
-
-class CanonicalizedParsedPartitionSpec(ParsedPartitionSpec):
-  """ParsedPartitionSpecs that are canonicalized.
-
-  ParsedPartitionSpecs may contain trailing empty tuples, that make them
-  semantically different in general, and yet in some situations we prefer
-  to regard them as equivalent. For example, partitions of () and ((),)
-  cannot be always considered equivalent, since the first one is a valid
-  spec for a scalar value, while the second is not! However, when either of
-  those are applied to a 2D array, they both mean that the array is fully
-  replicated.
-
-  So CanonicalizedParsedPartitionSpecs removes the trailing empty tuples from
-  partitions.
-  """
-
-  def __init__(self, parsed_pspec: ParsedPartitionSpec):
-    partitions = list(parsed_pspec.partitions)
-    while partitions and partitions[-1] == ():
-      partitions.pop()
-
-    super().__init__(parsed_pspec.unsafe_user_spec, partitions,
-                     parsed_pspec.sync)
-
-  def __repr__(self):
-    return (f"CanonicalizedParsedPartitionSpec(partitions={self.partitions}, "
-            f"unsafe_user_spec={self.unsafe_user_spec}, "
-            f"sync={self.sync})")
+    return f"ParsedPartitionSpec(partitions={self.partitions})"
 
 
 def preprocess(mesh, spec, parsed_pspec, _manual_axes=frozenset()):
-  # This split exists because you can pass `_parsed_pspec` that has been
-  # modified from the original. For example: Adding extra dimension to
-  # axis_resources for vmap handlers. In such cases you need to preserve the
-  # `sync` attribute of parsed pspecs.
-  # PartitionSpec is inferred from the parsed pspec in this case.
-  # TODO(yaskatariya): Remove this and replace this with a normalized
-  # representation of Parsed Pspec
   if parsed_pspec is None:
     parsed_pspec = prepare_axis_resources(
         PartitionSpec() if spec is None else spec,
         "NamedSharding spec", allow_unconstrained_dims=True)
-
   _check_mesh_resource_axis(mesh, parsed_pspec, _manual_axes)
   return parsed_pspec
 
 
-def prepare_axis_resources(axis_resources,
-                           arg_name,
+def prepare_axis_resources(axis_resources, arg_name,
                            allow_unconstrained_dims=False):
   # PyTrees don't treat None values as leaves, so we use an is_leaf function.
   entries, treedef = tree_util.tree_flatten(
@@ -1103,9 +1068,11 @@ def _check_unique_resources(axis_resources, arg_name):
     if resource_counts.most_common(1)[0][1] > 1:
       multiple_uses = [r for r, c in resource_counts.items() if c > 1]
       if multiple_uses:
-        raise ValueError(f"A single {arg_name} specification can map every mesh axis "
-                         f"to at most one positional dimension, but {arg_axis_resources.user_spec} "
-                         f"has duplicate entries for {mesh_lib.show_axes(multiple_uses)}")
+        raise ValueError(
+            f'A single {arg_name} specification can map every mesh axis to at'
+            ' most one positional dimension, but'
+            f' {arg_axis_resources.get_partition_spec()} has duplicate entries'
+            f' for {mesh_lib.show_axes(multiple_uses)}')
 
 # Axis environments
 
@@ -1284,8 +1251,7 @@ def parse_flatten_op_sharding(hlo_sharding: xc.OpSharding | xc.HloSharding,
       out.extend(parse_flatten_op_sharding(s, mesh))
     return out
   elif hlo_sharding.is_replicated():
-    return [CanonicalizedParsedPartitionSpec(
-        ParsedPartitionSpec(PartitionSpec(), ()))]
+    return [ParsedPartitionSpec(PartitionSpec(), ())]
   elif hlo_sharding.is_tiled():
     mesh_shape = mesh.shape
     mesh_axis_order = unflatten_array(
@@ -1309,8 +1275,9 @@ def parse_flatten_op_sharding(hlo_sharding: xc.OpSharding | xc.HloSharding,
       )
     if hlo_sharding.replicate_on_last_tile_dim():
       partitions = partitions[:-1]
-    return [CanonicalizedParsedPartitionSpec(
-        ParsedPartitionSpec('<internally generated spec>', partitions))]
+    while partitions and partitions[-1] == ():
+      partitions.pop()
+    return [ParsedPartitionSpec(None, partitions)]
   else:
     raise AssertionError("Unhandled OpSharding type. Please open a bug report!")
 
@@ -1394,12 +1361,12 @@ def get_process_index_and_count(
   if (tensor_sharding.is_fully_addressable or
       tensor_sharding.is_fully_replicated):
     return (0, 1)
-  num_devices = len(tensor_sharding.device_set)
   # Get device to indices map, we don't care about the concrete
   # global shape here, only to get the distribution of shards across the tensor
   # using (num_devices, num_devices, ...)  This is a universal shape that is
   # compatible with any mesh with num_devices.
-  device_map = tensor_sharding.devices_indices_map((num_devices,) * ndims)
+  device_map = tensor_sharding.devices_indices_map(
+      (tensor_sharding.num_devices,) * ndims)
 
   # Get the slices for 'dim' for all devices.
   global_slice = {k: v[dim] for k, v in device_map.items()}
@@ -1542,7 +1509,7 @@ def num_addressable_indices(
 
 
 def physical_hlo_sharding(aval, hlo_sharding: xc.HloSharding) -> xc.HloSharding:
-  elt_aval = aval.dtype._rules.physical_element_aval(aval.dtype)
+  elt_aval = core.physical_element_aval(aval.dtype)
   new_op_sharding = hlo_sharding.to_proto().clone()
   partitions, num_replicas = get_num_ways_dim_sharded(hlo_sharding)
   suffix = [] if num_replicas == 1 else [num_replicas]
@@ -1553,13 +1520,13 @@ def physical_hlo_sharding(aval, hlo_sharding: xc.HloSharding) -> xc.HloSharding:
 def is_single_device_sharding(sharding: sharding.Sharding) -> bool:
   # Special case PmapSharding here because PmapSharding maps away an axis
   # and needs to be handled separately.test_pjit_single_device_sharding_add
-  return len(sharding.device_set) == 1 and not isinstance(sharding, PmapSharding)
+  return sharding.num_devices == 1 and not isinstance(sharding, PmapSharding)
 
 def make_key_array_phys_sharding(aval, sharding):
   if is_single_device_sharding(sharding):
     return sharding
   elif isinstance(sharding, PmapSharding):
-    elt_aval = aval.dtype._rules.physical_element_aval(aval.dtype)
+    elt_aval = core.physical_element_aval(aval.dtype)
     trailing_sharding = [sharding_specs.NoSharding()] * elt_aval.ndim
     phys_sharding_spec = sharding_specs.ShardingSpec(
         sharding=(*sharding.sharding_spec.sharding, *trailing_sharding),
@@ -1567,7 +1534,7 @@ def make_key_array_phys_sharding(aval, sharding):
     return PmapSharding(devices=sharding.devices,
                         sharding_spec=phys_sharding_spec)
   elif isinstance(sharding, NamedSharding):
-    elt_aval = aval.dtype._rules.physical_element_aval(aval.dtype)
+    elt_aval = core.physical_element_aval(aval.dtype)
     trailing_spec = [None] * elt_aval.ndim
     return NamedSharding(
         sharding.mesh,
@@ -1584,7 +1551,7 @@ def physical_sharding(
 
 
 def get_logical_gspmd_sharding(aval, phys_sharding):
-  elt_aval = aval.dtype._rules.physical_element_aval(aval.dtype)
+  elt_aval = core.physical_element_aval(aval.dtype)
   phys_hlo_sharding = phys_sharding._to_xla_hlo_sharding(
       aval.ndim + elt_aval.ndim)
   partitions, num_replicas = get_num_ways_dim_sharded(phys_hlo_sharding)
@@ -1616,7 +1583,7 @@ def logical_sharding(aval, phys_sharding) -> sharding.Sharding:
   if is_single_device_sharding(phys_sharding):
     return phys_sharding
   elif isinstance(phys_sharding, PmapSharding):
-    elt_aval = aval.dtype._rules.physical_element_aval(aval.dtype)
+    elt_aval = core.physical_element_aval(aval.dtype)
     logical_sharding_spec = sharding_specs.ShardingSpec(
         sharding=phys_sharding.sharding_spec.sharding[:-elt_aval.ndim],
         mesh_mapping=phys_sharding.sharding_spec.mesh_mapping)
@@ -1624,6 +1591,7 @@ def logical_sharding(aval, phys_sharding) -> sharding.Sharding:
                         sharding_spec=logical_sharding_spec)
   elif isinstance(phys_sharding, NamedSharding):
     logical_gs = get_logical_gspmd_sharding(aval, phys_sharding)
+    assert isinstance(phys_sharding.mesh, mesh_lib.Mesh)
     return _gspmd_to_named_sharding_via_mesh(
         logical_gs, phys_sharding.mesh)
   else:
@@ -1647,3 +1615,61 @@ def _gspmd_to_named_sharding_via_mesh(
   return create_mesh_pspec_sharding(
       mesh, parsed_pspec.get_partition_spec(), parsed_pspec,
       out_s.memory_kind)
+
+
+def make_mesh(axis_shapes: Sequence[int], axis_names: Sequence[str],
+              *, devices: Sequence[xc.Device] | None = None) -> mesh_lib.Mesh:
+  """Creates an efficient mesh with the shape and axis names specified.
+
+  This function attempts to automatically compute a good mapping from a set of
+  logical axes to a physical mesh. For example, on a TPU v3 with 8 devices:
+
+  >>> mesh = jax.make_mesh((8,), ('x'))  # doctest: +SKIP
+  >>> [d.id for d in mesh.devices.flat]  # doctest: +SKIP
+  [0, 1, 2, 3, 6, 7, 4, 5]
+
+  The above ordering takes into account the physical topology of TPU v3.
+  It orders the devices into a ring, which yields efficient all-reduces on a
+  TPU v3.
+
+  Now, let's see another example with 16 devices of TPU v3:
+
+  >>> mesh = jax.make_mesh((2, 8), ('x', 'y'))  # doctest: +SKIP
+  >>> [d.id for d in mesh.devices.flat]  # doctest: +SKIP
+  [0, 1, 2, 3, 6, 7, 4, 5, 8, 9, 10, 11, 14, 15, 12, 13]
+  >>> mesh = jax.make_mesh((4, 4), ('x', 'y'))  # doctest: +SKIP
+  >>> [d.id for d in mesh.devices.flat]  # doctest: +SKIP
+  [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+
+  As you can see, logical axes (`axis_shapes`) affect the ordering of the
+  devices.
+
+  You can use `jax.experimental.mesh_utils.create_device_mesh` if you want to
+  use the extra arguments it provides like `contiguous_submeshes` and
+  `allow_split_physical_axes`.
+
+  Args:
+    axis_shapes: Shape of the mesh. For example, axis_shape=(4, 2)
+    axis_names: Names of the mesh axes. For example, axis_names=('x', 'y')
+    devices: Optional keyword only argument, that allows you to specify the
+      devices you want to create a mesh with.
+
+  Returns:
+    A `jax.sharding.Mesh` object.
+  """
+  if devices is None:
+    devices = xla_bridge.devices()
+  axis_size = math.prod(axis_shapes)
+  if axis_size > len(devices):
+    raise ValueError(
+        f'Number of devices {len(devices)} must be >= the product '
+        f'of mesh_shape {axis_shapes}')
+  elif axis_size < len(devices):
+    devices = devices[:axis_size]
+  if devices[0].device_kind == mesh_utils._TPU_V5_LITE:
+    allow_split_physical_axes = True
+  else:
+    allow_split_physical_axes = False
+  mesh_devices = mesh_utils.create_device_mesh(
+      axis_shapes, devices, allow_split_physical_axes=allow_split_physical_axes)
+  return mesh_lib.Mesh(mesh_devices, axis_names)

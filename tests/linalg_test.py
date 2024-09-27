@@ -30,6 +30,7 @@ from jax import lax
 from jax import numpy as jnp
 from jax import scipy as jsp
 from jax._src import config
+from jax._src import deprecations
 from jax._src.lax import linalg as lax_linalg
 from jax._src import test_util as jtu
 from jax._src import xla_bridge
@@ -110,7 +111,7 @@ class NumpyLinalgTest(jtu.JaxTestCase):
     self.assertAllClose(np.float32(0), jsp.linalg.det(x))
 
   @jtu.sample_product(
-    shape=[(1, 1), (3, 3), (2, 4, 4)],
+    shape=[(1, 1), (2, 2), (3, 3), (2, 2, 2), (2, 3, 3), (2, 4, 4), (5, 7, 7)],
     dtype=float_types,
   )
   @jtu.skip_on_flag("jax_skip_slow_tests", True)
@@ -268,10 +269,7 @@ class NumpyLinalgTest(jtu.JaxTestCase):
     if compute_right_eigenvectors:
       check_right_eigenvectors(a, w, results[1 + compute_left_eigenvectors])
 
-    # TODO(phawkins): we are seeing nondeterminism in LAPACK routines with
-    # avx enabled, because for Eigen BLAS nrm2 has an alignment dependence.
-    # self._CompileAndCheck(partial(jnp.linalg.eig), args_maker,
-    #                       rtol=1e-3)
+    self._CompileAndCheck(partial(jnp.linalg.eig), args_maker, rtol=1e-3)
 
   @jtu.sample_product(
     shape=[(4, 4), (5, 5), (50, 50), (2, 6, 6)],
@@ -324,11 +322,11 @@ class NumpyLinalgTest(jtu.JaxTestCase):
     a, = args_maker()
     w1, _ = jnp.linalg.eig(a)
     w2 = jnp.linalg.eigvals(a)
-    self.assertAllClose(w1, w2, rtol={np.complex64: 1e-5, np.complex128: 1e-14})
+    self.assertAllClose(w1, w2, rtol={np.complex64: 1e-5, np.complex128: 2e-14})
 
   @jtu.run_on_devices("cpu")
   def testEigvalsInf(self):
-    # https://github.com/google/jax/issues/2661
+    # https://github.com/jax-ml/jax/issues/2661
     x = jnp.array([[jnp.inf]])
     self.assertTrue(jnp.all(jnp.isnan(jnp.linalg.eigvals(x))))
 
@@ -488,7 +486,7 @@ class NumpyLinalgTest(jtu.JaxTestCase):
     with jax.numpy_rank_promotion("allow"):
       self.assertLessEqual(
           np.linalg.norm(np.matmul(a, v) - w * v),
-          81 * eps * np.linalg.norm(a),
+          85 * eps * np.linalg.norm(a),
       )
 
   @jtu.sample_product(
@@ -1003,7 +1001,7 @@ class NumpyLinalgTest(jtu.JaxTestCase):
 
   @jtu.skip_on_devices("tpu")
   def testQrInvalidDtypeCPU(self, shape=(5, 6), dtype=np.float16):
-    # Regression test for https://github.com/google/jax/issues/10530
+    # Regression test for https://github.com/jax-ml/jax/issues/10530
     rng = jtu.rand_default(self.rng())
     arr = rng(shape, dtype)
     if jtu.test_device_matches(['cpu']):
@@ -1150,10 +1148,21 @@ class NumpyLinalgTest(jtu.JaxTestCase):
         a = (a + T(a.conj())) / 2
       return np.linalg.pinv(a, hermitian=hermitian)
     self._CheckAgainstNumpy(np_fn, jnp_fn, args_maker, tol=1e-4)
-    self._CompileAndCheck(jnp_fn, args_maker)
+    self._CompileAndCheck(jnp_fn, args_maker, atol=1e-5)
 
     # TODO(phawkins): 6e-2 seems like a very loose tolerance.
     jtu.check_grads(jnp_fn, args_maker(), 1, rtol=6e-2, atol=1e-3)
+
+  def testPinvDeprecatedArgs(self):
+    msg = "The rcond argument for linalg.pinv is deprecated."
+    def assert_warns_or_errors(msg=msg):
+      if deprecations.is_accelerated("jax-numpy-linalg-pinv-rcond"):
+        return self.assertRaisesRegex(ValueError, msg)
+      else:
+        return self.assertWarnsRegex(DeprecationWarning, msg)
+    x = jnp.ones((3, 3))
+    with assert_warns_or_errors(msg):
+      jnp.linalg.pinv(x, rcond=1E-2)
 
   def testPinvGradIssue2792(self):
     def f(p):
@@ -1196,6 +1205,17 @@ class NumpyLinalgTest(jtu.JaxTestCase):
                             args_maker, check_dtypes=False, tol=1e-3)
     self._CompileAndCheck(jnp.linalg.matrix_rank, args_maker,
                           check_dtypes=False, rtol=1e-3)
+
+  def testMatrixRankDeprecatedArgs(self):
+    msg = "The tol argument for linalg.matrix_rank is deprecated."
+    def assert_warns_or_errors(msg=msg):
+      if deprecations.is_accelerated("jax-numpy-linalg-matrix_rank-tol"):
+        return self.assertRaisesRegex(ValueError, msg)
+      else:
+        return self.assertWarnsRegex(DeprecationWarning, msg)
+    x = jnp.ones((3, 3))
+    with assert_warns_or_errors(msg):
+      jnp.linalg.matrix_rank(x, tol=1E-2)
 
   @jtu.sample_product(
     shapes=[
@@ -1376,7 +1396,6 @@ class ScipyLinalgTest(jtu.JaxTestCase):
                             args_maker, check_dtypes=False)
     self._CompileAndCheck(jsp.linalg.block_diag, args_maker)
 
-
   @jtu.sample_product(
     shape=[(1, 1), (4, 5), (10, 5), (50, 50)],
     dtype=float_types + complex_types,
@@ -1399,7 +1418,7 @@ class ScipyLinalgTest(jtu.JaxTestCase):
 
   @parameterized.parameters(lax_linalg.lu, lax_linalg._lu_python)
   def testLuOnZeroMatrix(self, lu):
-    # Regression test for https://github.com/google/jax/issues/19076
+    # Regression test for https://github.com/jax-ml/jax/issues/19076
     x = jnp.zeros((2, 2), dtype=np.float32)
     x_lu, _, _ = lu(x)
     self.assertArraysEqual(x_lu, x)
@@ -1759,7 +1778,6 @@ class ScipyLinalgTest(jtu.JaxTestCase):
     self._CheckAgainstNumpy(sp_func, jax_func, args_maker, rtol=1e-4, atol=1e-4,
                             check_dtypes=False)
 
-
   @jtu.sample_product(
     n=[1, 4, 5, 20, 50, 100],
     dtype=float_types + complex_types,
@@ -1795,7 +1813,6 @@ class ScipyLinalgTest(jtu.JaxTestCase):
     self._CheckAgainstNumpy(osp.linalg.cho_solve, jsp.linalg.cho_solve,
                             args_maker, tol=1e-3)
 
-
   @jtu.sample_product(
     n=[1, 4, 5, 20, 50, 100],
     dtype=float_types + complex_types,
@@ -1821,13 +1838,13 @@ class ScipyLinalgTest(jtu.JaxTestCase):
         e = rng((n, n), dtype)
         return [a, e, ]
 
-      #compute_expm is True
+      # compute_expm is True
       osp_fun = lambda a,e: osp.linalg.expm_frechet(a,e,compute_expm=True)
       jsp_fun = lambda a,e: jsp.linalg.expm_frechet(a,e,compute_expm=True)
       self._CheckAgainstNumpy(osp_fun, jsp_fun, args_maker,
                               check_dtypes=False, tol=tol)
       self._CompileAndCheck(jsp_fun, args_maker, check_dtypes=False)
-      #compute_expm is False
+      # compute_expm is False
       osp_fun = lambda a,e: osp.linalg.expm_frechet(a,e,compute_expm=False)
       jsp_fun = lambda a,e: jsp.linalg.expm_frechet(a,e,compute_expm=False)
       self._CheckAgainstNumpy(osp_fun, jsp_fun, args_maker,
@@ -1864,17 +1881,30 @@ class ScipyLinalgTest(jtu.JaxTestCase):
                       rtol=tol)
 
   @jtu.sample_product(
+      shape=[(4, 4), (15, 15), (50, 50), (100, 100)],
+      dtype=float_types + complex_types,
+  )
+  @jtu.run_on_devices("cpu")
+  def testSchur(self, shape, dtype):
+    rng = jtu.rand_default(self.rng())
+    args_maker = lambda: [rng(shape, dtype)]
+
+    self._CheckAgainstNumpy(osp.linalg.schur, jsp.linalg.schur, args_maker)
+    self._CompileAndCheck(jsp.linalg.schur, args_maker)
+
+  @jtu.sample_product(
     shape=[(1, 1), (4, 4), (15, 15), (50, 50), (100, 100)],
     dtype=float_types + complex_types,
   )
   @jtu.run_on_devices("cpu")
   def testRsf2csf(self, shape, dtype):
-      rng = jtu.rand_default(self.rng())
-      args_maker = lambda: [rng(shape, dtype), rng(shape, dtype)]
-      tol = 3e-5
-      self._CheckAgainstNumpy(osp.linalg.rsf2csf, jsp.linalg.rsf2csf,
-                              args_maker, tol=tol)
-      self._CompileAndCheck(jsp.linalg.rsf2csf, args_maker)
+    rng = jtu.rand_default(self.rng())
+    args_maker = lambda: [rng(shape, dtype), rng(shape, dtype)]
+    tol = 3e-5
+    self._CheckAgainstNumpy(
+        osp.linalg.rsf2csf, jsp.linalg.rsf2csf, args_maker, tol=tol
+    )
+    self._CompileAndCheck(jsp.linalg.rsf2csf, args_maker)
 
   @jtu.sample_product(
     shape=[(1, 1), (5, 5), (20, 20), (50, 50)],
@@ -1885,17 +1915,22 @@ class ScipyLinalgTest(jtu.JaxTestCase):
   # backend only, so tests on GPU and TPU backends are skipped here
   @jtu.run_on_devices("cpu")
   def testFunm(self, shape, dtype, disp):
-      def func(x):
-        return x**-2.718
-      rng = jtu.rand_default(self.rng())
-      args_maker = lambda: [rng(shape, dtype)]
-      jnp_fun = lambda arr: jsp.linalg.funm(arr, func, disp=disp)
-      scp_fun = lambda arr: osp.linalg.funm(arr, func, disp=disp)
-      self._CheckAgainstNumpy(
-          jnp_fun, scp_fun, args_maker, check_dtypes=False,
-          tol={np.float32: 2e-3,np.complex64: 2e-3, np.complex128: 1e-6})
-      # TODO(phawkins): nondeterminism due to alignment.
-      # self._CompileAndCheck(jnp_fun, args_maker, atol=2e-5)
+
+    def func(x):
+      return x**-2.718
+
+    rng = jtu.rand_default(self.rng())
+    args_maker = lambda: [rng(shape, dtype)]
+    jnp_fun = lambda arr: jsp.linalg.funm(arr, func, disp=disp)
+    scp_fun = lambda arr: osp.linalg.funm(arr, func, disp=disp)
+    self._CheckAgainstNumpy(
+        jnp_fun,
+        scp_fun,
+        args_maker,
+        check_dtypes=False,
+        tol={np.complex64: 1e-5, np.complex128: 1e-6},
+    )
+    self._CompileAndCheck(jnp_fun, args_maker, atol=2e-5)
 
   @jtu.sample_product(
     shape=[(4, 4), (15, 15), (50, 50), (100, 100)],
@@ -1910,9 +1945,9 @@ class ScipyLinalgTest(jtu.JaxTestCase):
     mat = arg @ arg.T
     args_maker = lambda : [mat]
     if dtype == np.float32 or dtype == np.complex64:
-        tol = 1e-4
+      tol = 1e-4
     else:
-        tol = 1e-8
+      tol = 1e-8
     self._CheckAgainstNumpy(osp.linalg.sqrtm,
                             jsp.linalg.sqrtm,
                             args_maker,
@@ -2121,8 +2156,10 @@ class LaxLinalgTest(jtu.JaxTestCase):
     args = rng(shape, dtype)
     Ts, Ss = lax.linalg.schur(args)
     eps = np.finfo(dtype).eps
-    self.assertAllClose(args, Ss @ Ts @ jnp.conj(Ss.T), atol=eps * 600)
-    self.assertAllClose(np.eye(*shape, dtype=dtype), Ss @ jnp.conj(Ss.T), atol=eps * 100)
+    self.assertAllClose(args, Ss @ Ts @ jnp.conj(Ss.T), atol=600 * eps)
+    self.assertAllClose(
+        np.eye(*shape, dtype=dtype), Ss @ jnp.conj(Ss.T), atol=100 * eps
+    )
 
   @jtu.sample_product(
     shape=[(2, 2), (4, 4), (15, 15), (50, 50), (100, 100)],
@@ -2163,6 +2200,38 @@ class LaxLinalgTest(jtu.JaxTestCase):
     jsp_fun = partial(jsp.linalg.hilbert, n=n)
     self._CheckAgainstNumpy(osp_fun, jsp_fun, args_maker)
     self._CompileAndCheck(jsp_fun, args_maker)
+
+  @jtu.sample_product(
+      shape=[(5, 1), (10, 4), (128, 12)],
+      dtype=float_types,
+      symmetrize_output=[True, False],
+  )
+  @jtu.skip_on_devices("tpu")
+  def testSymmetricProduct(self, shape, dtype, symmetrize_output):
+    rng = jtu.rand_default(self.rng())
+    batch_size = 10
+    atol = 1e-6 if dtype == jnp.float64 else 1e-3
+
+    a_matrix = rng((batch_size,) + shape, dtype)
+    c_shape = a_matrix.shape[:-1] + (a_matrix.shape[-2],)
+    c_matrix = jnp.zeros(c_shape, dtype)
+
+    old_product = jnp.einsum("...ij,...kj->...ik", a_matrix, a_matrix,
+                             precision=lax.Precision.HIGHEST)
+    new_product = lax_linalg.symmetric_product(
+        a_matrix, c_matrix, symmetrize_output=symmetrize_output)
+    new_product_with_batching = jax.vmap(
+        lambda a, c: lax_linalg.symmetric_product(
+            a, c, symmetrize_output=symmetrize_output),
+        in_axes=(0, 0))(a_matrix, c_matrix)
+
+    if not symmetrize_output:
+      old_product = jnp.tril(old_product)
+      new_product = jnp.tril(new_product)
+      new_product_with_batching = jnp.tril(new_product_with_batching)
+    self.assertAllClose(new_product, old_product, atol=atol)
+    self.assertAllClose(
+        new_product_with_batching, old_product, atol=atol)
 
 
 if __name__ == "__main__":

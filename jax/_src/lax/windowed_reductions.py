@@ -30,9 +30,9 @@ from jax._src.interpreters import mlir
 from jax._src.lax import convolution
 from jax._src.lax import lax
 from jax._src.lax import slicing
+from jax._src.lax.other import logaddexp
 from jax._src.lib.mlir import ir
 from jax._src.lib.mlir.dialects import hlo
-from jax._src.numpy.ufuncs import logaddexp
 from jax._src.typing import Array
 import numpy as np
 from jax._src.core import ClosedJaxpr
@@ -707,7 +707,7 @@ def _select_and_scatter_add_jvp(
       padding)
   del g_operand
   if type(g_source) is ad_util.Zero:
-    tangent_out = ad_util.Zero.from_value(val_out)
+    tangent_out = ad_util.Zero.from_primal_value(val_out)
   else:
     tangent_out = _select_and_scatter_add(
         g_source, operand, select_prim, window_dimensions,
@@ -952,7 +952,7 @@ def _select_and_gather_add_jvp(
       padding, base_dilation, window_dilation)
   del g_operand
   if type(g_source) is ad_util.Zero:
-    tangent_out = ad_util.Zero.from_value(val_out)
+    tangent_out = ad_util.Zero.from_primal_value(val_out)
   else:
     tangent_out = _select_and_gather_add(
         g_source, operand, select_prim, window_dimensions,

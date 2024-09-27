@@ -43,10 +43,7 @@ except ImportError:
 
 if _cublas:
   for _name, _value in _cublas.registrations().items():
-    # TODO(danfm): Clean up after all legacy custom calls are ported.
-    api_version = 1 if _name.endswith("_ffi") else 0
-    xla_client.register_custom_call_target(_name, _value, platform="CUDA",
-                                           api_version=api_version)
+    xla_client.register_custom_call_target(_name, _value, platform="CUDA")
 
 for cuda_module_name in [".cuda", "jax_cuda12_plugin"]:
   try:
@@ -78,10 +75,7 @@ except ImportError:
 
 if _hipblas:
   for _name, _value in _hipblas.registrations().items():
-    # TODO(danfm): Clean up after all legacy custom calls are ported.
-    api_version = 1 if _name.endswith("_ffi") else 0
-    xla_client.register_custom_call_target(_name, _value, platform="ROCM",
-                                           api_version=api_version)
+    xla_client.register_custom_call_target(_name, _value, platform="ROCM")
 
 for rocm_module_name in [".rocm", "jax_rocm60_plugin"]:
   try:
@@ -105,7 +99,8 @@ def _real_type(dtype):
   return np.finfo(dtype).dtype
 
 
-def _getrf_hlo(platform, gpu_blas, gpu_solver, ctx, dtype, a):
+# TODO(b/357034884): Remove this function after the forward compat window.
+def _getrf_hlo(platform, gpu_blas, gpu_solver, dtype, a):
   """LU decomposition."""
   a_type = ir.RankedTensorType(a.type)
   dims = a_type.shape
@@ -115,63 +110,41 @@ def _getrf_hlo(platform, gpu_blas, gpu_solver, ctx, dtype, a):
   num_bd = len(batch_dims)
   i32_type = ir.IntegerType.get_signless(32)
   layout = (num_bd, num_bd + 1) + tuple(range(num_bd - 1, -1, -1))
+
+  if not gpu_blas:
+    raise GpuLibNotLinkedError()
+
   batch = math.prod(batch_dims)
-  use_batched = batch > 1 and m == n and m // batch <= 128
+  if batch > 1 and m == n and m // batch <= 128:
+    lwork, opaque = gpu_blas.build_getrf_batched_descriptor(
+      np.dtype(dtype), batch, m)
+    workspace = ir.RankedTensorType.get([lwork], ir.IntegerType.get_signless(8))
+    kernel = f"{platform}blas_getrf_batched"
+  else:
+    lwork, opaque = gpu_solver.build_getrf_descriptor(
+        np.dtype(dtype), batch, m, n)
+    workspace = ir.RankedTensorType.get([lwork], a_type.element_type)
+    kernel = f"{platform}solver_getrf"
 
-  # TODO(b/357034884): Remove after 3 week forward compatibility window.
-  if ctx.is_forward_compat():
-    if not gpu_blas:
-      raise GpuLibNotLinkedError()
-
-    if use_batched:
-      lwork, opaque = gpu_blas.build_getrf_batched_descriptor(
-        np.dtype(dtype), batch, m)
-      workspace = ir.RankedTensorType.get([lwork], ir.IntegerType.get_signless(8))
-      kernel = f"{platform}blas_getrf_batched"
-    else:
-      lwork, opaque = gpu_solver.build_getrf_descriptor(
-          np.dtype(dtype), batch, m, n)
-      workspace = ir.RankedTensorType.get([lwork], a_type.element_type)
-      kernel = f"{platform}solver_getrf"
-
-    out = custom_call(
-        kernel,
-        result_types=[
-          a.type,
-          ir.RankedTensorType.get(batch_dims + (min(m, n),), i32_type),
-          ir.RankedTensorType.get(batch_dims, i32_type),
-          workspace,
-        ],
-        operands=[a],
-        backend_config=opaque,
-        operand_layouts=[layout],
-        result_layouts=[
-          layout,
-          tuple(range(num_bd, -1, -1)),
-          tuple(range(num_bd - 1, -1, -1)),
-          [0],
-        ],
-        operand_output_aliases={0: 0}).results
-    return out[:3]
-
-  target = "blas_getrf_batched_ffi" if use_batched else "solver_getrf_ffi"
-  return custom_call(
-      f"{platform}{target}",
+  out = custom_call(
+      kernel,
       result_types=[
         a.type,
         ir.RankedTensorType.get(batch_dims + (min(m, n),), i32_type),
         ir.RankedTensorType.get(batch_dims, i32_type),
+        workspace,
       ],
       operands=[a],
+      backend_config=opaque,
       operand_layouts=[layout],
       result_layouts=[
         layout,
         tuple(range(num_bd, -1, -1)),
         tuple(range(num_bd - 1, -1, -1)),
+        [0],
       ],
-      operand_output_aliases={0: 0},
-      backend_config={},
-      api_version=4).results
+      operand_output_aliases={0: 0}).results
+  return out[:3]
 
 
 cuda_getrf = partial(_getrf_hlo, "cu", _cublas, _cusolver)

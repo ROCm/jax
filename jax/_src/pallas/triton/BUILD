@@ -23,8 +23,14 @@ load(
 package(
     default_applicable_licenses = [],
     default_visibility = [
-        "//:__subpackages__",
+        "//jax:internal",
     ],
+)
+
+pytype_strict_library(
+    name = "core",
+    srcs = ["core.py"],
+    deps = ["//jax/_src/pallas"],
 )
 
 pytype_strict_library(

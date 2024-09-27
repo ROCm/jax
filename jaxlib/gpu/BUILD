@@ -14,13 +14,18 @@
 
 # Shared CUDA/ROCM GPU kernels.
 
-load("//jaxlib:jax.bzl", "cc_proto_library")
+load(
+    "//jaxlib:jax.bzl",
+    "cc_proto_library",
+    "jax_visibility",
+    "xla_py_proto_library",
+)
 
 licenses(["notice"])
 
 package(
     default_applicable_licenses = [],
-    default_visibility = ["//:__subpackages__"],
+    default_visibility = ["//jax:internal"],
 )
 
 exports_files(srcs = [
@@ -29,8 +34,6 @@ exports_files(srcs = [
     "blas_handle_pool.h",
     "blas_kernels.cc",
     "blas_kernels.h",
-    "blas_kernels_ffi.cc",
-    "blas_kernels_ffi.h",
     "gpu_kernel_helpers.cc",
     "gpu_kernel_helpers.h",
     "gpu_kernels.cc",
@@ -38,6 +41,8 @@ exports_files(srcs = [
     "linalg_kernels.cc",
     "linalg_kernels.cu.cc",
     "linalg_kernels.h",
+    "make_batch_pointers.cu.cc",
+    "make_batch_pointers.h",
     "prng.cc",
     "prng_kernels.cc",
     "prng_kernels.cu.cc",
@@ -48,6 +53,8 @@ exports_files(srcs = [
     "solver.cc",
     "solver_handle_pool.cc",
     "solver_handle_pool.h",
+    "solver_interface.cc",
+    "solver_interface.h",
     "solver_kernels.cc",
     "solver_kernels.h",
     "solver_kernels_ffi.cc",
@@ -70,5 +77,12 @@ proto_library(
 
 cc_proto_library(
     name = "triton_cc_proto",
+    deps = [":triton_proto"],
+)
+
+xla_py_proto_library(
+    name = "triton_py_pb2",
+    api_version = 2,
+    visibility = jax_visibility("triton_proto_py_users"),
     deps = [":triton_proto"],
 )
