@@ -15,8 +15,10 @@ jobs:
           # XLA_CLONE_DIR: 
         run: |
           ./build/rocm/ci_build.sh --rocm_version 6.1.3 \
-          --keep_image --py_version 3.10 \
-          --runtime bash -c "./build/rocm/build_rocm.sh"
+          --keep_image --py_version 3.10 
+      - cleanup: Remove workspace artifacts
+        if: always()
+        run: rm -rf ${{ github.workspace }}
 
       
 #       - name: Try rocm-smi
