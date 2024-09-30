@@ -11,7 +11,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build Docker 
         env: 
-          BUILD_TAG: rocm_jax_r6_1_3_py3_10_id${GITHUB_RUN_ID}
+          BUILD_TAG: rocm_jax_r6_1_3_py3_10_id${{ github.run_id }}
           # XLA_CLONE_DIR: 
         run: |
           ./build/rocm/ci_build.sh --rocm_version 6.1.3 \
