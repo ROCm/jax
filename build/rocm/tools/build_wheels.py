@@ -256,6 +256,7 @@ def main():
             shutil.copy(whl, wheelhouse_dir)
     # delete the 'dist' directory since it causes permissions issues
     shutil.rmtree(os.path.join(args.jax_path, "dist"))
+    shutil.rmtree(os.path.join(args.jax_path, "jax.egg-info"))
 
 
 if __name__ == "__main__":
