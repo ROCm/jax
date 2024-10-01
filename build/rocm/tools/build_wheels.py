@@ -262,13 +262,13 @@ def main():
     shutil.rmtree(os.path.join(args.jax_path, "jax", "__pycache__"))
 
     # make the wheels delete-abl by the runner
-    whl_house = os.join(args.jax_path, "wheelhouse")
+    whl_house = os.path.join(args.jax_path, "wheelhouse")
     logging.info(f'Changing permissions for {whl_house}')
     mode = (stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR | 
             stat.S_IRGRP | stat.S_IWGRP | stat.S_IXGRP |
             stat.S_IROTH | stat.S_IWOTH | stat.S_IXOTH )
     for item in os.listdir(whl_house):
-        whl_path = os.path.join(path, item)
+        whl_path = os.path.join(whl_house, item)
         if os.path.isfile(whl_path):
             os.chmod(whl_path, mode)
 
