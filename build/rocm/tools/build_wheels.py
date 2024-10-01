@@ -254,6 +254,8 @@ def main():
         if os.path.basename(whl).startswith("jax-"):
             LOG.info("Copying %s into %s" % (whl, wheelhouse_dir))
             shutil.copy(whl, wheelhouse_dir)
+    # delete the 'dist' directory since it causes permissions issues
+    shutil.rmtree(os.path.join(args.jax_path, "dist"))
 
 
 if __name__ == "__main__":
