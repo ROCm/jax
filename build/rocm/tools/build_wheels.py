@@ -257,6 +257,7 @@ def main():
     # delete the 'dist' directory since it causes permissions issues
     shutil.rmtree(os.path.join(args.jax_path, "dist"))
     shutil.rmtree(os.path.join(args.jax_path, "jax.egg-info"))
+    shutil.rmtree(os.path.join(args.jax_path, "jax", "__pycache__"))
 
 
 if __name__ == "__main__":
