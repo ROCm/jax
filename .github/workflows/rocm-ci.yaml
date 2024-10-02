@@ -21,8 +21,6 @@ jobs:
         with:
           name: rocm_jax_r6_1_3_py3_10_id${{ github.run_id }}
           path: ${{ github.workspace }}/wheelhouse/*.whl
-
-      
       - name: Detect GPUs
         run: |
           docker run \
@@ -32,3 +30,9 @@ jobs:
             --security-opt seccomp=unconfined \
             --shm-size=64G \
             rocm/rocm-terminal rocm-smi
+      - name: Run tests
+        env: 
+          DOCKER_IMG_NAME: rocm_jax_r6_1_3_py3_10_id${{ github.run_id }}
+        run: |
+          ./build/rocm/ci_build test ${DOCKER_IMG_NAME}
+
