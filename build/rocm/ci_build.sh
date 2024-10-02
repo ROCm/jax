@@ -117,8 +117,10 @@ WORKSPACE="${WORKSPACE:-$(upsearch WORKSPACE)}"
 BUILD_TAG="${BUILD_TAG:-jax}"
 
 # Determine the docker image name and BUILD_TAG.
-DOCKER_IMG_NAME="${BUILD_TAG}.${CONTAINER_TYPE}"
+DOCKER_IMG_NAME_DEFAULT="${BUILD_TAG}.${CONTAINER_TYPE}"
 
+# Let the env override the image name
+DOCKER_IMG_NAME="${DOCKER_IMG_NAME:-$DOCKER_IMG_NAME_DEFAULT}"
 # Under Jenkins matrix build, the build tag may contain characters such as
 # commas (,) and equal signs (=), which are not valid inside docker image names.
 DOCKER_IMG_NAME=$(echo "${DOCKER_IMG_NAME}" | sed -e 's/=/_/g' -e 's/,/-/g')
