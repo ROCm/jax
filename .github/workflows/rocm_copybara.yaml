@@ -1,6 +1,7 @@
 name: Sync rocm/jax with jax-ml/jax
 on:
   workflow_dispatch:
+  pull_request:
   schedule: 
     - cron: '0 12 * * *' # Runs every day
 jobs:
