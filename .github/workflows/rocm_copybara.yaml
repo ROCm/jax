@@ -1,0 +1,22 @@
+name: Sync rocm/jax with jax-ml/jax
+on:
+  workflow_dispatch:
+  schedule: 
+    - cron: '0 12 * * *' # Runs every day
+jobs:
+  upstream_pr:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Run Upstream Sync 
+        uses: olivr/copybara-action@v1.2.4
+        with:
+          access_token: ${{ secrets.GH_TOKEN }}
+          ssh_key: ${{ secrets.SSH_KEY }}
+          workflow: default
+          custom_config: copy.bara.sky
+          copybara_image: sharelatex/copybara
+#
