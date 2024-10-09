@@ -936,6 +936,7 @@ _CPU_FFI_KERNELS = [
     "lapack_sgeev_ffi", "lapack_dgeev_ffi", "lapack_cgeev_ffi", "lapack_zgeev_ffi",
     "lapack_sgesdd_ffi", "lapack_dgesdd_ffi", "lapack_cgesdd_ffi", "lapack_zgesdd_ffi",
     "lapack_sgetrf_ffi", "lapack_dgetrf_ffi", "lapack_cgetrf_ffi", "lapack_zgetrf_ffi",
+    "lapack_sgehrd_ffi", "lapack_dgehrd_ffi", "lapack_cgehrd_ffi", "lapack_zgehrd_ffi",
 ]
 # These are the JAX custom call target names that are guaranteed to be stable.
 # Their backwards compatibility is tested by back_compat_test.py.
@@ -946,40 +947,30 @@ _CUSTOM_CALL_TARGETS_GUARANTEED_STABLE = {
     "__gpu$xla.gpu.triton",  # Pallas call on GPU
     # cholesky on CPU
     "lapack_spotrf", "lapack_dpotrf", "lapack_cpotrf", "lapack_zpotrf",
-    # eigh on CPU
-    "lapack_ssyevd", "lapack_dsyevd", "lapack_cheevd", "lapack_zheevd",
-    # eigh on GPU
-    "cusolver_syevj", "cusolver_syevd",
-    "hipsolver_syevj", "hipsolver_syevd",
     # eigh on TPU
     "Eigh",
     # eig on CPU
     "lapack_sgeev", "lapack_dgeev", "lapack_cgeev", "lapack_zgeev",
-    # qr on CPU
-    "lapack_sgeqrf", "lapack_dgeqrf", "lapack_cgeqrf", "lapack_zgeqrf",
-    # householder product on CPU
-    "lapack_sorgqr", "lapack_dorgqr", "lapack_cungqr", "lapack_zungqr",
     # svd on CPU
     "lapack_sgesdd", "lapack_dgesdd", "lapack_cgesdd", "lapack_zgesdd",
-    # qr on GPU
-    "cusolver_geqrf", "cublas_geqrf_batched",
-    "cusolver_orgqr",
-    "hipsolver_geqrf", "hipblas_geqrf_batched",
-    "hipsolver_orgqr",
     # qr and svd on TPU
     "Qr", "ProductOfElementaryHouseholderReflectors",
     # triangular_solve on CPU
     "blas_strsm", "blas_dtrsm", "blas_ctrsm", "blas_ztrsm",
-    # TODO(atondwal, necula): add back_compat tests for lu on CPU/GPU
-    # lu on CPU
-    "lapack_sgetrf",  "lapack_dgetrf", "lapack_cgetrf", "lapack_zgetrf",
     # schur on CPU
     "lapack_sgees", "lapack_dgees", "lapack_cgees", "lapack_zgees",
+    # hessenberg on CPU
+    "lapack_sgehrd", "lapack_dgehrd", "lapack_cgehrd", "lapack_zgehrd",
     # lu on GPU
-    "cu_lu_pivots_to_permutation",
-    # "cublas_getrf_batched", "cusolver_getrf",
-    # "hipblas_getrf_batched", "hipsolver_getrf",
-    "cusolver_getrf_ffi",
+    "cu_lu_pivots_to_permutation", "cusolver_getrf_ffi",
+    "hip_lu_pivots_to_permutation", "hipsolver_getrf_ffi",
+    "cu_lu_pivots_to_permutation", "cusolver_getrf_ffi",
+    # qr on GPU
+    "cusolver_geqrf_ffi", "cusolver_orgqr_ffi",
+    "hipsolver_geqrf_ffi", "hipsolver_orgqr_ffi",
+    # eigh on GPU
+    "cusolver_syevd_ffi", "hipsolver_syevd_ffi",
+    # svd on GPU
     # lu on TPU
     "LuDecomposition",
     # ApproxTopK on TPU

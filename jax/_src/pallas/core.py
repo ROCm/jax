@@ -24,13 +24,11 @@ import functools
 import itertools
 import threading
 from typing import Any, ClassVar, Hashable, Protocol, Union, runtime_checkable
-import warnings
 
 import jax
 from jax._src import api_util
 from jax._src import config
 from jax._src import core as jax_core
-from jax._src import deprecations
 from jax._src import dtypes
 from jax._src import linear_util as lu
 from jax._src import mesh as mesh_lib
@@ -40,6 +38,7 @@ from jax._src import util
 from jax._src.interpreters import mlir
 from jax._src.interpreters import partial_eval as pe
 from jax._src.state import discharge as state_discharge
+from jax._src.state.types import TransformedRef
 import jax.numpy as jnp
 
 
@@ -377,37 +376,10 @@ class BlockSpec:
   See :ref:`pallas_blockspec` for more details.
   """
   # An internal canonicalized version is in BlockMapping.
-  block_shape: tuple[int | None, ...] | None = None
+  block_shape: Sequence[int | None] | None = None
   index_map: Callable[..., Any] | None = None
   memory_space: Any | None = dataclasses.field(kw_only=True, default=None)
   indexing_mode: IndexingMode = dataclasses.field(kw_only=True, default=blocked)
-
-  def __init__(
-      self,
-      block_shape: Any | None = None,
-      index_map: Any | None = None,
-      *,
-      memory_space: Any | None = None,
-      indexing_mode: IndexingMode = blocked,
-  ) -> None:
-    if callable(block_shape):
-      # TODO(slebedev): Remove this code path and update the signature of
-      # __init__ after October 1, 2024.
-      message = (
-          "BlockSpec now expects ``block_shape`` to be passed before"
-          " ``index_map``. Update your code by swapping the order of these"
-          " arguments. For example, ``pl.BlockSpace(lambda i: i, (42,))``"
-          " should be written as ``pl.BlockSpec((42,), lambda i: i)``."
-      )
-      if deprecations.is_accelerated("pallas-block-spec-order"):
-        raise TypeError(message)
-      warnings.warn(message, DeprecationWarning)
-      index_map, block_shape = block_shape, index_map
-
-    self.block_shape = block_shape
-    self.index_map = index_map
-    self.memory_space = memory_space
-    self.indexing_mode = indexing_mode
 
   def to_block_mapping(
       self,
@@ -496,7 +468,7 @@ class BlockSpec:
 
     mapping = BlockMapping(
         block_shape=mapped_block_shape,
-        block_aval=block_aval,
+        transformed_block_aval=block_aval,  # There are no transforms by default
         index_map_jaxpr=jax_core.ClosedJaxpr(jaxpr, consts),
         index_map_src_info=index_map_src_info,
         indexing_mode=self.indexing_mode,
@@ -523,7 +495,7 @@ BlockSpecTree = Any
 class MemoryRefTransform(Protocol):
   """Transforms a memory reference on load or store."""
 
-  def __call__(self, block_aval: AbstractMemoryRef) -> AbstractMemoryRef:
+  def undo(self, ref: TransformedRef) -> TransformedRef:
     raise NotImplementedError("Abstract evaluation not implemented.")
 
 
@@ -533,8 +505,10 @@ class BlockMapping:
 
   See the `check_invariants` method for precise specification.
   """
+  # TODO(apaszke,sharadmv): Replace mapped dims in block_shape with a transform.
+  # After all, it's just indexing out singleton dimensions.
   block_shape: tuple[Mapped | int, ...]
-  block_aval: AbstractMemoryRef   # The block ref aval
+  transformed_block_aval: AbstractMemoryRef
   index_map_jaxpr: jax_core.ClosedJaxpr
   index_map_src_info: NameAndSrcInfo
   indexing_mode: IndexingMode
@@ -546,8 +520,8 @@ class BlockMapping:
     if not config.enable_checks.value: return
 
     unmapped_block_shape = tuple(s for s in self.block_shape if s is not mapped)
-    assert unmapped_block_shape == self.block_aval.shape, (
-        self.block_shape, self.block_aval)
+    assert unmapped_block_shape == self.ref_aval.shape, (
+        self.block_shape, self.ref_aval.shape)
     assert len(self.block_shape) == len(self.array_shape_dtype.shape), (
         self.block_shape, self.array_shape_dtype
     )
@@ -568,12 +542,21 @@ class BlockMapping:
     return new_self
 
   @property
-  def ref_aval(self) -> AbstractMemoryRef:
+  def block_aval(self) -> AbstractMemoryRef:
+    # If you hit this, make sure you take transforms into account and use either
+    # ref_aval or transformed_block_aval.
+    assert not self.transforms, "Lowering failed to handle transforms"
+    return self.transformed_block_aval
+
+  @property
+  def ref_aval(self) -> AbstractMemoryRef | TransformedRef:
     """Returns the abstract value of the Ref after transformations."""
-    block_aval = self.block_aval
-    for transform in self.transforms:
-      block_aval = transform(block_aval)
-    return block_aval
+    if not self.transforms:
+      return self.transformed_block_aval
+    ref = TransformedRef(self.transformed_block_aval, ())
+    for transform in reversed(self.transforms):
+      ref = transform.undo(ref)
+    return ref
 
   def compute_start_indices_interpret(self, loop_idx, *args):
     discharged_jaxpr, discharged_consts = state_discharge.discharge_state(

@@ -10,7 +10,17 @@ Remember to align the itemized text with the first line of an item within a list
 When releasing, please add the new-release-boilerplate to docs/pallas/CHANGELOG.md.
 -->
 
-## jax 0.4.34
+## jax 0.4.35
+
+* Breaking Changes
+  * {func}`jax.numpy.isscalar` now returns True for any array-like object with
+    zero dimensions. Previously it only returned True for zero-dimensional
+    array-like objects with a weak dtype.
+  * `jax.experimental.host_callback` has been deprecated since March 2024, with
+    JAX version 0.4.26. Now we removed it.
+    See {jax-issue}`#20385` for a discussion of alternatives.
+
+## jax 0.4.34 (October 4, 2024)
 
 * New Functionality
   * This release includes wheels for Python 3.13. Free-threading mode is not yet
@@ -27,6 +37,15 @@ When releasing, please add the new-release-boilerplate to docs/pallas/CHANGELOG.
       that directly accesses shards accordingly. The rank of the per-shard-shape
       now matches that of the global shape which is the same behavior as jit.
       This avoids costly reshapes when passing results from pmap into jit.
+  * `jax.experimental.host_callback` has been deprecated since March 2024, with
+    JAX version 0.4.26. Now we set the default value of the
+    `--jax_host_callback_legacy` configuration value to `True`, which means that
+    if your code uses `jax.experimental.host_callback` APIs, those API calls
+    will be implemented in terms of the new `jax.experimental.io_callback` API.
+    If this breaks your code, for a very limited time, you can set the
+    `--jax_host_callback_legacy` to `True`. Soon we will remove that
+    configuration option, so you should instead transition to using the
+    new JAX callback APIs. See {jax-issue}`#20385` for a discussion.
 
 * Deprecations
   * In {func}`jax.numpy.trim_zeros`, non-arraylike arguments or arraylike
@@ -37,6 +56,11 @@ When releasing, please add the new-release-boilerplate to docs/pallas/CHANGELOG.
   * `jax.lib.xla_client.Device` is deprecated; use `jax.Device` instead.
   * `jax.lib.xla_client.XlaRuntimeError` has been deprecated. Use
     `jax.errors.JaxRuntimeError` instead.
+  * The default behavior of {func}`jax.pure_callback` and
+    {func}`jax.extend.ffi.ffi_call` under `vmap` has been deprecated and so has
+    the `vectorized` parameter to those functions. The `vmap_method` parameter
+    should be used instead for better defined behavior. See the discussion in
+    {jax-issue}`#23881` for more details.
 
 * Deletion:
   * `jax.xla_computation` is deleted. It's been 3 months since it's deprecation
@@ -56,10 +80,13 @@ When releasing, please add the new-release-boilerplate to docs/pallas/CHANGELOG.
     is only a tree-prefix of itself. To preserve the current behavior, you can
     ask `jax.tree.map` to treat `None` as a leaf value by writing:
     `jax.tree.map(lambda x, y: None if x is None else f(x, y), a, b, is_leaf=lambda x: x is None)`.
+  * `jax.sharding.XLACompatibleSharding` has been removed. Please use
+    `jax.sharding.Sharding`.
 
 * Bug fixes
   * Fixed a bug where {func}`jax.numpy.cumsum` would produce incorrect outputs
     if a non-boolean input was provided and `dtype=bool` was specified.
+  * Edit implementation of {func}`jax.numpy.ldexp` to get correct gradient.
 
 ## jax 0.4.33 (September 16, 2024)
 

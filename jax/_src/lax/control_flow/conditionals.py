@@ -33,7 +33,7 @@ from jax._src import effects
 from jax._src import linear_util as lu
 from jax._src import source_info_util
 from jax._src import util
-from jax._src.state.discharge import register_discharge_rule, discharge_state
+from jax._src.state.discharge import register_partial_discharge_rule, discharge_state
 from jax._src.state.types import AbstractRef, RefEffect
 from jax._src.core import ConcreteArray, raise_to_shaped, replace_jaxpr_effects
 from jax._src.interpreters import ad
@@ -854,19 +854,48 @@ def _cond_lowering(ctx, index, *args, branches):
 
 mlir.register_lowering(cond_p, _cond_lowering)
 
-@register_discharge_rule(cond_p)
-def _cond_state_discharge_rule(in_avals, out_avals, *args, branches):
+@register_partial_discharge_rule(cond_p)
+def _cond_state_discharge_rule(should_discharge, in_avals, out_avals, index, *args, branches):
+  assert not should_discharge[0], "Can't discharge the index."
   discharged_branches = tuple(
-      core.ClosedJaxpr(discharge_state(branch.jaxpr, ())[0], ())
-      for branch in branches)
-  out_vals = cond_p.bind(*args, branches=discharged_branches)
-  out_vals, out_ref_vals = util.split_list(
-      out_vals, [len(out_avals)])
+      discharge_state(branch.jaxpr, (), should_discharge=should_discharge[1:])[0]
+      for branch in branches
+  )
+  # Don't thread the ref values through the cond if they never change.
+  forwarded_outvars = None
+  for branch in discharged_branches:
+    invar_pos = {v: i for i, v in enumerate(branch.invars)}
+    branch_forwarding = [
+        invar_pos.get(v, None) if isinstance(v, core.Var) else None
+        for v in branch.outvars[len(out_avals) :]
+    ]
+    if forwarded_outvars is None:
+      forwarded_outvars = branch_forwarding
+    else:
+      forwarded_outvars = [
+          i if i == j else None
+          for i, j in zip(forwarded_outvars, branch_forwarding)
+      ]
+  assert forwarded_outvars is not None
+  all_outvars_fwd = [None] * len(out_avals) + forwarded_outvars
+  new_branches = tuple(
+      core.ClosedJaxpr(
+          branch.replace(outvars=[v for v, fwd in zip(branch.outvars, all_outvars_fwd)
+                                  if fwd is None]), ())
+      for branch in discharged_branches
+  )
+  out_vals_no_fwd = cond_p.bind(index, *args, branches=new_branches)
+  out_vals, out_ref_vals_no_fwd = util.split_list(out_vals_no_fwd, [len(out_avals)])
+  # Insert forwarded values into reference outputs
+  ref_val_no_fwd_iter = iter(out_ref_vals_no_fwd)
+  out_ref_vals = [next(ref_val_no_fwd_iter) if fwd is None else args[fwd]
+                  for fwd in forwarded_outvars]
+  # Map reference outputs back to their invars
   ref_val_iter = iter(out_ref_vals)
   new_invals = []
-  for aval in in_avals:
-    new_invals.append(
-        next(ref_val_iter) if isinstance(aval, AbstractRef) else None)
+  for should, aval in zip(should_discharge, in_avals):
+    discharged_inval = isinstance(aval, AbstractRef) and should
+    new_invals.append(next(ref_val_iter) if discharged_inval else None)
   return new_invals, out_vals
 
 

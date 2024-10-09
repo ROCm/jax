@@ -2425,6 +2425,17 @@ class LaxBackedNumpyTests(jtu.JaxTestCase):
     self._CheckAgainstNumpy(np_fun, jnp_fun, args_maker)
 
   @jtu.sample_product(
+      n = [2, 3, 4],
+      k = [None, -1, 0, 1],
+      funcname = ['triu', 'tril']
+  )
+  def testMaskIndices(self, n, k, funcname):
+    kwds = {} if k is None else {'k': k}
+    jnp_result = jnp.mask_indices(n, getattr(jnp, funcname), **kwds)
+    np_result = np.mask_indices(n, getattr(np, funcname), **kwds)
+    self.assertArraysEqual(jnp_result, np_result, check_dtypes=False)
+
+  @jtu.sample_product(
     dtype=default_dtypes,
     a_shape=[(0, 0), (0, 1), (1, 0), (1, 1), (2, 0), (2, 1), (2, 2), (1, 2), (0, 2), (2, 3), (2, 2, 2), (2, 2, 2, 2)],
     val_shape=[(), (1,), (2,), (1, 2), (3, 2)],
@@ -3764,6 +3775,14 @@ class LaxBackedNumpyTests(jtu.JaxTestCase):
         np.array(bytearray(b'\x2a\xf3'), ndmin=2)
     )
 
+  @jtu.sample_product(value=[False, 1, 1.0, np.int32(5), np.array(16)])
+  def testIsScalar(self, value):
+    self.assertTrue(jnp.isscalar(value))
+
+  @jtu.sample_product(value=[None, [1], slice(4), (), np.array([0])])
+  def testIsNotScalar(self, value):
+    self.assertFalse(jnp.isscalar(value))
+
   @jtu.sample_product(val=[1+1j, [1+1j], jnp.pi, np.arange(2)])
   def testIsComplexObj(self, val):
     args_maker = lambda: [val]
@@ -4615,11 +4634,16 @@ class LaxBackedNumpyTests(jtu.JaxTestCase):
       return x, i
 
     jnp_op = lambda x, i: jnp.take_along_axis(x, i, axis=axis)
+    jnp_one_hot_op = lambda x, i: jnp.take_along_axis(
+        x, i, axis=axis, mode='one_hot'
+    )
 
     if hasattr(np, "take_along_axis"):
       np_op = lambda x, i: np.take_along_axis(x, i, axis=axis)
       self._CheckAgainstNumpy(np_op, jnp_op, args_maker)
+      self._CheckAgainstNumpy(np_op, jnp_one_hot_op, args_maker)
     self._CompileAndCheck(jnp_op, args_maker)
+    self._CompileAndCheck(jnp_one_hot_op, args_maker)
 
   def testTakeAlongAxisWithUint8IndicesDoesNotOverflow(self):
     # https://github.com/jax-ml/jax/issues/5088
@@ -6142,6 +6166,15 @@ class NumpyGradTests(jtu.JaxTestCase):
       tol = 3e-2
     check_grads(jnp.logaddexp2, args, 1, ["fwd", "rev"], tol, tol)
 
+  @jtu.sample_product(
+    n=range(-4, 5),
+    dtype=[jnp.float32, jnp.float64],
+  )
+  def testGradLdexp(self, n, dtype):
+    rng = jtu.rand_default(self.rng())
+    x = rng((), dtype)
+    check_grads(lambda x: jnp.ldexp(x, n), (x,), 1)
+
 
 class NumpySignaturesTest(jtu.JaxTestCase):
 
@@ -6316,8 +6349,8 @@ class NumpyDocTests(jtu.JaxTestCase):
 
     unimplemented = ['fromfile', 'fromiter']
     aliases = ['abs', 'acos', 'acosh', 'asin', 'asinh', 'atan', 'atanh', 'atan2',
-               'amax', 'amin', 'around', 'bitwise_right_shift', 'conj', 'degrees',
-               'divide', 'mod', 'pow', 'radians', 'round_']
+               'amax', 'amin', 'around', 'bitwise_left_shift', 'bitwise_right_shift',
+               'conj', 'degrees', 'divide', 'mod', 'pow', 'radians', 'round_']
     skip_args_check = ['vsplit', 'hsplit', 'dsplit', 'array_split']
 
     for name in dir(jnp):
@@ -6381,14 +6414,13 @@ class NumpyDocTests(jtu.JaxTestCase):
     if jit:
       wrapped = jax.jit(wrapped)
 
-    wrapped = implements(orig, skip_params=['out'])(wrapped)
+    wrapped = implements(orig)(wrapped)
     doc = wrapped.__doc__
 
     self.assertStartsWith(doc, "Example Docstring")
     self.assertIn("Original docstring below", doc)
     self.assertIn("Parameters", doc)
     self.assertIn("Returns", doc)
-    self.assertNotIn('out', doc)
     self.assertNotIn('other_arg', doc)
     self.assertNotIn('versionadded', doc)
 
