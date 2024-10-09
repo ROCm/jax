@@ -40,6 +40,7 @@ from jax._src.pallas import primitives
 from jax._src.pallas import utils as pallas_utils
 from jax._src.pallas.mosaic_gpu import core as gpu_core
 from jax._src.state import discharge
+from jax._src.state import indexing
 from jax._src.state import primitives as sp
 import jax.experimental.mosaic.gpu as mgpu
 from jax.experimental.mosaic.gpu import core as mgpu_core
@@ -102,6 +103,7 @@ def _reduce_sum_smem_estimator(x_aval: jax_core.ShapedArray, *, axes) -> int:
 class ModuleContext:
   name: str
   grid_mapping: pallas_core.GridMapping
+  program_ids: Sequence[ir.Value] | None
   approx_math: bool
   runtime_smem: ir.Value  # ir.MemRefType
   smem_used_bytes: int = 0
@@ -238,15 +240,11 @@ def lower_jaxpr_to_module(
         "Only Blocked indexing mode is supported in Mosaic GPU lowering."
     )
 
-  with grid_mapping.trace_env():
-    jaxpr, _ = pe.dce_jaxpr(
-        jaxpr, [True] * len(jaxpr.outvars), instantiate=True
-    )
-
   block = (128, 1, 1)
   params = compiler_params.get("mosaic_gpu", {})
   approx_math = params.get("approx_math", False)
   max_concurrent_steps = params.get("max_concurrent_steps", 1)
+  delay_release = params.get("delay_release", 0)
   dimension_semantics = params.get("dimension_semantics")
   if dimension_semantics is None:
     dimension_semantics = ["parallel"] * len(grid_mapping.grid)
@@ -258,6 +256,11 @@ def lower_jaxpr_to_module(
   sequential_axes = tuple(
       i for i, s in enumerate(dimension_semantics) if s == "sequential"
   )
+  if max_concurrent_steps <= delay_release:
+    raise ValueError(
+        "max_concurrent_steps must be greater than delay_release, but"
+        f" {max_concurrent_steps=}, {delay_release=}"
+    )
 
   grid = [d for i, d in enumerate(grid_mapping.grid) if i not in sequential_axes]
   if len(grid) < 3:
@@ -266,7 +269,6 @@ def lower_jaxpr_to_module(
     raise NotImplementedError(
         "Only <=3D grids are supported in Mosaic GPU lowering."
     )
-  # Compute the number of steps along each sequential axis.
   if sequential_axes:
     # TODO(slebedev): Support multiple sequential axes.
     if len(sequential_axes) > 1:
@@ -283,21 +285,30 @@ def lower_jaxpr_to_module(
     num_steps = 1
     out_sequential_invariant = [True] * len(grid_mapping.out_shapes)
 
+  # Shrink ``max_concurrent_steps`` if the total number of steps is lower to
+  # reduce the size of the allocated buffers below.
+  if max_concurrent_steps > num_steps:
+    max_concurrent_steps = num_steps
+    delay_release = 0  # No need to delay anything
+
   in_in_smem, out_in_smem = util.split_list(
       [
-          bm.block_aval.memory_space in (None, gpu_core.SMEM)
+          bm.transformed_block_aval.memory_space in (None, gpu_core.SMEM)
           for bm in block_mappings
       ],
       [grid_mapping.num_inputs],
   )
 
-  in_structs_gmem = [*grid_mapping.in_shapes]
   in_block_mappings, out_block_mappings = util.split_list(
       block_mappings, [grid_mapping.num_inputs]
   )
+  in_structs_gmem = [*grid_mapping.in_shapes]
+  # We allocate the fully transformed shapes here. All primitives have seen the
+  # inverse transformation stack and will understand how to handle it.
   in_structs_smem = [
       jax.ShapeDtypeStruct(
-          [max_concurrent_steps, *bm.ref_aval.shape], bm.ref_aval.dtype
+          [max_concurrent_steps, *bm.transformed_block_aval.shape],
+          bm.transformed_block_aval.dtype,
       )
       if in_smem
       else None
@@ -307,18 +318,13 @@ def lower_jaxpr_to_module(
   ]
   in_gmem_transforms = [
       cast(gpu_core.MemoryRefTransform, bm.transforms)
-      for bm in grid_mapping.block_mappings[: grid_mapping.num_inputs]
+      for bm in in_block_mappings
   ]
-  in_swizzles = map(
-      lambda bm: bm.swizzle
-      if isinstance(bm, gpu_core.GPUBlockMapping)
-      else None,
-      grid_mapping.block_mappings[: grid_mapping.num_inputs],
-  )
   out_structs_gmem = [*grid_mapping.out_shapes]
-  # TODO(justinfu): Implement output Memref transforms
   out_structs_smem = [
-      jax.ShapeDtypeStruct([max_concurrent_steps, *bm.block_shape], s.dtype)
+      jax.ShapeDtypeStruct(
+          [max_concurrent_steps, *bm.transformed_block_aval.shape], s.dtype
+      )
       if in_smem
       else None
       for bm, in_smem, s in zip(
@@ -326,6 +332,10 @@ def lower_jaxpr_to_module(
           out_in_smem,
           grid_mapping.out_shapes,
       )
+  ]
+  out_gmem_transforms = [
+      cast(gpu_core.MemoryRefTransform, bm.transforms)
+      for bm in out_block_mappings
   ]
 
   def body(launch_ctx: mgpu.LaunchContext, *buffers: ir.Value):
@@ -346,11 +356,19 @@ def lower_jaxpr_to_module(
 
     parallel_count = it.count()
     program_ids_template = [
-        _program_id(next(parallel_count)) if i not in sequential_axes else None
-        for i in range(len(grid_mapping.grid))
+        _program_id(next(parallel_count))
+        if axis not in sequential_axes
+        else None
+        for axis in range(len(grid_mapping.grid))
     ]
+
+    def make_program_ids(step: ir.Value):
+      assert ir.IndexType.isinstance(step.type)
+      step = arith_dialect.index_cast(ir.IntegerType.get_signless(32), step)
+      return [step if pid is None else pid for pid in program_ids_template]
+
     module_ctx = ModuleContext(
-        name_and_src_info.name, grid_mapping, approx_math, runtime_smem
+        name_and_src_info.name, grid_mapping, None, approx_math, runtime_smem
     )
 
     smem_scratch_it = iter(scratch_buffers_smem)
@@ -412,7 +430,7 @@ def lower_jaxpr_to_module(
         block_mapping: pallas_core.BlockMapping,
     ) -> Sequence[mgpu.DynamicSlice]:
       assert len(sequential_axes) <= 1
-      program_ids = [step if i is None else i for i in program_ids_template]
+      program_ids = make_program_ids(step)
       idxs = _eval_index_map(module_ctx, launch_ctx, program_ids, block_mapping)
       return tuple(
           mgpu.ds(idx, dim) for idx, dim in zip(idxs, block_mapping.block_shape)
@@ -424,15 +442,21 @@ def lower_jaxpr_to_module(
       if not in_in_smem[idx]:
         return
 
-      # TODO(slebedev): Support 128-byte swizzling, once we can lower matmuls.
-      gmem_transforms = (x.to_gpu_transform() for x in in_gmem_transforms[idx])
+      swizzle = None
+      pl_transforms = in_gmem_transforms[idx]
+      if pl_transforms and isinstance(
+          pl_transforms[-1], gpu_core.SwizzleTransform
+      ):
+        swizzle = pl_transforms[-1].swizzle
+        pl_transforms = pl_transforms[:-1]
+      gmem_transforms = tuple(x.to_gpu_transform() for x in pl_transforms)
       launch_ctx.async_copy(
           src_ref=in_buffers_gmem[idx],
           dst_ref=mgpu.memref_slice(in_buffers_smem[idx], slot),
           gmem_slice=gmem_slice(step, in_block_mappings[idx]),
           barrier=barriers[slot],
-          gmem_transform=tuple(gmem_transforms),
-          swizzle=in_swizzles[idx],
+          gmem_transform=gmem_transforms,
+          swizzle=swizzle,
           arrive=False,  # The caller must do ``arrive_expect_tx`` manually!
           uniform=False,
           predicate=is_memory_thread,
@@ -454,9 +478,6 @@ def lower_jaxpr_to_module(
         # We have to do some work to make sure that consecutive stores are not
         # going to be writing to the same location, or else we'll end up with
         # multiple concurrent writes and a racy program.
-        # TODO(apaszke,slebedev): In most cases output index maps depend only on
-        # parallel grid axes and in that case we can simply move the store to
-        # happen after the loop.
         # TODO(apaszke,slebedev): This still diverges significantly from the TPU
         # semantics in that it will move on to the next SMEM output slice even if
         # it's not storing the previous one.
@@ -475,12 +496,21 @@ def lower_jaxpr_to_module(
         do_store = arith_dialect.andi(
             is_memory_thread, arith_dialect.ori(base_offset_changed, is_last_step)
         )
-      # TODO(slebedev): Support 128-byte swizzling, once we can lower matmuls.
+
+      swizzle = None
+      pl_transforms = out_gmem_transforms[idx]
+      if pl_transforms and isinstance(
+          pl_transforms[-1], gpu_core.SwizzleTransform
+      ):
+        swizzle = pl_transforms[-1].swizzle
+        pl_transforms = pl_transforms[:-1]
+      gmem_transforms = tuple(x.to_gpu_transform() for x in pl_transforms)
       launch_ctx.async_copy(
           src_ref=mgpu.memref_slice(out_buffers_smem[idx], slot),
           dst_ref=out_buffers_gmem[idx],
           gmem_slice=store_slice,
-          swizzle=None,
+          gmem_transform=gmem_transforms,
+          swizzle=swizzle,
           uniform=False,
           predicate=do_store,
       )
@@ -492,6 +522,7 @@ def lower_jaxpr_to_module(
         fetch(idx, _as_index(slot), _as_index(slot))
 
     last_store_offsets = [None if inv else _as_index(-1) for inv in out_sequential_invariant]
+
     @mgpu.fori(_as_index(num_steps), (accs, last_store_offsets))
     def _(step, carry):
       accs, last_store_offsets = carry
@@ -501,7 +532,9 @@ def lower_jaxpr_to_module(
         barriers[slot].wait()
       # We need to make sure the output copy is complete before the kernel starts
       # writing to the output window.
-      launch_ctx.await_async_copy(max_concurrent_steps - 1, await_read_only=True)
+      launch_ctx.await_async_copy(
+          max_concurrent_steps - (1 + delay_release), await_read_only=True
+      )
 
       args = [
           mgpu.memref_slice(buffers_smem[idx], slot)
@@ -519,11 +552,14 @@ def lower_jaxpr_to_module(
       # but that's not necessarily true.
       args.extend(extra_barriers)
       new_accs = lower_jaxpr_to_mosaic_gpu(
-          module_ctx, launch_ctx, lowered_jaxpr, args
+          dataclasses.replace(module_ctx, program_ids=make_program_ids(step)),
+          launch_ctx,
+          lowered_jaxpr,
+          args,
       )
 
-      # TODO(apaszke): Elide this if we're not going to perform any stores
-      mgpu.commit_shared()
+      if not all(out_sequential_invariant):
+        mgpu.commit_shared()
       new_store_offsets = []
       for idx in range(grid_mapping.num_outputs):
         last_offset = last_store_offsets[idx]
@@ -533,20 +569,28 @@ def lower_jaxpr_to_module(
             else last_offset  # Only store if the output can depend on the step.
         )
 
-      next_step = arith_dialect.addi(step, _as_index(max_concurrent_steps))
-      next_step_in_bounds = arith_dialect.cmpi(
-          arith_dialect.CmpIPredicate.ult, next_step, _as_index(num_steps)
+      del slot  # Just to make sure we don't accidentally use it.
+      fetch_step = arith_dialect.addi(
+          step, _as_index(max_concurrent_steps - delay_release)
       )
-      next_slot = slot  # (x + y) % y == x % y
-      with mgpu.when(next_step_in_bounds):
-        barriers[slot].arrive_expect_tx(in_transfer_bytes, predicate=is_memory_thread)
+      fetch_step_in_bounds = arith_dialect.cmpi(
+          arith_dialect.CmpIPredicate.ult, fetch_step, _as_index(num_steps)
+      )
+      not_initial_step = arith_dialect.cmpi(
+          arith_dialect.CmpIPredicate.uge, step, _as_index(delay_release)
+      )
+      fetch_slot = arith_dialect.remui(fetch_step, _as_index(max_concurrent_steps))
+      with mgpu.when(arith_dialect.andi(fetch_step_in_bounds, not_initial_step)):
+        barriers[fetch_slot].arrive_expect_tx(in_transfer_bytes, predicate=is_memory_thread)
         for idx in range(grid_mapping.num_inputs):
-          fetch(idx, next_step, next_slot)
+          fetch(idx, fetch_step, fetch_slot)
 
       return list(new_accs), new_store_offsets
 
     # Outputs invariant to the sequential axis are never written from inside the
     # loop. This is the only place where we store them.
+    if all(out_sequential_invariant):
+      mgpu.commit_shared()
     last_slot = _as_index((num_steps - 1) % max_concurrent_steps)
     for idx in range(grid_mapping.num_outputs):
       if out_sequential_invariant[idx]:
@@ -668,9 +712,9 @@ def lower_jaxpr_to_mosaic_gpu(
 
 @register_lowering_rule(primitives.program_id_p)
 def _program_id_lowering_rule(ctx: LoweringRuleContext, axis):
-  # TODO(apaszke): Sequential axis should be handled specially!!
-  del ctx  # Unused.
-  return _program_id(axis)
+  if ctx.module_ctx.program_ids is None:
+    raise NotImplementedError("pl.program_id() is not supported in this context")
+  return ctx.module_ctx.program_ids[axis]
 
 
 def _program_id(axis: int) -> ir.Value:
@@ -689,34 +733,93 @@ def _num_programs_lowering_rule(ctx: LoweringRuleContext, axis):
   )
 
 
+def _handle_indexing(
+    ref: ir.Value, transforms: Sequence[gpu_core.Transform]
+) -> ir.Value:
+  if not transforms:
+    pass
+  if not any(isinstance(t, indexing.NDIndexer) for t in transforms):
+    return ref
+  if any(
+      isinstance(t, indexing.NDIndexer) for t in transforms[:-1]
+  ) or not isinstance(transforms[-1], indexing.NDIndexer):
+    raise NotImplementedError("Only one level of indexing supported.")
+
+  indexer = cast(indexing.NDIndexer, transforms[-1])
+  if indexer.int_indexer_shape:
+    raise NotImplementedError("int_indexer_shape non-empty")
+  indices = _ndindexer_indices(indexer)
+  for t in reversed(transforms[:-1]):
+    indices = t.untransform_index(indices)
+  return mgpu.memref_slice(ref, indices)
+
+
+def _ndindexer_indices(indexer: indexing.NDIndexer) -> tuple[gpu_core.Index, ...]:
+  indices = []
+  for idx in indexer.indices:
+    if isinstance(idx, indexing.Slice):
+      if idx.is_dynamic_start or idx.is_dynamic_size:
+        raise NotImplementedError(f"Unsupported slice: {idx}")
+      indices.append(slice(idx.start, idx.start + idx.size, idx.stride))
+    else:
+      indices.append(_as_index(idx))
+  return tuple(indices)
+
+
+def _is_swizzled(transforms: tuple[gpu_core.Transform, ...]) -> int | None:
+  if not transforms:
+    return None
+  if any(isinstance(t, gpu_core.UnswizzleRef) for t in transforms[1:]):
+    raise NotImplementedError(
+        "Swizzling must be the last transform applied to a ref"
+    )
+  if isinstance(t := transforms[0], gpu_core.UnswizzleRef):
+    return t.swizzle
+  return None
+
+
 @register_lowering_rule(sp.get_p)
-def _get_lowering_rule(ctx: LoweringRuleContext, x_smem, *indexers, tree):
-  del tree  # Unused.
-  if indexers:
-    raise NotImplementedError("No support for indexers yet")
-  [x_aval] = ctx.avals_in
-  return mgpu.FragmentedArray.load_strided(
-      x_smem, is_signed=mgpu_utils.is_signed(x_aval.dtype)
-  )
+def _get_lowering_rule(ctx: LoweringRuleContext, x_smem, *leaves, tree):
+  if not isinstance(x_smem, ir.Value) and ir.MemRefType.isinstance(x_smem):
+    raise TypeError(f"Can only load from references (got {x_smem}).")
+  x_aval = ctx.avals_in[0]
+  transform = jax.tree.unflatten(tree, leaves)
+  swizzle = _is_swizzled(transform)
+  x_smem = _handle_indexing(x_smem, transform)
+  if swizzle is None:
+    return mgpu.FragmentedArray.load_strided(
+        x_smem, is_signed=mgpu_utils.is_signed(x_aval.dtype)
+    )
+  else:
+    return mgpu.FragmentedArray.load_tiled(
+        x_smem, is_signed=mgpu_utils.is_signed(x_aval.dtype), swizzle=swizzle
+    )
 
 
 @register_lowering_rule(sp.swap_p)
 def _swap_lowering_rule(
-    ctx: LoweringRuleContext, x_smem, value, *indexers, tree
+    ctx: LoweringRuleContext, x_smem, value, *leaves, tree
 ):
-  del tree  # Unused.
-  if indexers:
-    raise NotImplementedError("No support for indexers yet")
   if not isinstance(value, mgpu.FragmentedArray):
     raise TypeError(f"Can only store arrays (got {value}).")
   if not isinstance(x_smem, ir.Value) and ir.MemRefType.isinstance(x_smem):
-    raise TypeError(f"Can only store to references (got {value}).")
-  x_aval, _ = ctx.avals_in
-  old_value = mgpu.FragmentedArray.load_strided(
-      x_smem, is_signed=mgpu_utils.is_signed(x_aval.dtype)
-  )
-  value.store_untiled(x_smem)
-  return old_value
+    raise TypeError(f"Can only store to references (got {x_smem}).")
+  transforms = jax.tree.unflatten(tree, leaves)
+  swizzle = _is_swizzled(transforms)
+  x_smem = _handle_indexing(x_smem, transforms)
+  x_aval = ctx.avals_in[0]
+  if swizzle is None:
+    old_value = mgpu.FragmentedArray.load_strided(
+        x_smem, is_signed=mgpu_utils.is_signed(x_aval.dtype)
+    )
+    value.store_untiled(x_smem)
+    return old_value
+  else:
+    old_value = mgpu.FragmentedArray.load_tiled(
+        x_smem, is_signed=mgpu_utils.is_signed(x_aval.dtype), swizzle=swizzle
+    )
+    value.store_tiled(x_smem, swizzle=swizzle)
+    return old_value
 
 
 @register_lowering_rule(pjit.pjit_p)
@@ -726,6 +829,16 @@ def _pjit_lowering_rule(ctx: LoweringRuleContext, *args, jaxpr, **_):
   return lower_jaxpr_to_mosaic_gpu(
       ctx.module_ctx, ctx.launch_ctx, jaxpr.jaxpr, args
   )
+
+
+@register_lowering_rule(lax.slice_p)
+def _slice_lowering_rule(
+    ctx: LoweringRuleContext, x, limit_indices, start_indices, strides
+):
+  if strides is not None:
+    raise NotImplementedError("Strides are not supported.")
+
+  return x[tuple(slice(b, e) for b, e in zip(start_indices, limit_indices))]
 
 
 @register_lowering_rule(lax.select_n_p)
@@ -805,6 +918,12 @@ def _integer_pow_lowering_rule(ctx: LoweringRuleContext, x, y):
 def _rsqrt_lowering_rule(ctx: LoweringRuleContext, x):
   [x_aval] = ctx.avals_in
   return _ensure_fa(x, x_aval.dtype).rsqrt(approx=ctx.module_ctx.approx_math)
+
+@register_lowering_rule(lax.logistic_p)
+def _logistic_lowering_rule(ctx: LoweringRuleContext, x):
+  [x_aval] = ctx.avals_in
+  a = _ensure_fa(x, x_aval.dtype)
+  return 1. / (1. + (-a).exp(approx=ctx.module_ctx.approx_math))
 
 
 @register_lowering_rule(lax.reduce_sum_p)
@@ -1086,9 +1205,15 @@ def _i64_constant(v: int) -> ir.Value:
   return arith_dialect.constant(ir.IntegerType.get_signless(64), v)
 
 
-def _as_index(v: int | ir.Value) -> ir.Value:
-  if isinstance(v, int):
-    return arith_dialect.constant(ir.IndexType.get(), v)
-  if ir.IndexType.isinstance(v.type):
-    return v
-  return arith_dialect.index_cast(ir.IndexType.get(), v)
+def _as_index(v: object) -> ir.Value:
+  match v:
+    case int():
+      return arith_dialect.constant(ir.IndexType.get(), v)
+    case ir.Value() if ir.IndexType.isinstance(v.type):
+      return v
+    case ir.Value() if ir.IntegerType.isinstance(v.type):
+      return arith_dialect.index_cast(ir.IndexType.get(), v)
+    case mgpu.FragmentedArray(layout=mgpu.WGSplatFragLayout()):
+      return _as_index(v.registers.item())
+    case _:
+      raise ValueError(f"Unsupported index: {v}")
