@@ -604,7 +604,7 @@ def arcsin(x: ArrayLike, /) -> Array:
   Note:
     - ``jnp.arcsin`` returns ``nan`` when ``x`` is real-valued and not in the closed
       interval ``[-1, 1]``.
-    - ``jnp.arcsin`` follows the branch cut convention of :func:`numpy.arcsin` for
+    - ``jnp.arcsin`` follows the branch cut convention of :obj:`numpy.arcsin` for
       complex inputs.
 
   See also:
@@ -645,7 +645,7 @@ def arccos(x: ArrayLike, /) -> Array:
   Note:
     - ``jnp.arccos`` returns ``nan`` when ``x`` is real-valued and not in the closed
       interval ``[-1, 1]``.
-    - ``jnp.arccos`` follows the branch cut convention of :func:`numpy.arccos` for
+    - ``jnp.arccos`` follows the branch cut convention of :obj:`numpy.arccos` for
       complex inputs.
 
   See also:
@@ -685,7 +685,7 @@ def arctan(x: ArrayLike, /) -> Array:
     in radians in the range ``[-pi/2, pi/2]``, promoting to inexact dtype.
 
   Note:
-    ``jnp.arctan`` follows the branch cut convention of :func:`numpy.arctan` for
+    ``jnp.arctan`` follows the branch cut convention of :obj:`numpy.arctan` for
     complex inputs.
 
   See also:
@@ -817,14 +817,103 @@ def cosh(x: ArrayLike, /) -> Array:
   """
   return lax.cosh(*promote_args_inexact('cosh', x))
 
-@implements(np.arcsinh, module='numpy')
+
 @partial(jit, inline=True)
 def arcsinh(x: ArrayLike, /) -> Array:
+  r"""Calculate element-wise inverse of hyperbolic sine of input.
+
+  JAX implementation of :obj:`numpy.arcsinh`.
+
+  The inverse of hyperbolic sine is defined by:
+
+  .. math::
+
+    arcsinh(x) = \ln(x + \sqrt{1 + x^2})
+
+  Args:
+    x: input array or scalar.
+
+  Returns:
+    An array of same shape as ``x`` containing the inverse of hyperbolic sine of
+    each element of ``x``, promoting to inexact dtype.
+
+  Note:
+    - ``jnp.arcsinh`` returns ``nan`` for values outside the range ``(-inf, inf)``.
+    - ``jnp.arcsinh`` follows the branch cut convention of :obj:`numpy.arcsinh`
+      for complex inputs.
+
+  See also:
+    - :func:`jax.numpy.sinh`: Computes the element-wise hyperbolic sine of the input.
+    - :func:`jax.numpy.arccosh`: Computes the element-wise inverse of hyperbolic
+      cosine of the input.
+    - :func:`jax.numpy.arctanh`: Computes the element-wise inverse of hyperbolic
+      tangent of the input.
+
+  Examples:
+    >>> x = jnp.array([[-2, 3, 1],
+    ...                [4, 9, -5]])
+    >>> with jnp.printoptions(precision=3, suppress=True):
+    ...   jnp.arcsinh(x)
+    Array([[-1.444,  1.818,  0.881],
+           [ 2.095,  2.893, -2.312]], dtype=float32)
+
+    For complex-valued inputs:
+
+    >>> x1 = jnp.array([4-3j, 2j])
+    >>> with jnp.printoptions(precision=3, suppress=True):
+    ...   jnp.arcsinh(x1)
+    Array([2.306-0.634j, 1.317+1.571j], dtype=complex64)
+  """
   return lax.asinh(*promote_args_inexact('arcsinh', x))
 
-@implements(np.arccosh, module='numpy')
+
 @jit
 def arccosh(x: ArrayLike, /) -> Array:
+  r"""Calculate element-wise inverse of hyperbolic cosine of input.
+
+  JAX implementation of :obj:`numpy.arccosh`.
+
+  The inverse of hyperbolic cosine is defined by:
+
+  .. math::
+
+    arccosh(x) = \ln(x + \sqrt{x^2 - 1})
+
+  Args:
+    x: input array or scalar.
+
+  Returns:
+    An array of same shape as ``x`` containing the inverse of hyperbolic cosine
+    of each element of ``x``, promoting to inexact dtype.
+
+  Note:
+    - ``jnp.arccosh`` returns ``nan`` for real-values in the range ``[-inf, 1)``.
+    - ``jnp.arccosh`` follows the branch cut convention of :obj:`numpy.arccosh`
+      for complex inputs.
+
+  See also:
+    - :func:`jax.numpy.cosh`: Computes the element-wise hyperbolic cosine of the
+      input.
+    - :func:`jax.numpy.arcsinh`: Computes the element-wise inverse of hyperbolic
+      sine of the input.
+    - :func:`jax.numpy.arctanh`: Computes the element-wise inverse of hyperbolic
+      tangent of the input.
+
+  Examples:
+    >>> x = jnp.array([[1, 3, -4],
+    ...                [-5, 2, 7]])
+    >>> with jnp.printoptions(precision=3, suppress=True):
+    ...   jnp.arccosh(x)
+    Array([[0.   , 1.763,   nan],
+           [  nan, 1.317, 2.634]], dtype=float32)
+
+    For complex-valued input:
+
+    >>> x1 = jnp.array([-jnp.inf+0j, 1+2j, -5+0j])
+    >>> with jnp.printoptions(precision=3, suppress=True):
+    ...   jnp.arccosh(x1)
+    Array([  inf+3.142j, 1.529+1.144j, 2.292+3.142j], dtype=complex64)
+  """
   # Note: arccosh is multi-valued for complex input, and lax.acosh
   # uses a different convention than np.arccosh.
   result = lax.acosh(*promote_args_inexact("arccosh", x))
@@ -885,9 +974,52 @@ def tanh(x: ArrayLike, /) -> Array:
   """
   return lax.tanh(*promote_args_inexact('tanh', x))
 
-@implements(np.arctanh, module='numpy')
+
 @partial(jit, inline=True)
 def arctanh(x: ArrayLike, /) -> Array:
+  r"""Calculate element-wise inverse of hyperbolic tangent of input.
+
+  JAX implementation of :obj:`numpy.arctanh`.
+
+  The inverse of hyperbolic tangent is defined by:
+
+  .. math::
+
+    arctanh(x) = \frac{1}{2} [\ln(1 + x) - \ln(1 - x)]
+
+  Args:
+    x: input array or scalar.
+
+  Returns:
+    An array of same shape as ``x`` containing the inverse of hyperbolic tangent
+    of each element of ``x``, promoting to inexact dtype.
+
+  Note:
+    - ``jnp.arctanh`` returns ``nan`` for real-values outside the range ``[-1, 1]``.
+    - ``jnp.arctanh`` follows the branch cut convention of :obj:`numpy.arctanh`
+      for complex inputs.
+
+  See also:
+    - :func:`jax.numpy.tanh`: Computes the element-wise hyperbolic tangent of the
+      input.
+    - :func:`jax.numpy.arcsinh`: Computes the element-wise inverse of hyperbolic
+      sine of the input.
+    - :func:`jax.numpy.arccosh`: Computes the element-wise inverse of hyperbolic
+      cosine of the input.
+
+  Examples:
+    >>> x = jnp.array([-2, -1, -0.5, 0, 0.5, 1, 2])
+    >>> with jnp.printoptions(precision=3, suppress=True):
+    ...   jnp.arctanh(x)
+    Array([   nan,   -inf, -0.549,  0.   ,  0.549,    inf,    nan], dtype=float32)
+
+    For complex-valued input:
+
+    >>> x1 = jnp.array([-2+0j, 3+0j, 4-1j])
+    >>> with jnp.printoptions(precision=3, suppress=True):
+    ...   jnp.arctanh(x1)
+    Array([-0.549+1.571j,  0.347+1.571j,  0.239-1.509j], dtype=complex64)
+  """
   return lax.atanh(*promote_args_inexact('arctanh', x))
 
 
@@ -922,9 +1054,32 @@ def sqrt(x: ArrayLike, /) -> Array:
   """
   return lax.sqrt(*promote_args_inexact('sqrt', x))
 
-@implements(np.cbrt, module='numpy')
+
 @partial(jit, inline=True)
 def cbrt(x: ArrayLike, /) -> Array:
+  """Calculates element-wise cube root of the input array.
+
+  JAX implementation of :obj:`numpy.cbrt`.
+
+  Args:
+    x: input array or scalar. ``complex`` dtypes are not supported.
+
+  Returns:
+    An array containing the cube root of the elements of ``x``.
+
+  See also:
+    - :func:`jax.numpy.sqrt`: Calculates the element-wise non-negative square root
+      of the input.
+    - :func:`jax.numpy.square`: Calculates the element-wise square of the input.
+
+  Examples:
+    >>> x = jnp.array([[216, 125, 64],
+    ...                [-27, -8, -1]])
+    >>> with jnp.printoptions(precision=3, suppress=True):
+    ...   jnp.cbrt(x)
+    Array([[ 6.,  5.,  4.],
+           [-3., -2., -1.]], dtype=float32)
+  """
   return lax.cbrt(*promote_args_inexact('cbrt', x))
 
 @partial(jit, inline=True)
@@ -1074,14 +1229,65 @@ def _bitwise_xor(x: ArrayLike, y: ArrayLike, /) -> Array:
   """
   return lax.bitwise_xor(*promote_args("bitwise_xor", x, y))
 
-@implements(np.left_shift, module='numpy')
+
 @partial(jit, inline=True)
 def left_shift(x: ArrayLike, y: ArrayLike, /) -> Array:
+  r"""Shift bits of ``x`` to left by the amount specified in ``y``, element-wise.
+
+  JAX implementation of :obj:`numpy.left_shift`.
+
+  Args:
+    x: Input array, must be integer-typed.
+    y: The amount of bits to shift each element in ``x`` to the left, only accepts
+      integer subtypes. ``x`` and ``y`` must either have same shape or be broadcast
+      compatible.
+
+  Returns:
+    An array containing the left shifted elements of ``x`` by the amount specified
+    in ``y``, with the same shape as the broadcasted shape of ``x`` and ``y``.
+
+  Note:
+    Left shifting ``x`` by ``y`` is equivalent to ``x * (2**y)`` within the
+    bounds of the dtypes involved.
+
+  See also:
+    - :func:`jax.numpy.right_shift`: and :func:`jax.numpy.bitwise_right_shift`:
+      Shifts the bits of ``x1`` to right by the amount specified in ``x2``,
+      element-wise.
+    - :func:`jax.numpy.bitwise_left_shift`: Alias of :func:`jax.left_shift`.
+
+  Examples:
+    >>> def print_binary(x):
+    ...   return [bin(int(val)) for val in x]
+
+    >>> x1 = jnp.arange(5)
+    >>> x1
+    Array([0, 1, 2, 3, 4], dtype=int32)
+    >>> print_binary(x1)
+    ['0b0', '0b1', '0b10', '0b11', '0b100']
+    >>> x2 = 1
+    >>> result = jnp.left_shift(x1, x2)
+    >>> result
+    Array([0, 2, 4, 6, 8], dtype=int32)
+    >>> print_binary(result)
+    ['0b0', '0b10', '0b100', '0b110', '0b1000']
+
+    >>> x3 = 4
+    >>> print_binary([x3])
+    ['0b100']
+    >>> x4 = jnp.array([1, 2, 3, 4])
+    >>> result1 = jnp.left_shift(x3, x4)
+    >>> result1
+    Array([ 8, 16, 32, 64], dtype=int32)
+    >>> print_binary(result1)
+    ['0b1000', '0b10000', '0b100000', '0b1000000']
+  """
   return lax.shift_left(*promote_args_numeric("left_shift", x, y))
 
-@implements(getattr(np, "bitwise_left_shift", np.left_shift), module='numpy')
+
 @partial(jit, inline=True)
 def bitwise_left_shift(x: ArrayLike, y: ArrayLike, /) -> Array:
+  """Alias of :func:`jax.numpy.left_shift`."""
   return lax.shift_left(*promote_args_numeric("bitwise_left_shift", x, y))
 
 @implements(np.equal, module='numpy')
@@ -1295,6 +1501,50 @@ def nextafter(x: ArrayLike, y: ArrayLike, /) -> Array:
     Array([ 2.9999998, -1.9999999,  1.0000001], dtype=float32)
   """
   return lax.nextafter(*promote_args_inexact("nextafter", x, y))
+
+
+@partial(jit, inline=True)
+def spacing(x: ArrayLike, /) -> Array:
+  """Return the spacing between ``x`` and the next adjacent number.
+
+  JAX implementation of :func:`numpy.spacing`.
+
+  Args:
+    x: real-valued array. Integer or boolean types will be cast to float.
+
+  Returns:
+    Array of same shape as ``x`` containing spacing between each entry of
+    ``x`` and its closest adjacent value.
+
+  See also:
+    - :func:`jax.numpy.nextafter`: find the next representable value.
+
+  Examples:
+    >>> x = jnp.array([0.0, 0.25, 0.5, 0.75, 1.0], dtype='float32')
+    >>> jnp.spacing(x)
+    Array([1.4012985e-45, 2.9802322e-08, 5.9604645e-08, 5.9604645e-08,
+          1.1920929e-07], dtype=float32)
+
+    For ``x = 1``, the spacing is equal to the ``eps`` value given by
+    :class:`jax.numpy.finfo`:
+
+    >>> x = jnp.float32(1)
+    >>> jnp.spacing(x) == jnp.finfo(x.dtype).eps
+    Array(True, dtype=bool)
+  """
+  arr, = promote_args_inexact("spacing", x)
+  if dtypes.isdtype(arr.dtype, "complex floating"):
+    raise ValueError("jnp.spacing is not defined for complex inputs.")
+  inf = _lax_const(arr, np.inf)
+  smallest_subnormal = dtypes.finfo(arr.dtype).smallest_subnormal
+
+  # Numpy's behavior seems to depend on dtype
+  if arr.dtype == 'float16':
+    return lax.nextafter(arr, inf) - arr
+  else:
+    result = lax.nextafter(arr, copysign(inf, arr)) - arr
+    return _where(result == 0, copysign(smallest_subnormal, arr), result)
+
 
 # Logical ops
 @partial(jit, inline=True)
@@ -2277,58 +2527,87 @@ def _normalize_float(x):
   return lax.bitcast_convert_type(x1, int_type), x2
 
 
-@implements(np.ldexp, module='numpy')
 @jit
 def ldexp(x1: ArrayLike, x2: ArrayLike, /) -> Array:
+  """Compute x1 * 2 ** x2
+
+  JAX implementation of :func:`numpy.ldexp`.
+
+  Note that XLA does not provide an ``ldexp`` operation, so this
+  is implemneted in JAX via a standard multiplication and
+  exponentiation.
+
+  Args:
+    x1: real-valued input array.
+    x2: integer input array. Must be broadcast-compatible with ``x1``.
+
+  Returns:
+    ``x1 * 2 ** x2`` computed element-wise.
+
+  See also:
+    - :func:`jax.numpy.frexp`: decompose values into mantissa and exponent.
+
+  Examples:
+    >>> x1 = jnp.arange(5.0)
+    >>> x2 = 10
+    >>> jnp.ldexp(x1, x2)
+    Array([   0., 1024., 2048., 3072., 4096.], dtype=float32)
+
+    ``ldexp`` can be used to reconstruct the input to ``frexp``:
+
+    >>> x = jnp.array([2., 3., 5., 11.])
+    >>> m, e = jnp.frexp(x)
+    >>> m
+    Array([0.5   , 0.75  , 0.625 , 0.6875], dtype=float32)
+    >>> e
+    Array([2, 2, 3, 4], dtype=int32)
+    >>> jnp.ldexp(m, e)
+    Array([ 2.,  3.,  5., 11.], dtype=float32)
+  """
   check_arraylike("ldexp", x1, x2)
   x1_dtype = dtypes.dtype(x1)
   x2_dtype = dtypes.dtype(x2)
   if (dtypes.issubdtype(x1_dtype, np.complexfloating)
       or dtypes.issubdtype(x2_dtype, np.inexact)):
     raise ValueError(f"ldexp not supported for input types {(x1_dtype, x2_dtype)}")
-
-  x1, x2 = promote_shapes("ldexp", x1, x2)
-
-  dtype = dtypes.canonicalize_dtype(dtypes.to_inexact_dtype(x1_dtype))
-  info = dtypes.finfo(dtype)
-  int_type = _INT_DTYPES[info.bits]
-
-  x1 = lax.convert_element_type(x1, dtype)
-  x2 = lax.convert_element_type(x2, int_type)
-
-  mask = (1 << info.nexp) - 1
-  bias = 1 - info.minexp
-  x, e = _normalize_float(x1)
-  x2 += e + ((x >> info.nmant) & mask) - bias
-
-  # find underflow/overflow before denormalization
-  underflow_cond = less(x2, -(bias + info.nmant))
-  overflow_cond = greater(x2, bias)
-
-  m = lax.full_like(x, 1, dtype=dtype)
-
-  # denormals
-  cond = less(x2, -bias + 1)
-  x2 = _where(cond, x2 + info.nmant, x2)
-  m = _where(cond, m / (1 << info.nmant), m)
-
-  x2 = lax.convert_element_type(x2, np.int32)
-  x &= ~(mask << info.nmant)
-  x |= ((lax.convert_element_type(x2, int_type) + bias) << info.nmant)
-
-  x = lax.convert_element_type(m, dtype) * lax.bitcast_convert_type(x, dtype)
-
-  # underflow
-  x = _where(underflow_cond, lax.full_like(x, 0, dtype=dtype), x)
-  # overflow
-  x = _where(overflow_cond, lax.sign(x1) * lax.full_like(x, np.inf), x)
-  # ldexp(x1, x2) = x1 for x1 = inf, -inf, nan, 0
-  return _where(isinf(x1) | isnan(x1) | (x1 == 0), x1, x)
+  x1, = promote_args_inexact("ldexp", x1)
+  x2 = lax.convert_element_type(x2, dtypes.dtype(x1))
+  x = x1 * (2 ** x2)
+  return _where(isinf(x1) | (x1 == 0), x1, x)
 
 
-@implements(np.frexp, module='numpy')
 @jit
 def frexp(x: ArrayLike, /) -> tuple[Array, Array]:
+  """Split floating point values into mantissa and twos exponent.
+
+  JAX implementation of :func:`numpy.frexp`.
+
+  Args:
+    x: real-valued array
+
+  Returns:
+    A tuple ``(mantissa, exponent)`` where ``mantissa`` is a floating point
+    value between -1 and 1, and ``exponent`` is an integer such that
+    ``x == mantissa * 2 ** exponent``.
+
+  See also:
+    - :func:`jax.numpy.ldexp`: compute the inverse of ``frexp``.
+
+  Examples:
+    Split values into mantissa and exponent:
+
+    >>> x = jnp.array([1., 2., 3., 4., 5.])
+    >>> m, e = jnp.frexp(x)
+    >>> m
+    Array([0.5  , 0.5  , 0.75 , 0.5  , 0.625], dtype=float32)
+    >>> e
+    Array([1, 2, 2, 3, 3], dtype=int32)
+
+    Reconstruct the original array:
+
+    >>> m * 2 ** e
+    Array([1., 2., 3., 4., 5.], dtype=float32)
+  """
   check_arraylike("frexp", x)
   x, = promote_dtypes_inexact(x)
   if dtypes.issubdtype(x.dtype, np.complexfloating):
@@ -2699,9 +2978,36 @@ def modf(x: ArrayLike, /, out=None) -> tuple[Array, Array]:
   return x - whole, whole
 
 
-@implements(np.isfinite, module='numpy')
 @partial(jit, inline=True)
 def isfinite(x: ArrayLike, /) -> Array:
+  """Return a boolean array indicating whether each element of input is finite.
+
+  JAX implementation of :obj:`numpy.isfinite`.
+
+  Args:
+    x: input array or scalar.
+
+  Returns:
+    A boolean array of same shape as ``x`` containing ``True`` where ``x`` is
+    not ``inf``, ``-inf``, or ``NaN``, and ``False`` otherwise.
+
+  See also:
+    - :func:`jax.numpy.isinf`: Returns a boolean array indicating whether each
+      element of input is either positive or negative infinity.
+    - :func:`jax.numpy.isposinf`: Returns a boolean array indicating whether each
+      element of input is positive infinity.
+    - :func:`jax.numpy.isneginf`: Returns a boolean array indicating whether each
+      element of input is negative infinity.
+    - :func:`jax.numpy.isnan`: Returns a boolean array indicating whether each
+      element of input is not a number (``NaN``).
+
+  Examples:
+    >>> x = jnp.array([-1, 3, jnp.inf, jnp.nan])
+    >>> jnp.isfinite(x)
+    Array([ True,  True, False, False], dtype=bool)
+    >>> jnp.isfinite(3-4j)
+    Array(True, dtype=bool, weak_type=True)
+  """
   check_arraylike("isfinite", x)
   dtype = dtypes.dtype(x)
   if dtypes.issubdtype(dtype, np.floating):
@@ -2712,9 +3018,36 @@ def isfinite(x: ArrayLike, /) -> Array:
     return lax.full_like(x, True, dtype=np.bool_)
 
 
-@implements(np.isinf, module='numpy')
 @jit
 def isinf(x: ArrayLike, /) -> Array:
+  """Return a boolean array indicating whether each element of input is infinite.
+
+  JAX implementation of :obj:`numpy.isinf`.
+
+  Args:
+    x: input array or scalar.
+
+  Returns:
+    A boolean array of same shape as ``x`` containing ``True`` where ``x`` is
+    ``inf`` or ``-inf``, and ``False`` otherwise.
+
+  See also:
+    - :func:`jax.numpy.isposinf`: Returns a boolean array indicating whether each
+      element of input is positive infinity.
+    - :func:`jax.numpy.isneginf`: Returns a boolean array indicating whether each
+      element of input is negative infinity.
+    - :func:`jax.numpy.isfinite`: Returns a boolean array indicating whether each
+      element of input is finite.
+    - :func:`jax.numpy.isnan`: Returns a boolean array indicating whether each
+      element of input is not a number (``NaN``).
+
+  Examples:
+    >>> jnp.isinf(jnp.inf)
+    Array(True, dtype=bool)
+    >>> x = jnp.array([2+3j, -jnp.inf, 6, jnp.inf, jnp.nan])
+    >>> jnp.isinf(x)
+    Array([False,  True, False,  True, False], dtype=bool)
+  """
   check_arraylike("isinf", x)
   dtype = dtypes.dtype(x)
   if dtypes.issubdtype(dtype, np.floating):
@@ -2740,26 +3073,148 @@ def _isposneginf(infinity: float, x: ArrayLike, out) -> Array:
     return lax.full_like(x, False, dtype=np.bool_)
 
 
-@implements(np.isposinf, module='numpy')
 def isposinf(x, /, out=None):
+  """
+  Return boolean array indicating whether each element of input is positive infinite.
+
+  JAX implementation of :obj:`numpy.isposinf`.
+
+  Args:
+    x: input array or scalar. ``complex`` dtype are not supported.
+
+  Returns:
+    A boolean array of same shape as ``x`` containing ``True`` where ``x`` is
+    ``inf``, and ``False`` otherwise.
+
+  See also:
+    - :func:`jax.numpy.isinf`: Returns a boolean array indicating whether each
+      element of input is either positive or negative infinity.
+    - :func:`jax.numpy.isneginf`: Returns a boolean array indicating whether each
+      element of input is negative infinity.
+    - :func:`jax.numpy.isfinite`: Returns a boolean array indicating whether each
+      element of input is finite.
+    - :func:`jax.numpy.isnan`: Returns a boolean array indicating whether each
+      element of input is not a number (``NaN``).
+
+  Examples:
+    >>> jnp.isposinf(5)
+    Array(False, dtype=bool)
+    >>> x = jnp.array([-jnp.inf, 5, jnp.inf, jnp.nan, 1])
+    >>> jnp.isposinf(x)
+    Array([False, False,  True, False, False], dtype=bool)
+  """
   return _isposneginf(np.inf, x, out)
 
 
-@implements(np.isposinf, module='numpy')
 def isneginf(x, /, out=None):
+  """
+  Return boolean array indicating whether each element of input is negative infinite.
+
+  JAX implementation of :obj:`numpy.isneginf`.
+
+  Args:
+    x: input array or scalar. ``complex`` dtype are not supported.
+
+  Returns:
+    A boolean array of same shape as ``x`` containing ``True`` where ``x`` is
+    ``-inf``, and ``False`` otherwise.
+
+  See also:
+    - :func:`jax.numpy.isinf`: Returns a boolean array indicating whether each
+      element of input is either positive or negative infinity.
+    - :func:`jax.numpy.isposinf`: Returns a boolean array indicating whether each
+      element of input is positive infinity.
+    - :func:`jax.numpy.isfinite`: Returns a boolean array indicating whether each
+      element of input is finite.
+    - :func:`jax.numpy.isnan`: Returns a boolean array indicating whether each
+      element of input is not a number (``NaN``).
+
+  Examples:
+    >>> jnp.isneginf(jnp.inf)
+    Array(False, dtype=bool)
+    >>> x = jnp.array([-jnp.inf, 5, jnp.inf, jnp.nan, 1])
+    >>> jnp.isneginf(x)
+    Array([ True, False, False, False, False], dtype=bool)
+  """
   return _isposneginf(-np.inf, x, out)
 
 
-@implements(np.isnan, module='numpy')
 @partial(jit, inline=True)
 def isnan(x: ArrayLike, /) -> Array:
+  """Returns a boolean array indicating whether each element of input is ``NaN``.
+
+  JAX implementation of :obj:`numpy.isnan`.
+
+  Args:
+    x: input array or scalar.
+
+  Returns:
+    A boolean array of same shape as ``x`` containing ``True`` where ``x`` is
+    not a number (i.e. ``NaN``) and ``False`` otherwise.
+
+  See also:
+    - :func:`jax.numpy.isfinite`: Returns a boolean array indicating whether each
+      element of input is finite.
+    - :func:`jax.numpy.isinf`: Returns a boolean array indicating whether each
+      element of input is either positive or negative infinity.
+    - :func:`jax.numpy.isposinf`: Returns a boolean array indicating whether each
+      element of input is positive infinity.
+    - :func:`jax.numpy.isneginf`: Returns a boolean array indicating whether each
+      element of input is negative infinity.
+
+  Examples:
+    >>> jnp.isnan(6)
+    Array(False, dtype=bool, weak_type=True)
+    >>> x = jnp.array([2, 1+4j, jnp.inf, jnp.nan])
+    >>> jnp.isnan(x)
+    Array([False, False, False,  True], dtype=bool)
+  """
   check_arraylike("isnan", x)
   return lax.ne(x, x)
 
 
-@implements(np.heaviside, module='numpy')
 @jit
 def heaviside(x1: ArrayLike, x2: ArrayLike, /) -> Array:
+  r"""Compute the heaviside step function.
+
+  JAX implementation of :obj:`numpy.heaviside`.
+
+  The heaviside step function is defined by:
+
+  .. math::
+
+    \mathrm{heaviside}(x1, x2) = \begin{cases}
+      0., & x < 0\\
+      x2, & x = 0\\
+      1., & x > 0.
+    \end{cases}
+
+  Args:
+    x1: input array or scalar. ``complex`` dtype are not supported.
+    x2: scalar or array. Specifies the return values when ``x1`` is ``0``. ``complex``
+      dtype are not supported. ``x1`` and ``x2`` must either have same shape or
+      broadcast compatible.
+
+  Returns:
+    An array containing the heaviside step function of ``x1``, promoting to
+    inexact dtype.
+
+  Examples:
+    >>> x1 = jnp.array([[-2, 0, 3],
+    ...                 [5, -1, 0],
+    ...                 [0, 7, -3]])
+    >>> x2 = jnp.array([2, 0.5, 1])
+    >>> jnp.heaviside(x1, x2)
+    Array([[0. , 0.5, 1. ],
+           [1. , 0. , 1. ],
+           [2. , 1. , 0. ]], dtype=float32)
+    >>> jnp.heaviside(x1, 0.5)
+    Array([[0. , 0.5, 1. ],
+           [1. , 0. , 0.5],
+           [0.5, 1. , 0. ]], dtype=float32)
+    >>> jnp.heaviside(-3, x2)
+    Array([0., 0., 0.], dtype=float32)
+  """
   check_arraylike("heaviside", x1, x2)
   x1, x2 = promote_dtypes_inexact(x1, x2)
   zero = _lax_const(x1, 0)
@@ -2767,9 +3222,39 @@ def heaviside(x1: ArrayLike, x2: ArrayLike, /) -> Array:
                 _where(lax.gt(x1, zero), _lax_const(x1, 1), x2))
 
 
-@implements(np.hypot, module='numpy')
 @jit
 def hypot(x1: ArrayLike, x2: ArrayLike, /) -> Array:
+  r"""
+  Return element-wise hypotenuse for the given legs of a right angle triangle.
+
+  JAX implementation of :obj:`numpy.hypot`.
+
+  Args:
+    x1: scalar or array. Specifies one of the legs of right angle triangle.
+      ``complex`` dtype are not supported.
+    x2: scalar or array. Specifies the other leg of right angle triangle.
+      ``complex`` dtype are not supported. ``x1`` and ``x2`` must either have
+      same shape or be broadcast compatible.
+
+  Returns:
+    An array containing the hypotenuse for the given given legs ``x1`` and ``x2``
+    of a right angle triangle, promoting to inexact dtype.
+
+  Note:
+    ``jnp.hypot`` is a more numerically stable way of computing
+    ``jnp.sqrt(x1 ** 2 + x2 **2)``.
+
+  Examples:
+    >>> jnp.hypot(3, 4)
+    Array(5., dtype=float32, weak_type=True)
+    >>> x1 = jnp.array([[3, -2, 5],
+    ...                 [9, 1, -4]])
+    >>> x2 = jnp.array([-5, 6, 8])
+    >>> with jnp.printoptions(precision=3, suppress=True):
+    ...   jnp.hypot(x1, x2)
+    Array([[ 5.831,  6.325,  9.434],
+           [10.296,  6.083,  8.944]], dtype=float32)
+  """
   x1, x2 = promote_args_inexact("hypot", x1, x2)
 
   # TODO(micky774): Promote to ValueError when deprecation is complete
@@ -2785,9 +3270,34 @@ def hypot(x1: ArrayLike, x2: ArrayLike, /) -> Array:
   return _where(idx_inf, _lax_const(x, np.inf), x)
 
 
-@implements(np.reciprocal, module='numpy')
 @partial(jit, inline=True)
 def reciprocal(x: ArrayLike, /) -> Array:
+  """Calculate element-wise reciprocal of the input.
+
+  JAX implementation of :obj:`numpy.reciprocal`.
+
+  The reciprocal is calculated by ``1/x``.
+
+  Args:
+    x: input array or scalar.
+
+  Returns:
+    An array of same shape as ``x`` containing the reciprocal of each element of
+    ``x``.
+
+  Note:
+    For integer inputs, ``np.reciprocal`` returns rounded integer output, while
+    ``jnp.reciprocal`` promotes integer inputs to floating point.
+
+  Examples:
+    >>> jnp.reciprocal(2)
+    Array(0.5, dtype=float32, weak_type=True)
+    >>> jnp.reciprocal(0.)
+    Array(inf, dtype=float32, weak_type=True)
+    >>> x = jnp.array([1, 5., 4.])
+    >>> jnp.reciprocal(x)
+    Array([1.  , 0.2 , 0.25], dtype=float32)
+  """
   check_arraylike("reciprocal", x)
   x, = promote_dtypes_inexact(x)
   return lax.integer_pow(x, -1)

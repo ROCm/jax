@@ -5590,7 +5590,6 @@ class LaxBackedNumpyTests(jtu.JaxTestCase):
       self.assertEqual(jax_result, numpy_result)
 
 
-from jaxlib import xla_client
 @unittest.skipIf(metal_plugin == None, "Tests require jax-metal plugin.")
 class ReportedIssuesTests(jtu.JaxTestCase):
   def dispatchOn(self, args, func, device=jax.devices('cpu')[0]):
@@ -5601,11 +5600,16 @@ class ReportedIssuesTests(jtu.JaxTestCase):
 
   @staticmethod
   def compile_and_exec(module, args, run_on_cpu=False):
-    backend = jax.lib.xla_bridge.get_backend('METAL')
-    if (run_on_cpu):
-      backend = jax.lib.xla_bridge.get_backend('cpu')
-    executables = backend.compile(module)
-    return xla_client.execute_with_python_values(executables, args, backend)
+    from jax.extend.backend import get_backend
+    backend = get_backend('METAL')
+    if run_on_cpu:
+      backend = get_backend('cpu')
+    executable = backend.compile(module)
+    def put(arg):
+      return backend.buffer_from_pyval(arg, device=executable.local_devices()[0])
+    arguments = [put(arg) for arg in args]
+    outputs = executable.execute(arguments)
+    return [np.asarray(x) for x in outputs]
 
   @staticmethod
   def jax_metal_supported(target_ver):

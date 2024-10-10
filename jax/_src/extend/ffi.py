@@ -20,8 +20,12 @@ import functools
 import os
 from typing import Any
 
+import numpy as np
+
 from jax._src import core
+from jax._src import deprecations
 from jax._src import dispatch
+from jax._src import effects
 from jax._src import util
 from jax._src.callback import _check_shape_dtype, callback_batching_rule
 from jax._src.interpreters import ad
@@ -31,7 +35,8 @@ from jax._src.layout import DeviceLocalLayout
 from jax._src.lib import jaxlib
 from jax._src.lib import xla_client
 from jax._src.lib.mlir import ir
-from jax._src.typing import Array, ArrayLike, DuckTypedArray, Shape
+from jax._src.typing import (Array, ArrayLike, DeprecatedArg, DuckTypedArray,
+                             Shape)
 
 map, unsafe_map = util.safe_map, map
 FfiLayoutOptions = Sequence[int] | DeviceLocalLayout | None
@@ -196,22 +201,22 @@ def ffi_call(
     target_name: str,
     result_shape_dtypes: ResultMetadata | Sequence[ResultMetadata],
     *args: ArrayLike,
-    vectorized: bool = False,
+    has_side_effect: bool = False,
+    vmap_method: str | None = None,
+    vectorized: bool | DeprecatedArg = DeprecatedArg(),
     **kwargs: Any,
 ) -> Array | list[Array]:
   """Call a foreign function interface (FFI) target.
 
   Like :func:`~jax.pure_callback`, the behavior of ``ffi_call`` under
-  :func:`~jax.vmap` depends on the value of ``vectorized``. When ``vectorized``
-  is ``True``, the FFI target is assumed to satisfy: ``ffi_call(xs) ==
-  jnp.stack([ffi_call(x) for x in xs])``. In other words, calling the FFI target
-  with an extra leading dimension should return the same result as calling it
-  within a loop and stacking along the zeroth axis. Therefore, the FFI target
-  will be called directly on batched inputs (where the batch axes are the
-  leading dimensions). Additionally, the callbacks should return outputs that
-  have corresponding leading batch axes. If ``vectorized`` is ``False`` (the
-  default behavior), transforming this ``ffi_call`` under :func:`~jax.vmap` will
-  result in a :func:`~jax.lax.scan` with the ``ffi_call`` in the body.
+  :func:`~jax.vmap` depends on the value of ``vmap_method``. See the
+  :func:`~jax.pure_callback` documenation for more details about the allowed
+  values and examples of their behavior.
+
+  The current default behavior is to use ``vmap_method="sequential"`` when
+  not specified, but this behavior is deprecated, and in the future, the
+  default will be to raise a ``NotImplementedError`` unless ``vmap_method`` is
+  explicitly specified.
 
   Args:
     target_name: the name of the XLA FFI custom call target that was registered
@@ -222,8 +227,11 @@ def ffi_call(
       used to define the elements of ``result_shape_dtypes``.
       ``jax.core.abstract_token`` may be used to represent a token-typed output.
     *args: the arguments passed to the custom call.
-    vectorized: boolean specifying whether the callback function can operate in
-      a vectorized manner, as described above.
+    has_side_effect: boolean specifying whether the custom call has side
+      effects. When ``True``, the FFI call will be executed even when the
+      outputs are not used.
+    vmap_method: string specifying how the FFI call transforms under
+      :func:`~jax.vmap` as described above.
     **kwargs: keyword arguments that are passed as named attributes to the
       custom call using XLA's FFI interface.
 
@@ -231,6 +239,25 @@ def ffi_call(
     One or more :class:`~jax.Array` objects whose shapes and dtypes match
     ``result_shape_dtypes``.
   """
+  if not isinstance(vectorized, DeprecatedArg) and not vectorized is None:
+    deprecations.warn(
+        "jax-callback-vectorized",
+        "The vectorized argument of ffi_call is deprecated and setting "
+        "it will soon raise an error. To avoid an error in the future, and to "
+        "suppress this warning, please use the vmap_method argument instead.",
+        stacklevel=2)
+    if vmap_method is not None:
+      raise ValueError(
+          "the vectorized and vmap_method arguments of ffi_call cannot "
+          "be used together. Please use the vmap_method argument.")
+    vmap_method = "legacy_vectorized" if vectorized else "sequential"
+  allowed_vmap_methods = ["sequential", "broadcast", "broadcast_fullrank",
+                          "legacy_vectorized", None]
+  if vmap_method not in allowed_vmap_methods:
+    raise ValueError(
+        f"vmap_method must be on of the allowed methods {allowed_vmap_methods}, "
+        f"but got: {vmap_method}")
+
   if isinstance(result_shape_dtypes, Sequence):
     multiple_results = True
     result_avals = _result_avals(result_shape_dtypes)
@@ -241,8 +268,10 @@ def ffi_call(
       *args,
       result_avals=result_avals,
       vectorized=vectorized,
+      vmap_method=vmap_method,
       target_name=target_name,
-      **kwargs,
+      has_side_effect=has_side_effect,
+      **_wrap_kwargs_hashable(kwargs),
   )
   if multiple_results:
     return results
@@ -250,15 +279,98 @@ def ffi_call(
     return results[0]
 
 
+# ffi_call must support some small non-hashable input arguments, like np.arrays
+# and dicts, to support calling FFI targets with array inputs or user defined
+# structs. Since these arguments will eventually be embedded in the HLO as
+# dense attributes, we assume that they are small and hash by making an
+# immutable copy and hashing by value.
+def _wrap_kwargs_hashable(kwargs: dict[str, Any]) -> dict[str, Any]:
+  hashable_kwargs: dict[str, Any] = {}
+  for k, v in kwargs.items():
+    if isinstance(v, np.ndarray):
+      hashable_kwargs[k] = HashableArray(v)
+    elif isinstance(v, dict):
+      hashable_kwargs[k] = HashableDict(v)
+    else:
+      try:
+        hash(v)
+      except TypeError as e:
+        raise TypeError(
+            f"Non-hashable keyword argument to ffi_call {k}: {v}") from e
+      else:
+        hashable_kwargs[k] = v
+  return hashable_kwargs
+
+
+def _unwrap_kwargs_hashable(kwargs: dict[str, Any]) -> dict[str, Any]:
+  unwrapped_kwargs: dict[str, Any] = {}
+  for k, v in kwargs.items():
+    if isinstance(v, HashableArray):
+      unwrapped_kwargs[k] = v.val
+    elif isinstance(v, HashableDict):
+      unwrapped_kwargs[k] = dict(v.val)
+    else:
+      unwrapped_kwargs[k] = v
+  return unwrapped_kwargs
+
+
+class HashableArray:
+  __slots__ = ["val"]
+
+  def __init__(self, val):
+    assert isinstance(val, np.ndarray)
+    self.val = np.copy(val)
+    self.val.setflags(write=False)
+
+  def __repr__(self):
+    return f"HashableArray({self.val})"
+
+  def __hash__(self):
+    return hash((self.val.shape, self.val.dtype, self.val.tobytes()))
+
+  def __eq__(self, other):
+    return isinstance(other, HashableArray) and np.array_equal(self.val, other.val)
+
+
+class HashableDict:
+  __slots__ = ["val"]
+
+  def __init__(self, val):
+    assert isinstance(val, dict)
+    self.val = tuple(sorted(val.items()))
+
+  def __repr__(self):
+    return f"HashableDict({dict(self.val)})"
+
+  def __hash__(self):
+    return hash(self.val)
+
+  def __eq__(self, other):
+    return isinstance(other, HashableDict) and self.val == other.val
+
+
+class FfiEffect(effects.Effect):
+  def __str__(self):
+    return "FFI"
+
+
+_FfiEffect = FfiEffect()
+effects.lowerable_effects.add_type(FfiEffect)
+effects.control_flow_allowed_effects.add_type(FfiEffect)
+
+
 def ffi_call_abstract_eval(
     *avals_in,
     result_avals: tuple[core.AbstractValue, ...],
     target_name: str,
-    vectorized: bool,
+    vectorized: bool | DeprecatedArg,
+    vmap_method: str | None,
+    has_side_effect: bool,
     **kwargs: Any,
 ):
-  del avals_in, target_name, vectorized, kwargs
-  return result_avals
+  del avals_in, target_name, vectorized, vmap_method, kwargs
+  effects = {_FfiEffect} if has_side_effect else core.no_effects
+  return result_avals, effects
 
 
 def ffi_call_jvp(*args, target_name, **kwargs):
@@ -280,17 +392,20 @@ def ffi_call_lowering(
     *operands: ir.Value,
     result_avals: tuple[core.AbstractValue, ...],
     target_name: str,
-    vectorized: bool,
+    vectorized: bool | DeprecatedArg,
+    vmap_method: str | None,
+    has_side_effect: bool,
     **kwargs: Any,
 ) -> Sequence[ir.Value]:
-  del result_avals, vectorized
-  return ffi_lowering(target_name)(ctx, *operands, **kwargs)
+  del result_avals, vectorized, vmap_method
+  rule = ffi_lowering(target_name, has_side_effect=has_side_effect)
+  return rule(ctx, *operands, **_unwrap_kwargs_hashable(kwargs))
 
 
 ffi_call_p = core.Primitive("ffi_call")
 ffi_call_p.multiple_results = True
-ffi_call_p.def_impl(functools.partial(dispatch.apply_primitive, ffi_call_p))
-ffi_call_p.def_abstract_eval(ffi_call_abstract_eval)
+dispatch.simple_impl(ffi_call_p)
+ffi_call_p.def_effectful_abstract_eval(ffi_call_abstract_eval)
 ad.primitive_jvps[ffi_call_p] = ffi_call_jvp
 ad.primitive_transposes[ffi_call_p] = ffi_call_transpose
 batching.primitive_batchers[ffi_call_p] = functools.partial(
