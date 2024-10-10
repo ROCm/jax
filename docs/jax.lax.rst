@@ -250,9 +250,15 @@ Argument classes
 .. autoclass:: ConvDimensionNumbers
 .. autoclass:: ConvGeneralDilatedDimensionNumbers
 .. autoclass:: DotAlgorithm
+.. autoclass:: DotAlgorithmPreset
+   :members:
+   :undoc-members:
+   :member-order: bysource
+.. autoclass:: FftType
 .. autoclass:: GatherDimensionNumbers
 .. autoclass:: GatherScatterMode
 .. autoclass:: Precision
 .. autoclass:: PrecisionLike
 .. autoclass:: RoundingMethod
+  :members:
 .. autoclass:: ScatterDimensionNumbers
