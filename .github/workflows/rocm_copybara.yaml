@@ -13,4 +13,6 @@ jobs:
         with:
           fetch-depth: 0
       - run: |
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
+      - run: |
           docker run -t --rm -v$HOME/.ssh:/root/.ssh -v $HOME/.git-credentials:/root/.git-credentials -v $GITHUB_WORKSPACE/copy.bara.sky:/data/copy.bara.sky -e COPYBARA_CONFIG=/data/copy.bara.sky sharelatex/copybara bash -c "git config --global user.name jaxbara; git config --global user.email jaxbara@amd.com; copybara"
