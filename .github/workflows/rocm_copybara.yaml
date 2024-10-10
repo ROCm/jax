@@ -19,5 +19,4 @@ jobs:
           ssh_key: ${{ secrets.SSH_KEY }}
           workflow: default
           custom_config: copy.bara.sky
-          copybara_image: sharelatex/copybara
 #
