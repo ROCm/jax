@@ -12,11 +12,12 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+      - run: cp copy.bara.sky ~/
       - name: Run Upstream Sync 
         uses: olivr/copybara-action@v1.2.4
         with:
           access_token: ${{ secrets.GH_TOKEN }}
           ssh_key: ${{ secrets.SSH_KEY }}
           workflow: default
-          custom_config: ${{ github.workspace }}/copy.bara.sky
+          custom_config: copy.bara.sky
 #
