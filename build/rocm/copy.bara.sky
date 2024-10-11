@@ -12,5 +12,8 @@ core.workflow(
     transformations = [
       core.replace('ubuntu-20.04-16core', 'ROCM-Ubuntu',paths= glob([".github/workflows/*.yaml", ".github/workflows/*.yml"])),
       core.replace('linux-x86-n2-32', 'ROCM-Ubuntu',paths= glob([".github/workflows/*.yaml", ".github/workflows/*.yml"])),
+#      patch.apply(
+#          patches = ["ci-build.yaml.diff"],
+#      ),
     ],
 )
