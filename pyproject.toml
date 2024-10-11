@@ -28,6 +28,7 @@ module = [
     "jraph.*",
     "libtpu.*",
     "matplotlib.*",
+    "nvidia.*",
     "numpy.*",
     "opt_einsum.*",
     "optax.*",
@@ -71,30 +72,6 @@ doctest_optionflags = [
     "NORMALIZE_WHITESPACE"
 ]
 addopts = "--doctest-glob='*.rst' --ignore='examples/ffi'"
-
-[tool.pylint.master]
-extension-pkg-whitelist = "numpy"
-
-[tool.pylint."messages control"]
-disable = [
-    "missing-docstring",
-    "too-many-locals",
-    "invalid-name",
-    "redefined-outer-name",
-    "redefined-builtin",
-    "protected-name",
-    "no-else-return",
-    "fixme",
-    "protected-access",
-    "too-many-arguments",
-    "blacklisted-name",
-    "too-few-public-methods",
-    "unnecessary-lambda"
-]
-enable = "c-extension-no-member"
-
-[tool.pylint.format]
-indent-string=" "
 
 [tool.ruff]
 preview = true

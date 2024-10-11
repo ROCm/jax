@@ -18,14 +18,23 @@ Remember to align the itemized text with the first line of an item within a list
   * {func}`jax.experimental.pallas.debug_print` no longer requires all arguments
     to be scalars. The restrictions on the arguments are backend-specific:
     Non-scalar arguments are currently only supported on GPU, when using Triton.
+  * {class}`jax.experimental.pallas.BlockSpec` no longer supports the previously
+    deprecated argument order, where `index_map` comes before `block_shape`.
 
 * Deprecations
+
+  * The {mod}`jax.experimental.pallas.gpu` submodule is deprecated to avoid
+    ambiguite with {mod}`jax.experimental.pallas.mosaic_gpu`. To use the
+    Triton backend import {mod}`jax.experimental.pallas.triton`.
 
 * New functionality
 
   * {func}`jax.experimental.pallas.pallas_call` now accepts `scratch_shapes`,
     a PyTree specifying backend-specific temporary objects needed by the
     kernel, for example, buffers, synchronization primitives etc.
+  * {func}`checkify.check` can now be used to insert runtime asserts when
+    pallas_call is called with the `pltpu.enable_runtime_assert(True)` context
+    manager.
 
 ## Released with jax 0.4.33 (September 16, 2024)
 

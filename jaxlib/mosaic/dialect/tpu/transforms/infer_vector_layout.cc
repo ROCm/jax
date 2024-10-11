@@ -21,9 +21,7 @@ limitations under the License.
 #include <optional>
 #include <ostream>
 #include <string>
-#include <type_traits>
 #include <utility>
-#include <variant>
 
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVectorExtras.h"
@@ -34,7 +32,6 @@ limitations under the License.
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
-#include "mlir/IR/AffineExpr.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Value.h"
@@ -42,6 +39,7 @@ limitations under the License.
 #include "mlir/Support/LogicalResult.h"
 #include "absl/log/check.h"
 #include "absl/log/log.h"
+#include "absl/types/span.h"
 #include "mlir/include/mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/include/mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/include/mlir/Dialect/Vector/IR/VectorOps.h"
@@ -49,6 +47,7 @@ limitations under the License.
 #include "mlir/include/mlir/IR/ImplicitLocOpBuilder.h"
 #include "mlir/include/mlir/IR/OpDefinition.h"
 #include "mlir/include/mlir/IR/Visitors.h"
+#include "mlir/include/mlir/Pass/Pass.h"
 #include "jaxlib/mosaic/dialect/tpu/layout.h"
 #include "jaxlib/mosaic/dialect/tpu/tpu_dialect.h"
 #include "xla/layout.h"
@@ -144,11 +143,9 @@ class VectorLayoutInferer {
       if (!isa<vector::BroadcastOp, vector::ExtractStridedSliceOp>(any_op)) {
         const SmallVector<Layout> layouts_in = getLayoutFromOperands(&any_op);
         for (const Layout &layout : layouts_in) {
-          if (layout && layout->offsets()[1].has_value() &&
-              layout->offsets()[1].value() > layout->tiling()[1]) {
-            return any_op.emitOpError(
-                "Not implemented: Inferring from input offsets outside of the "
-                "first tile");
+          if (layout &&
+              layout->offsets()[1].value_or(0) >= layout->tiling()[1]) {
+            force_first_tile_offsets_ = true;
           }
         }
       }
@@ -349,6 +346,7 @@ class VectorLayoutInferer {
       }
       CHECK(any_op.getNumResults() == 0 || any_op.hasAttr("out_layout"));
       CHECK(any_op.getNumOperands() == 0 || any_op.hasAttr("in_layout"));
+      force_first_tile_offsets_ = false;
     }
     return match_terminator(block.getTerminator());
   }
@@ -856,7 +854,7 @@ class VectorLayoutInferer {
       auto shape = vty.getShape().take_back(2);
       if (shape[0] % major_multiple.value_or(tiling[0]) != 0 ||
           shape[1] % minor_multiple.value_or(tiling[1]) != 0) {
-        op->emitOpError("Matmul operand")
+        op->emitOpError("Matmul operand ")
             << operand_name << " must have a shape divisible by ("
             << major_multiple.value_or(tiling[0]) << ", "
             << minor_multiple.value_or(tiling[1]) << "), but got: (" << shape[0]
@@ -1940,7 +1938,14 @@ class VectorLayoutInferer {
     auto result_index = op_result.getResultNumber();
     auto out_attrs = op->getAttrOfType<ArrayAttr>("out_layout").getValue();
     CHECK(out_attrs.size() > result_index);
-    return cast<VectorLayoutAttr>(out_attrs[result_index]).getLayout();
+    auto layout = cast<VectorLayoutAttr>(out_attrs[result_index]).getLayout();
+    if (force_first_tile_offsets_ &&
+        layout->offsets()[1].value_or(0) >= layout->tiling()[1]) {
+      // Force the out-of-first-tile offset to be zero.
+      layout = VectorLayout(layout->bitwidth(), {layout->offsets()[0], 0},
+                            layout->tiling(), layout->implicit_dim());
+    }
+    return layout;
   }
 
   SmallVector<Layout, 4> getLayoutFromOperands(Operation *op) {
@@ -2024,6 +2029,10 @@ class VectorLayoutInferer {
   std::array<int64_t, 2> target_shape_;
   std::array<int64_t, 2> default_tiling_;
 
+  // TODO(b/342235360): Deprecate force_first_tile_offsets_ once we fully
+  // remove the restriction that offsets must fall within the first tile.
+  bool force_first_tile_offsets_ = false;
+
   // Address alignment requirement, counted in 32-bit increments.
   static constexpr int64_t kVmemAlignment32 = 128;
   // TODO(apaszke): This is not really native on newer generations of TPUs.
@@ -2033,9 +2042,9 @@ class VectorLayoutInferer {
 
 struct InferVectorLayoutPass
     : public impl::InferVectorLayoutPassBase<InferVectorLayoutPass> {
-  InferVectorLayoutPass(int lane_count, int sublane_count) {
-    this->sublane_count = sublane_count;
-    this->lane_count = lane_count;
+  InferVectorLayoutPass(std::array<int64_t, 2> target_shape) {
+    this->sublane_count = target_shape[0];
+    this->lane_count = target_shape[1];
   }
   void runOnOperation() override {
     func::FuncOp func = getOperation();
@@ -2049,8 +2058,8 @@ struct InferVectorLayoutPass
 }  // namespace
 
 std::unique_ptr<OperationPass<func::FuncOp>> createInferVectorLayoutPass(
-    int lane_count, int sublane_count) {
-  return std::make_unique<InferVectorLayoutPass>(lane_count, sublane_count);
+    std::array<int64_t, 2> target_shape) {
+  return std::make_unique<InferVectorLayoutPass>(target_shape);
 }
 
 }  // namespace mlir::tpu

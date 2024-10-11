@@ -48,7 +48,6 @@ from jax._src.export import shape_poly
 from jax._src.export import shape_poly_decision
 from jax._src.lax import lax as lax_internal
 from jax._src.lax import control_flow as lax_control_flow
-from jax._src.lib import xla_client
 from jax._src.lib import version as jaxlib_version
 import numpy as np
 
@@ -2533,11 +2532,11 @@ _POLY_SHAPE_TEST_HARNESSES = [
             lambda x, fft_type, nr_fft_lengths: lax.fft_p.bind(
                 x, fft_type=fft_type,
                 fft_lengths=tuple(
-                    x.shape[-nr_fft_lengths:] if fft_type != xla_client.FftType.IRFFT else
+                    x.shape[-nr_fft_lengths:] if fft_type != lax.FftType.IRFFT else
                     [(x.shape[-1] - 1) * 2])),
             arg_descriptors=[
                 RandArg((3, 4, 5, 6),
-                        np.float32 if fft_type == xla_client.FftType.RFFT else np.complex64),
+                        np.float32 if fft_type == lax.FftType.RFFT else np.complex64),
                 StaticArg(fft_type),
                 StaticArg(nr_fft_lengths)],
             # All axes but the last one are dynamic. This means that the test
@@ -2545,8 +2544,8 @@ _POLY_SHAPE_TEST_HARNESSES = [
             polymorphic_shapes=["b0, b1, b2, ..."],
             tol=1e-4)
 
-         for fft_type in (xla_client.FftType.FFT, xla_client.FftType.IFFT,
-                         xla_client.FftType.RFFT, xla_client.FftType.IRFFT)
+         for fft_type in (lax.FftType.FFT, lax.FftType.IFFT,
+                         lax.FftType.RFFT, lax.FftType.IRFFT)
          for nr_fft_lengths in (1, 2)
     ],
     PolyHarness("full", "",
@@ -2769,23 +2768,36 @@ _POLY_SHAPE_TEST_HARNESSES = [
                 lambda x: jnp.nanquantile(x, .5, axis=0),
                 arg_descriptors=[RandArg((3, 5), _f32)],
                 polymorphic_shapes=["b, ..."]),
+    PolyHarness("inv", "",
+                lambda x: jnp.linalg.inv(jnp.eye(x.shape[0])),
+                arg_descriptors=[RandArg((3, 3), _f32)],
+                polymorphic_shapes=["b, b, ..."],
+                override_jax_config_flags={"jax_export_ignore_forward_compatibility": True}),
     [
-      PolyHarness(
+      PolyHarness(  # pylint: disable=g-complex-comprehension
           "qr", f"shape={jtu.format_shape_dtype_string(shape, dtype)}_poly={poly}_{full_matrices=}",
           lambda x, full_matrices: lax.linalg.qr(x, full_matrices=full_matrices),
           arg_descriptors=[RandArg(shape, dtype), StaticArg(full_matrices)],
-          polymorphic_shapes=[poly])
+          polymorphic_shapes=[poly],
+          symbolic_constraints=constraints)
       for dtype in {np.float32, np.float64, np.complex64, np.complex128} & jtu.supported_dtypes()
-      # m and n must be static for now
-      for shape, poly, full_matrices in [
-          ((2, 0, 4), "b, ...", False),  # m = 0
-          ((2, 4, 0), "b, ...", False),  # n = 0
-          ((2, 3, 4, 4), "b1, b2, ...", False),  # m == n
-          ((2, 3, 4, 4), "b1, b2, ...", True),
-          ((2, 3, 4, 5), "b1, b2, ...", False),  # m < n
-          ((2, 3, 4, 5), "b1, b2, ...", True),
-          ((2, 3, 8, 4), "b1, b2, ...", False),  # m > n
-          ((2, 3, 8, 4), "b1, b2, ...", True),
+      for shape, poly, full_matrices, constraints in [
+          ((2, 0, 4), "b, ...", False, ()),  # m = 0
+          ((2, 4, 0), "b, ...", False, ()),  # n = 0
+          ((2, 3, 4, 4), "b1, b2, ...", False, ()),  # m == n
+          ((2, 3, 4, 4), "b1, b2, ...", True, ()),
+          ((2, 3, 4, 5), "b1, b2, ...", False, ()),  # m < n
+          ((2, 3, 4, 5), "b1, b2, ...", True, ()),
+          ((2, 3, 8, 4), "b1, b2, ...", False, ()),  # m > n
+          ((2, 3, 8, 4), "b1, b2, ...", True, ()),
+          # Dynamic shapes are also supported for non-batch dimensions with
+          # some constraints.
+          ((2, 3, 4, 4), "b1, b2, m, m", False, ()),  # m == n
+          ((2, 3, 4, 4), "b1, b2, m, m", True, ()),
+          ((2, 3, 4, 5), "b1, b2, m, n", False, ["m + 1 <= n"]),  # m < n
+          ((2, 3, 4, 5), "b1, b2, m, n", True, ["m + 1 <= n"]),
+          ((2, 3, 8, 4), "b1, b2, m, n", False, ["n <= m"]),  # m > n
+          ((2, 3, 8, 4), "b1, b2, m, n", True, ["n <= m"]),
       ]
     ],
     [
@@ -2828,11 +2840,7 @@ _POLY_SHAPE_TEST_HARNESSES = [
           "lu", f"shape={jtu.format_shape_dtype_string(shape, dtype)}_poly={poly}",
           lax.linalg.lu,
           arg_descriptors=[RandArg(shape, dtype)],
-          polymorphic_shapes=[poly],
-          # TODO(b/360788062): Remove once the forward compatibility window is
-          # closed.
-          override_jax_config_flags={
-              "jax_export_ignore_forward_compatibility": True})
+          polymorphic_shapes=[poly])
       for dtype in {np.float32, np.float64, np.complex64, np.complex128} & jtu.supported_dtypes()
       for shape, poly in [
           ((5, 4), "m, n"),
@@ -2841,6 +2849,34 @@ _POLY_SHAPE_TEST_HARNESSES = [
           ((2, 3, 4, 4), "b1, b2, ..."),
           ((2, 3, 4, 5), "b1, b2, ..."),
           ((2, 3, 8, 4), "b1, b2, ..."),
+          ((2, 3, 4, 5), "b1, b2, m, n"),
+      ]
+    ],
+    [
+      PolyHarness(  # pylint: disable=g-complex-comprehension
+          "eigh", f"shape={jtu.format_shape_dtype_string(shape, dtype)}_poly={poly}_{lower=}",
+          lambda x, lower: lax.linalg.eigh(x, lower=lower),
+          arg_descriptors=[RandArg(shape, dtype), StaticArg(lower)],
+          polymorphic_shapes=[poly])
+      for dtype in {np.float32, np.float64, np.complex64, np.complex128} & jtu.supported_dtypes()
+      for lower in [True, False]
+      for shape, poly in [
+          ((4, 4), "n, n"),
+          ((2, 3, 4, 4), "b1, b2, ..."),
+          ((2, 3, 4, 4), "b1, b2, n, n"),
+      ]
+    ],
+    [
+      PolyHarness(  # pylint: disable=g-complex-comprehension
+          "eigh_shape_error", f"shape={jtu.format_shape_dtype_string(shape, dtype)}_poly={poly}",
+          lambda x: lax.linalg.eigh(x, symmetrize_input=False),
+          arg_descriptors=[RandArg(shape, dtype)],
+          polymorphic_shapes=[poly],
+          expect_error=(ValueError, "Argument to symmetric eigendecomposition"))
+      for dtype in {np.float32, np.float64, np.complex64, np.complex128} & jtu.supported_dtypes()
+      for shape, poly in [
+          ((4, 5), "m, n"),
+          ((2, 3, 4, 5), "b1, b2, ..."),
           ((2, 3, 4, 5), "b1, b2, m, n"),
       ]
     ],
@@ -3465,9 +3501,6 @@ class ShapePolyHarnessesTest(jtu.JaxTestCase):
     # Exclude some harnesses that are known to fail for native serialization
     # Set of harness.group_name:platform that are implemented with custom call
     custom_call_harnesses = {
-        "householder_product:gpu",
-        "vmap_geqrf:gpu",  # used for linalg.qr
-        "vmap_qr:gpu", "qr:gpu",
         "vmap_svd:gpu",
     }
     name_device_key = f"{harness.group_name}:{jtu.device_under_test()}"
@@ -3478,14 +3511,7 @@ class ShapePolyHarnessesTest(jtu.JaxTestCase):
     # polymorphism for some new primitives as we add them. This check is
     # required so that we can still run the test suite with older versions of
     # jaxlib.
-    version_gated = {
-        # TODO(danfm): remove these checks when jaxlib 0.4.32 is released.
-        "lu_pivots_to_permutation:gpu": (0, 4, 32),
-        "lu_pivots_to_permutation_error:gpu": (0, 4, 32),
-        "lu:gpu": (0, 4, 32),
-        "vmap_lu:gpu": (0, 4, 32),
-        "vmap_custom_linear_solve:gpu": (0, 4, 32),
-    }
+    version_gated = {}
     if version_gated.get(name_device_key, jaxlib_version) > jaxlib_version:
       raise unittest.SkipTest(f"shape polymorphism not supported by jaxlib version {jaxlib_version}")
 
@@ -3495,13 +3521,6 @@ class ShapePolyHarnessesTest(jtu.JaxTestCase):
     if "fft_fft_type" in harness.fullname:
       if "nr_fft_lengths_2" in harness.fullname:
         raise unittest.SkipTest("native serialization with shape polymorphism not implemented for fft with non-constant fft_lengths on GPU and TPU")
-
-    if harness.group_name == "vmap_eigh" and jtu.test_device_matches(["gpu"]):
-      # For eigh on GPU with shape polymorphism under native serialization,
-      # we use a different lowering for small matrices.
-      shape = harness.original_harness.params["shape"]
-      if 0 < shape[-1] <= 32:
-        harness.check_result = False
 
     if harness.group_name == "vmap_eigh":
       raise unittest.SkipTest(
@@ -3534,6 +3553,12 @@ class ShapePolyHarnessesTest(jtu.JaxTestCase):
     if harness.group_name == "eig" and not jtu.test_device_matches(["cpu"]):
       raise unittest.SkipTest("JAX implements eig only on CPU.")
 
+    if (harness.group_name == "eigh" and
+        not harness.polymorphic_shapes[0].endswith("...") and
+        jtu.test_device_matches(["tpu"])):
+      raise unittest.SkipTest(
+          "Shape polymorphsim for Eigh is only supported for batch dimensions on TPU.")
+
     config_flags = harness.override_jax_config_flags
     # Update this here rather than in harness object because vmap_random_gamma is derived
     # from test_harnesses.all_harnesses, which strips override_jax_config_flags.
@@ -3543,12 +3568,6 @@ class ShapePolyHarnessesTest(jtu.JaxTestCase):
     # TPU precision is a little lower since we swap the order of matmul operands.
     if "cholesky" in harness.group_name and jtu.test_device_matches(["tpu"]):
       harness.tol = 5e-5
-
-    # TODO(b/360788062): Clean up after the compatibility period.
-    if harness.group_name in [
-        "lu", "vmap_lu", "custom_linear_solve", "vmap_custom_linear_solve"
-        ] and jtu.test_device_matches(["gpu"]):
-      config_flags = {**config_flags, "jax_export_ignore_forward_compatibility": True}
 
     with jtu.global_config_context(**config_flags):
       harness.run_test(self)
