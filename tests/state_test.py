@@ -739,6 +739,20 @@ class StateDischargeTest(jtu.JaxTestCase):
     in_avals = [shaped_array_ref((), jnp.float32)]
     pe.trace_to_jaxpr_dynamic(lu.wrap_init(f), in_avals)
 
+  def test_partial_discharge(self):
+    def f(a_ref, b_ref):
+      a_ref[...] = jnp.array(0., dtype=jnp.float32)
+      b_ref[...] = jnp.array(1., dtype=jnp.float32)
+      return a_ref[...], b_ref[...]
+
+    scalar_ref = shaped_array_ref((), jnp.float32)
+    jaxpr, _, _, () = pe.trace_to_jaxpr_dynamic(
+        lu.wrap_init(f), [scalar_ref, scalar_ref])
+
+    discharged_jaxpr, _ = discharge_state(jaxpr, (), should_discharge=[False, True])
+    prim_count = lambda p, jaxpr: sum(eqn.primitive == swap_p for eqn in jaxpr.eqns)
+    self.assertEqual(prim_count(swap_p, jaxpr) // 2, prim_count(swap_p, discharged_jaxpr))
+    self.assertEqual(prim_count(get_p, jaxpr) // 2, prim_count(get_p, discharged_jaxpr))
 
 if CAN_USE_HYPOTHESIS:
 
@@ -1061,6 +1075,27 @@ class StateControlFlowTest(jtu.JaxTestCase):
     out = jax.jit(f)(False)
     self.assertTupleEqual(out, (0., 5.))
 
+  def test_cond_discharge(self):
+    def f0(pred, x_ref, y_ref):
+      def true_fun():
+        x_ref[...] = 1.
+      def false_fun():
+        y_ref[...] = 2.
+      lax.cond(pred, true_fun, false_fun)
+      return x_ref[...], y_ref[...]
+    ref = lambda x: AbstractRef(core.raise_to_shaped(core.get_aval(x)))
+    f_jaxpr = jax.make_jaxpr(f0)(False, ref(3.), ref(4.))
+    jaxpr, _ = discharge_state(f_jaxpr.jaxpr, (), should_discharge=[False, False, True])
+    # Effects on y_ref were discharged away but not the effects on x_ref
+    self.assertEqual(f_jaxpr.effects, {ReadEffect(1), WriteEffect(1), ReadEffect(2), WriteEffect(2)})
+    self.assertEqual(jaxpr.effects, {ReadEffect(1), WriteEffect(1)})
+    # x_ref arg is still a reference but y_ref is discharged
+    self.assertNotIsInstance(jaxpr.invars[2].aval, AbstractRef)
+    self.assertIsInstance(jaxpr.invars[1].aval, AbstractRef)
+    # x_ref value is returned as part of the discharged refs set.
+    self.assertLen(f_jaxpr.out_avals, 2)
+    self.assertLen(jaxpr.outvars, 3)
+
   def test_cond_with_ref_reuse(self):
     def f(pred):
       def body(x_ref):
@@ -1078,6 +1113,25 @@ class StateControlFlowTest(jtu.JaxTestCase):
     out_false = jax.jit(f)(False)
     expected_false = 2.
     self.assertAllClose(out_false, expected_false)
+
+  def test_cond_readonly_refs(self):
+    def f(pred):
+      def body(refs):
+        x_ref, y_ref, z_ref = refs
+        def true_fun():
+          y_ref[()] = x_ref[()]
+        def false_fun():
+          y_ref[()] = x_ref[()] + z_ref[()]
+        lax.cond(pred, true_fun, false_fun)
+      return run_state(body)((1., 0., 2.))
+    jaxpr = jax.make_jaxpr(f)(True).jaxpr
+    [run_state_eqn] = jaxpr.eqns
+    *_, cond_eqn = discharge_state(run_state_eqn.params["jaxpr"], ())[0].eqns
+    self.assertIs(cond_eqn.primitive, lax.cond_p)
+    self.assertLen(cond_eqn.invars, 4)  # pred + 3x ref values
+    self.assertLen(cond_eqn.outvars, 1)  # only the updated ref value
+    self.assertAllClose(jax.jit(f)(True), (1., 1., 2.))
+    self.assertAllClose(jax.jit(f)(False), (1., 3., 2.))
 
   def test_simple_cond_using_multiple_refs_with_interleaved_consts(self):
     def f(pred):

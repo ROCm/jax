@@ -27,6 +27,7 @@ from jax import lax
 
 from jax.experimental import shard_map
 from jax._src import api
+from jax._src import ad_checkpoint
 from jax._src import linear_util as lu
 from jax._src import config
 from jax._src import core
@@ -933,6 +934,19 @@ def pjit_error_check(error, enabled_errors, *vals_in, jaxpr,
 error_checks[pjit.pjit_p] = pjit_error_check
 
 
+def remat_error_check(error, enabled_errors, *vals_in, jaxpr, **params):
+  err_vals, err_tree = jtu.tree_flatten(error)
+  new_vals_in = [*err_vals, *vals_in]
+  in_avals = tuple(map(get_shaped_aval, new_vals_in))
+  checked_jaxpr_, out_tree, _ = jaxpr_to_checkify_jaxpr(
+      pe.close_jaxpr(jaxpr), enabled_errors, err_tree, *in_avals)
+  checked_jaxpr, () = checked_jaxpr_.jaxpr, checked_jaxpr_.consts
+  err_and_out = ad_checkpoint.remat_p.bind(*new_vals_in, jaxpr=checked_jaxpr,
+                                           **params)
+  return tree_unflatten(out_tree, err_and_out)
+error_checks[ad_checkpoint.remat_p] = remat_error_check
+
+
 def shard_map_error_check(
     error, enabled_errors, *vals_in, jaxpr, in_names, out_names, **kwargs
 ):
@@ -950,12 +964,10 @@ def shard_map_error_check(
       raise ValueError(f'Unsupported aval type: {type(v)}')
     in_avals[i] = sharder(mesh, new_in_names[i], v)
 
-  if not isinstance(jaxpr, core.ClosedJaxpr):
-    jaxpr = core.ClosedJaxpr(jaxpr, ())
   with core.extend_axis_env_nd(mesh.shape.items()):
     # jaxpr to checked_jaxpr
     checked_jaxpr, out_tree, _ = jaxpr_to_checkify_jaxpr(
-        jaxpr, enabled_errors, err_tree, *in_avals
+        pe.close_jaxpr(jaxpr), enabled_errors, err_tree, *in_avals
     )
   num_out_error_vals = out_tree.num_leaves - len(out_names)
 
@@ -1197,7 +1209,11 @@ def checkify(f: Callable[..., Out],
     return error, jtu.tree_unflatten(out_tree(), out_flat)
   return checked_fun
 
-def check(pred: Bool, msg: str, *fmt_args, **fmt_kwargs) -> None:
+def check(pred: Bool, msg: str,
+          *fmt_args,
+          debug: bool = False,
+          **fmt_kwargs,
+          ) -> None:
   """Check a predicate, add an error with msg if predicate is False.
 
   This is an effectful operation, and can't be staged (jitted/scanned/...).
@@ -1206,6 +1222,9 @@ def check(pred: Bool, msg: str, *fmt_args, **fmt_kwargs) -> None:
   Args:
     pred: if False, a FailedCheckError error is added.
     msg: error message if error is added. Can be a format string.
+    debug: Whether to turn on debugging mode. If True, check will be removed
+      during execution. If False, the the check must be functionalized using
+      checkify.checkify.
     fmt_args, fmt_kwargs: Positional and keyword formatting arguments for
       `msg`, eg.:
       ``check(.., "check failed on values {} and {named_arg}", x, named_arg=y)``
@@ -1230,7 +1249,7 @@ def check(pred: Bool, msg: str, *fmt_args, **fmt_kwargs) -> None:
     jax._src.checkify.JaxRuntimeError: -3. needs to be positive!
 
   """
-  _check(pred, msg, False, *fmt_args, **fmt_kwargs)
+  _check(pred, msg, debug, *fmt_args, **fmt_kwargs)
 
 def _check(pred, msg, debug, *fmt_args, **fmt_kwargs):
   if not is_scalar_pred(pred):
