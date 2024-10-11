@@ -251,9 +251,6 @@ pybind_extension(
         "@xla//xla/pjrt/c:pjrt_c_api_helpers",
         "@xla//xla/python:py_client_gpu",
         "@xla//xla/tsl/python/lib/core:numpy",
-        "@com_google_absl//absl/status",
-        "@local_config_rocm//rocm:rocm_headers",
-        "@nanobind",
     ],
 )
 
