@@ -47,11 +47,7 @@ def dist_wheels(
     # create manylinux image with requested ROCm installed
     image = "jax-manylinux_2_28_x86_64_rocm%s" % rocm_version.replace(".", "")
 
-<<<<<<< HEAD
-    env = os.environ.copy()
-=======
     env = os.environ.copy()  
->>>>>>> 70ee4c23a (Fix DOCKER_BUILDKIT issue for jax CI)
     env["DOCKER_BUILDKIT"] = "1"
 
     cmd = [
