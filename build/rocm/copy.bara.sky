@@ -4,16 +4,16 @@ core.workflow(
     name = "default",
     origin = git.origin(url = "ssh://git@github.com/jax-ml/jax", ref = "main"),
     destination = git.github_pr_destination(url = "ssh://git@github.com/ROCm/jax", destination_ref = "main", pr_branch="from_upstream_${CONTEXT_REFERENCE}",
-		  title= "Sync with upstream ${CONTEXT_REFERENCE}",
-                  body = "Sample PR",
+		  title= "Sync with upstream ${COPYBARA_CONTEXT_REFERENCE}",
+                  body = "PR to bring changes from jax-ml/jax to ROCm/jax",
                   integrates = []),
     destination_files = glob(["**"]),
     authoring = authoring.pass_thru("Default email <default@default.com>"),
     transformations = [
       core.replace('ubuntu-20.04-16core', 'ROCM-Ubuntu',paths= glob([".github/workflows/*.yaml", ".github/workflows/*.yml"])),
       core.replace('linux-x86-n2-32', 'ROCM-Ubuntu',paths= glob([".github/workflows/*.yaml", ".github/workflows/*.yml"])),
-#      patch.apply(
-#          patches = ["ci-build.yaml.diff"],
-#      ),
+      patch.apply(
+          patches = ["ci-build.yaml.patch"],
+      ),
     ],
 )
