@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+g!/usr/bin/env python3
 
 # Copyright 2024 The JAX Authors.
 #
@@ -92,9 +92,9 @@ def dist_wheels(
 
     mounts = [
         "-v",
-        "./:/jax",
+        os.path.abspath("./") + ":/jax",
         "-v",
-        "./wheelhouse:/wheelhouse",
+        os.path.abspath("./wheelhouse") + ":/wheelhouse",
     ]
 
     if xla_path:
@@ -216,7 +216,7 @@ def test(image_name):
     # JAX and jaxlib are already installed from wheels
     mounts = [
         "-v",
-        "./:/jax",
+        os.path.abspath("./") + ":/jax",
     ]
 
     cmd.extend(mounts)
