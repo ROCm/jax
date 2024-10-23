@@ -53,7 +53,7 @@ CUSTOM_INSTALL=""
 JAX_USE_CLANG=""
 POSITIONAL_ARGS=()
 
-RUNTIME_FLAG=1
+RUNTIME_FLAG=0
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -112,12 +112,14 @@ function upsearch (){
         cd .. && upsearch "$1"
 }
 
-# Set up WORKSPACE.
-WORKSPACE="${WORKSPACE:-$(upsearch WORKSPACE)}"
-BUILD_TAG="${BUILD_TAG:-jax}"
-
-# Determine the docker image name and BUILD_TAG.
-DOCKER_IMG_NAME="${BUILD_TAG}.${CONTAINER_TYPE}"
+# Set up WORKSPACE. 
+if [ ${RUNTIME_FLAG} -eq 0 ]; then
+  DOCKER_IMG_NAME="${BUILD_TAG}"
+else
+  WORKSPACE="${WORKSPACE:-$(upsearch WORKSPACE)}"
+  BUILD_TAG="${BUILD_TAG:-jax}"
+  DOCKER_IMG_NAME="${BUILD_TAG}.${CONTAINER_TYPE}"
+fi
 
 # Under Jenkins matrix build, the build tag may contain characters such as
 # commas (,) and equal signs (=), which are not valid inside docker image names.
