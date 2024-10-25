@@ -61,6 +61,7 @@ class RnnTest(jtu.JaxTestCase):
     weights = rnn.init_lstm_weight(k4, input_size, hidden_size, num_layers,
                                    bidirectional)
     def f(weights, x, h_0, c_0):
+      weights = rnn.swap_lstm_gates(weights, input_size, hidden_size, num_layers, bidirectional)
       y, h, c = rnn.lstm(
         x,
         h_0,

@@ -178,6 +178,96 @@ absl::StatusOr<std::pair<int, int>> RnnComputeWorkspaceReserveSpaceSizes(
       bidirectional, cudnn_allow_tf32);
 }
 
+static absl::Status SwapRNNGateWeights(void* weights_buf, miopenRNNDescriptor_t rnnDesc, 
+                                       miopenTensorDescriptor_t xDesc, int input_vector_size, 
+                                       int hidden_vector_size, int num_layers) {
+  // Loop through each layer and perform the swap for each layer individually.
+  for (int layer = 0; layer < num_layers; ++layer) {
+    size_t offset_param_2, offset_param_3;
+
+    // Descriptor for the parameter tensors.
+    miopenTensorDescriptor_t paramDesc;
+    JAX_RETURN_IF_ERROR(JAX_AS_STATUS(miopenCreateTensorDescriptor(&paramDesc)));
+    
+    // Obtain offsets for paramID=2 and paramID=3 for the current layer
+    JAX_RETURN_IF_ERROR(JAX_AS_STATUS(miopenGetRNNLayerParamOffset(rnnDesc, layer, 
+                                                                   xDesc, 2, paramDesc, 
+                                                                   &offset_param_2)));
+    JAX_RETURN_IF_ERROR(JAX_AS_STATUS(miopenGetRNNLayerParamOffset(rnnDesc, layer, 
+                                                                   xDesc, 3, paramDesc, 
+                                                                   &offset_param_3)));
+    
+    // Calculate the sizes of the matrices to swap
+    size_t input_matrix_size = (layer == 0) ? (input_vector_size * hidden_vector_size) 
+                                            : (hidden_vector_size * hidden_vector_size);
+    size_t hidden_matrix_size = hidden_vector_size * hidden_vector_size;
+
+    // Calculate the total size of the matrices (assuming both matrices are of float type)
+    size_t total_size = (input_matrix_size + hidden_matrix_size) * sizeof(float);
+
+    // Calculate the actual addresses of the weights for paramID=2 and paramID=3 in the current layer
+    void* param2_ptr = static_cast<char*>(weights_buf) + offset_param_2;
+    void* param3_ptr = static_cast<char*>(weights_buf) + offset_param_3;
+
+    // Allocate temporary buffers on the host to hold the matrices
+    std::vector<float> temp_buffer(total_size / sizeof(float));
+
+    // Swap the entire matrices between param2 and param3
+    std::memcpy(temp_buffer.data(), param2_ptr, total_size);
+    std::memcpy(param2_ptr, param3_ptr, total_size);
+    std::memcpy(param3_ptr, temp_buffer.data(), total_size);
+
+    // Clean up the parameter descriptor for this layer
+    JAX_RETURN_IF_ERROR(JAX_AS_STATUS(miopenDestroyTensorDescriptor(paramDesc)));
+  }
+
+  return absl::OkStatus();
+}
+
+// Helper function to swap parameters with paramID 2 and 3 in the weights buffer.
+static absl::Status SwapRNNGateWeights(void* weights_buf, miopenRNNDescriptor_t rnnDesc, 
+                                       miopenTensorDescriptor_t xDesc, size_t weight_element_size,
+                                       int num_layers) {
+  
+  // Loop through each layer and perform the swap for each layer individually
+  for (int layer = 0; layer < num_layers; ++layer) {
+    size_t offset_param_2, offset_param_3;
+
+    // Descriptor for the parameter tensors.
+    miopenTensorDescriptor_t paramDesc;
+    JAX_RETURN_IF_ERROR(JAX_AS_STATUS(miopenCreateTensorDescriptor(&paramDesc)));
+    
+    // Obtain offsets for paramID=2 and paramID=3.
+    JAX_RETURN_IF_ERROR(JAX_AS_STATUS(miopenGetRNNLayerParamOffset(rnnDesc, 0 /* layer index */, 
+                                                                  xDesc, 2 /* paramID */, paramDesc, 
+                                                                  &offset_param_2)));
+    JAX_RETURN_IF_ERROR(JAX_AS_STATUS(miopenGetRNNLayerParamOffset(rnnDesc, 0 /* layer index */, 
+                                                                  xDesc, 3 /* paramID */, paramDesc, 
+                                                                  &offset_param_3)));
+    
+    // Calculate the actual addresses of the weights for paramID=2 and paramID=3.
+    void* param2_ptr = static_cast<char*>(weights_buf) + offset_param_2;
+    void* param3_ptr = static_cast<char*>(weights_buf) + offset_param_3;
+    
+    // Swap the weights between param2 and param3.
+    // Assume that weight_element_size is the size of a single weight element (e.g., sizeof(float)).
+    std::vector<char> temp_buffer(weight_element_size);
+    
+    // Copy param2 to temp_buffer.
+    std::memcpy(temp_buffer.data(), param2_ptr, weight_element_size);
+    // Copy param3 to param2 location.
+    std::memcpy(param2_ptr, param3_ptr, weight_element_size);
+    // Copy temp_buffer (original param2) to param3 location.
+    std::memcpy(param3_ptr, temp_buffer.data(), weight_element_size);
+    
+    // Clean up the parameter descriptor.
+    JAX_RETURN_IF_ERROR(JAX_AS_STATUS(miopenDestroyTensorDescriptor(paramDesc)));
+  }
+
+  return absl::OkStatus();
+}
+
+
 static absl::Status DnnRNNForward_(gpuStream_t stream, void** buffers,
                                    const char* opaque, size_t opaque_len) {
   auto s = UnpackDescriptor<RnnDescriptor>(opaque, opaque_len);
@@ -312,6 +402,11 @@ miopenTensorDescriptor_t input_tensor_desc;
   auto c_n_buf = buffers[7];
   auto workspace_buf = buffers[8];
   auto reserve_space_buf = buffers[9];
+
+// #ifdef JAX_GPU_HIP
+//   JAX_RETURN_IF_ERROR(SwapRNNGateWeights(weights_buf, rnn_desc, input_tensor_desc, 
+//                                          d.input_size, d.hidden_size, d.num_layers));
+// #endif // JAX_GPU_HIP
 
 #ifdef JAX_GPU_HIP
   JAX_RETURN_IF_ERROR(JAX_AS_STATUS(gpudnnRNNForward(
@@ -463,13 +558,19 @@ static absl::Status DnnRNNBackward_(gpuStream_t stream, void** buffers,
       gpudnnGetRNNWeightSpaceSize(handle.get(), rnn_desc, &weight_space_size)));
 #endif // JAX_GPU_HIP
 
+
+  auto w_buf = buffers[6];
+// #ifdef JAX_GPU_HIP
+//   JAX_RETURN_IF_ERROR(SwapRNNGateWeights(w_buf, rnn_desc, input_tensor_desc, 
+//                                          d.input_size, d.hidden_size, d.num_layers));
+// #endif // JAX_GPU_HIP
+
   auto dy_buf = buffers[0];
   auto dh_n_buf = buffers[1];
   auto dc_n_buf = buffers[2];
   auto x_buf = buffers[3];
   auto h_0_buf = buffers[4];
   auto c_0_buf = buffers[5];
-  auto w_buf = buffers[6];
   auto y_buf = buffers[7];
   auto reserve_space_buf = buffers[8];
   auto zeroed_dw_buf = buffers[9];
@@ -493,6 +594,9 @@ static absl::Status DnnRNNBackward_(gpuStream_t stream, void** buffers,
       handle.get(), rnn_desc, input_data_desc, x_buf, h_desc, h_0_buf,
       output_data_desc, y_buf, zeroed_dw_buf, weight_space_size,
       workspace_buf, d.workspace_size, reserve_space_buf, d.reserve_space_size)));
+  // Swap gate weights back to their original layout after backward weights pass.
+  // JAX_RETURN_IF_ERROR(SwapRNNGateWeights(w_buf, rnn_desc, input_tensor_desc, sizeof(float),
+                                        // d.num_layers));
 #else // JAX_GPU_CUDA
   JAX_RETURN_IF_ERROR(JAX_AS_STATUS(gpudnnRNNBackwardData(
       handle.get(), rnn_desc, (const int32_t*)seq_lengths_buf, output_data_desc,
