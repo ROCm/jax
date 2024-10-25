@@ -84,5 +84,9 @@ LABEL com.amdgpu.rocm_version="$ROCM_VERSION" \
 
 RUN --mount=type=cache,mode=0755,target=/root/.cache/pip \
     --mount=type=bind,source=wheelhouse,target=/wheelhouse \
-    pip install --find-links /wheelhouse jax jaxlib jax_rocm60_plugin jax_rocm60_pjrt
+    mkdir -p /rocm_jax_wheels && \
+    cp /wheelhouse/* /rocm_jax_wheels/ && \
+    ls -lah /wheelhouse && \
+    pip3 install wheelhouse/*none*.whl wheelhouse/*jaxlib*.whl && \
+    pip3 install wheelhouse/*rocm60*.whl
 
