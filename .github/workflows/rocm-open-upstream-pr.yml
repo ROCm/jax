@@ -7,8 +7,11 @@ jobs:
   open-upstream:
     if:  ${{ github.event.label.name == 'open-upstream' }}
     runs-on: ubuntu-latest
+    env:
+      HEAD_REF: ${{ github.head_ref }}
+
     steps:
       - run: echo ${{ github.base_ref }}
       - run: echo "TODO" # Create a new branch that includes the changes from this PR
-      - run: echo gh pr create --base jax-ml/main --head ???? --title ??? --body ???
+      - run: gh pr create --base jax-ml/main --head ???? --title ??? --body ???
 
