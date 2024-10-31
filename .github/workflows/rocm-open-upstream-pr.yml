@@ -7,6 +7,8 @@ jobs:
   open-upstream:
     if: ${{ github.event.label.name == 'open-upstream' }}
     runs-on: ubuntu-latest
+    outputs:
+      new-pr-link: ${{ steps.create-pr.outputs.link }}
     env:
       NEW_BRANCH_NAME: "${{ github.head_ref }}-upstream"
       NEW_PR_TITLE: "[ROCM] ${{ github.event.pull_request.title }}"
@@ -18,6 +20,15 @@ jobs:
           git checkout -b $NEW_BRANCH_NAME ${{ github.head_ref }}
           git rebase --onto main
           git push origin HEAD
+      # TODO: Change the base of the PR to upstream main
       - name: Create a PR to upstream
-        run: gh pr create --base rocm/main --head $NEW_BRANCH_NAME --title "$NEW_PR_TITLE" --body "${{ github.event.pull_request.body }}"
+        id: create-pr
+        run: |
+          echo link=$(gh pr create --repo rocm/jax --base main --head $NEW_BRANCH_NAME --title "$NEW_PR_TITLE" --body "${{ github.event.pull_request.body }}") >> "$GITHUB_OUTPUT"
+  comment-link:
+    needs: open-upstream
+    run-on: ubuntu-latest
+    steps:
+      - name: Leave comment on old PR
+        run: gh pr comment ${{ github.event.pull_request.number }} --repo rocm/jax --body ${{ needs.open-upstream.outputs.new-pr-link.link }}
 
