@@ -9,9 +9,14 @@ jobs:
     runs-on: ubuntu-latest
     env:
       HEAD_REF: ${{ github.head_ref }}
-
+      NEW_BRANCH_NAME: ${{ github.head_ref }}-upstream
+      PR_TITLE: [ROCM] ${{ github.event.pull_request.title }}
     steps:
-      - run: echo ${{ github.base_ref }}
-      - run: echo "TODO" # Create a new branch that includes the changes from this PR
-      - run: gh pr create --base jax-ml/main --head ???? --title ??? --body ???
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+      - run: |
+          git checkout -b $NEW_BRANCH_NAME $HEAD_REF
+          git rebase --onto main
+          git push origin HEAD
+      # TODO: Change the base branch to upstream main once we've tested this out and know it works
+      - run: gh pr create --base rocm/main --head $NEW_BRANCH_NAME --title "$PR_TITLE" --body "${{ github.event.pull_request.body }}"
 
