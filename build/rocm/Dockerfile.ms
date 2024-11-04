@@ -3,7 +3,7 @@ FROM ubuntu:20.04 AS rocm_base
 ################################################################################
 
 RUN --mount=type=cache,target=/var/cache/apt \
-    apt-get update && apt-get install -y python3 python-is-python3
+    apt-get update && apt-get install -y python3 python-is-python3 libstdc++-12-dev
 
 # Install bzip2 and sqlite3 packages
 RUN apt-get update && apt-get install -y \
