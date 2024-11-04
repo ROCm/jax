@@ -6,10 +6,9 @@ RUN --mount=type=cache,target=/var/cache/apt \
     apt-get update && apt-get install -y python3 python-is-python3
 
 # Install bzip2 and sqlite3 packages
-RUN apt-get update && apt-get install -y \
-    sqlite3 libsqlite3-dev \
-    libbz2-dev \
-    && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y sqlite3 libsqlite3-dev \
+    libbz2-dev \&&
+    rm -rf /var/lib/apt/lists/*
 
 # Add target file to help determine which device(s) to build for
 ARG GPU_DEVICE_TARGETS="gfx900 gfx906 gfx908 gfx90a gfx940 gfx941 gfx942 gfx1030 gfx1100"
