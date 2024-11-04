@@ -6,6 +6,9 @@ on:
 jobs:
   open-upstream:
     if: ${{ github.event.label.name == 'open-upstream' }}
+    permissions:
+      contents: write
+      pull-requests: write
     runs-on: ubuntu-latest
     outputs:
       new-pr-link: ${{ steps.create-pr.outputs.link }}
@@ -27,6 +30,8 @@ jobs:
           echo link=$(gh pr create --repo rocm/jax --base main --head $NEW_BRANCH_NAME --title "$NEW_PR_TITLE" --body "${{ github.event.pull_request.body }}") >> "$GITHUB_OUTPUT"
   comment-link:
     needs: open-upstream
+    permissions:
+      pull-requests: write
     run-on: ubuntu-latest
     steps:
       - name: Leave comment on old PR
