@@ -1,4 +1,4 @@
-name: ROCm CI
+name: ROCm CPU CI
 
 # We test all supported Python versions as follows:
 # - 3.10 : Documentation build
