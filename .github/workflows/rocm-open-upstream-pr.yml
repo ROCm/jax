@@ -32,7 +32,7 @@ jobs:
     needs: open-upstream
     permissions:
       pull-requests: write
-    run-on: ubuntu-latest
+    runs-on: ubuntu-latest
     steps:
       - name: Leave comment on old PR
         run: gh pr comment ${{ github.event.pull_request.number }} --repo rocm/jax --body ${{ needs.open-upstream.outputs.new-pr-link.link }}
