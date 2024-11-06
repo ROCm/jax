@@ -49,7 +49,7 @@ def dist_wheels(
 
     # Remove the Docker image
     try:
-        subprocess.run(["docker", "rmi", image], check=True)
+        subprocess.run(["docker", "rmi", "-f", image], check=True)
         print(f"Image {image} removed successfully.")
     except subprocess.CalledProcessError as e:
         print(f"Failed to remove Docker image {image}: {e}")
