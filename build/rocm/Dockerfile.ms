@@ -1,6 +1,5 @@
 ################################################################################
-ARG BASE_DOCKER=ubuntu:20.04
-FROM $BASE_DOCKER AS rocm_base
+FROM ubuntu:20.04 AS rocm_base
 ################################################################################
 
 RUN --mount=type=cache,target=/var/cache/apt \
