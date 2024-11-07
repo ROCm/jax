@@ -1,5 +1,5 @@
 ################################################################################
-FROM ubuntu:20.04 AS rocm_base
+FROM $DISTRO AS rocm_base
 ################################################################################
 
 RUN --mount=type=cache,target=/var/cache/apt \
@@ -25,8 +25,13 @@ RUN --mount=type=bind,source=build/rocm/tools/get_rocm.py,target=get_rocm.py \
     --mount=type=cache,target=/var/cache/apt \
     python3 get_rocm.py --rocm-version=$ROCM_VERSION --job-name=$ROCM_BUILD_JOB --build-num=$ROCM_BUILD_NUM
 
-# add ROCm bins to PATH
+# Set up paths
+ENV HCC_HOME=$ROCM_PATH/hcc
+ENV HIP_PATH=$ROCM_PATH/
+ENV OPENCL_ROOT=$ROCM_PATH/opencl
+ENV PATH="$HCC_HOME/bin:$HIP_PATH/bin:${PATH}"
 ENV PATH="$ROCM_PATH/bin:${PATH}"
+ENV PATH="$OPENCL_ROOT/bin:${PATH}"
 ENV PATH="/root/bin:/root/.local/bin:$PATH"
 
 # install pyenv and python build dependencies

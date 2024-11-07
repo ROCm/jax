@@ -48,7 +48,7 @@ PYTHON_VERSION="3.10"
 ROCM_VERSION="6.1.3"
 ROCM_BUILD_JOB=""
 ROCM_BUILD_NUM=""
-BASE_DOCKER="ubuntu:20.04"
+BASE_DOCKER="$DISTRO"
 CUSTOM_INSTALL=""
 JAX_USE_CLANG=""
 POSITIONAL_ARGS=()
@@ -154,6 +154,7 @@ fi
 # which is the ROCm image that is shipped for users to use (i.e. distributable).
 ./build/rocm/ci_build \
     --rocm-version $ROCM_VERSION \
+    --base-docker $BASE_DOCKER \
     --python-versions $PYTHON_VERSION \
     --xla-source-dir=$XLA_CLONE_DIR \
     --rocm-build-job=$ROCM_BUILD_JOB \
