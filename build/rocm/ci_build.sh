@@ -90,6 +90,10 @@ while [[ $# -gt 0 ]]; do
           ROCM_BUILD_NUM="$2"
           shift 2
           ;;
+        --base_docker)
+          BASE_DOCKER="$2"
+          shift 2
+          ;;
         --use_clang)
           JAX_USE_CLANG="$2"
           shift 2
