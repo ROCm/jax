@@ -248,6 +248,12 @@ def test(image_name):
 def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument(
+        "--base-docker",
+         default="",
+        help="Argument to override base docker in dockerfile",
+    )
+
+    p.add_argument(
         "--python-versions",
         type=lambda x: x.split(","),
         default="3.12",
