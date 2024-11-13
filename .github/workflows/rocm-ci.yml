@@ -16,7 +16,7 @@ jobs:
     steps:
       - name: Print Environment Variables
         run: printenv
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
       - name: Build Docker 
         env: 
           DOCKER_IMG_NAME: rocm_jax_r6_1_3_py3_10_id${{ github.run_id }}
