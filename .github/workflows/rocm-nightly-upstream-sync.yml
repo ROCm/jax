@@ -6,23 +6,27 @@ on:
   workflow_dispatch:
   schedule:
     - cron: '0 6 * * 1-5'
+permissions:
+  contents: write
+  pull-requests: write
 env:
   SYNC_BRANCH_NAME: ci-upstream-sync-${{ github.run_number }}_${{ github.run_attempt }}
 jobs:
   sync-main:
-    permissions:
-      contents: write
+    #permissions:
+    #  contents: write
     runs-on: ubuntu-latest
     steps:
       - run: |
           gh auth status
+          gh repo view rocm/jax
           gh repo sync rocm/jax -b main
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   create-sync-branch:
     needs: sync-main
-    permissions:
-      contents: write
+    #permissions:
+    #  contents: write
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -37,8 +41,8 @@ jobs:
           git push origin HEAD
   open-sync-pr:
     needs: create-sync-branch
-    permissions:
-      pull-requests: write
+    #permissions:
+    #  pull-requests: write
     runs-on: ubuntu-latest
     steps:
       - run: |
