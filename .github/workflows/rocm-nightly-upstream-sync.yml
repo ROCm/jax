@@ -14,7 +14,9 @@ jobs:
       contents: write
     runs-on: ubuntu-latest
     steps:
-      - run: gh repo sync rocm/jax -b main
+      - run: |
+          gh auth status
+          gh repo sync rocm/jax -b main
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   create-sync-branch:
