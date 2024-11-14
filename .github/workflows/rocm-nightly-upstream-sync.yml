@@ -34,6 +34,8 @@ jobs:
           git checkout origin/main 
           git checkout -b $SYNC_BRANCH_NAME
           # Try and merge rocm-main into this new branch so that we don't run upstream's CI code
+          git config --global user.email "github-actions@github.com"
+          git config --global user.name "GitHub Actions"
           git merge origin/rocm-main || true
           # If the merge creates conflicts, we want to abort and push to origin anyways so that a dev can resolve the conflicts
           git merge --abort || true
