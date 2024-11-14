@@ -1,4 +1,4 @@
-name: ROCM CI
+name: ROCm GPU CI
 
 on:
   # Trigger the workflow on push or pull request,
