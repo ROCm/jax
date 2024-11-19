@@ -47,6 +47,14 @@ def dist_wheels(
     # create manylinux image with requested ROCm installed
     image = "jax-manylinux_2_28_x86_64_rocm%s" % rocm_version.replace(".", "")
 
+    # Remove the Docker image
+    try:
+        subprocess.run(["docker", "rmi", "-f", image], check=True)
+        print(f"Image {image} removed successfully.")
+    except subprocess.CalledProcessError as e:
+        print(f"Failed to remove Docker image {image}: {e}")
+        exit(1)
+
     env = os.environ.copy()
     env["DOCKER_BUILDKIT"] = "1"
 
@@ -146,6 +154,7 @@ def _fetch_jax_metadata(xla_path):
 
 def dist_docker(
     rocm_version,
+    base_docker,
     python_versions,
     xla_path,
     rocm_build_job="",
@@ -171,6 +180,7 @@ def dist_docker(
         "--build-arg=ROCM_VERSION=%s" % rocm_version,
         "--build-arg=ROCM_BUILD_JOB=%s" % rocm_build_job,
         "--build-arg=ROCM_BUILD_NUM=%s" % rocm_build_num,
+        "--build-arg=BASE_DOCKER=%s" % base_docker,
         "--build-arg=PYTHON_VERSION=%s" % python_version,
         "--build-arg=JAX_VERSION=%(jax_version)s" % md,
         "--build-arg=JAX_COMMIT=%(jax_commit)s" % md,
@@ -237,6 +247,12 @@ def test(image_name):
 
 def parse_args():
     p = argparse.ArgumentParser()
+    p.add_argument(
+        "--base-docker",
+         default="",
+        help="Argument to override base docker in dockerfile",
+    )
+
     p.add_argument(
         "--python-versions",
         type=lambda x: x.split(","),
@@ -314,6 +330,7 @@ def main():
         )
         dist_docker(
             args.rocm_version,
+            args.base_docker,
             args.python_versions,
             args.xla_source_dir,
             rocm_build_job=args.rocm_build_job,
