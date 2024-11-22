@@ -131,6 +131,7 @@ def build_jax_wheel(jax_path, python_version):
         "python",
         "-m",
         "build",
+        "--bazel_options='--experimental_repo_remote_exec'",
     ]
 
     cpy = to_cpy_ver(python_version)
