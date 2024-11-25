@@ -24,7 +24,7 @@ jobs:
           DOCKER_IMG_NAME: rocm_jax_r6_1_3_py3_10_id${{ github.run_id }}
           # XLA_CLONE_DIR: 
         run: |
-          ./build/rocm/ci_build.sh --runtime --rocm_version 6.1.3 --keep_image --py_version 3.10  --use_clang
+          ./build/rocm/ci_build.sh --runtime --rocm_version 6.1.3 --keep_image --py_version 3.10  --use_clang true
       - name: Archive jax wheels
         uses: actions/upload-artifact@v4
         with:
