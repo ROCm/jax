@@ -9,7 +9,7 @@ RUN --mount=type=cache,target=/var/cache/apt \
 # Install bzip2 and sqlite3 packages
 RUN apt-get update && apt-get install -y \
     sqlite3 libsqlite3-dev \
-    libbz2-dev clang \
+    libbz2-dev \
     && rm -rf /var/lib/apt/lists/*
 
 # Add target file to help determine which device(s) to build for
