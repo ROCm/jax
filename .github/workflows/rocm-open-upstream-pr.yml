@@ -27,8 +27,10 @@ jobs:
       # TODO: Change the base of the PR to upstream main
       - name: Create a PR to upstream
         id: create-pr
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          echo link=$(gh pr create --repo rocm/jax --base main --head $NEW_BRANCH_NAME --title "$NEW_PR_TITLE" --body "${{ github.event.pull_request.body }}") >> "$GITHUB_OUTPUT"
+          echo link=$(gh pr create --repo rocm/jax --base jax-ml/jax/main --head $NEW_BRANCH_NAME --title "$NEW_PR_TITLE" --body "${{ github.event.pull_request.body }}") >> "$GITHUB_OUTPUT"
   comment-link:
     needs: open-upstream
     permissions:
