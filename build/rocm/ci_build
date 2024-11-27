@@ -53,7 +53,6 @@ def dist_wheels(
         print(f"Image {image} removed successfully.")
     except subprocess.CalledProcessError as e:
         print(f"Failed to remove Docker image {image}: {e}")
-        exit(1)
 
     cmd = [
         "docker",
