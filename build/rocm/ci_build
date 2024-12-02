@@ -46,6 +46,7 @@ def dist_wheels(
     rocm_build_num="",
     compiler="gcc",
 ):
+    exit(1)
     if xla_path:
         xla_path = os.path.abspath(xla_path)
 
