@@ -22,18 +22,17 @@ jobs:
         with:
           path: ${{ github.sha }}
       - name: Build Docker 
-        env: 
+        env:
           DOCKER_IMG_NAME: rocm_jax_r6_1_3_py3_10_id${{ github.run_id }}
           # XLA_CLONE_DIR: 
         run: |
           pwd
-          cat ./build/rocm/ci_build.sh
-          ./build/rocm/ci_build.sh --runtime --rocm_version 6.1.3 --keep_image --py_version 3.10 --use_clang true --dockerfile build/rocm/build_wheels/Dockerfile.manylinux_2_28_x86_64.rocm
+          ${{ github.workspace }}/${{ github.sha }}/build/rocm/ci_build.sh --runtime --rocm_version 6.1.3 --keep_image --py_version 3.10 --use_clang true --dockerfile build/rocm/build_wheels/Dockerfile.manylinux_2_28_x86_64.rocm
       - name: Archive jax wheels
         uses: actions/upload-artifact@v4
         with:
           name: rocm_jax_r6_1_3_py3_10_id${{ github.run_id }}
-          path: ${{ github.workspace }}/wheelhouse/*.whl
+          path: ${{ github.workspace }}/${{ github.sha }}/wheelhouse/*.whl
       - name: Detect GPUs
         run: |
           docker run \
@@ -47,4 +46,4 @@ jobs:
         env: 
           DOCKER_IMG_NAME: rocm_jax_r6_1_3_py3_10_id${{ github.run_id }}
         run: |
-          ./build/rocm/ci_build test ${DOCKER_IMG_NAME}
+          ${{ github.workspace }}/${{ github.sha }}/build/rocm/ci_build test ${DOCKER_IMG_NAME}
