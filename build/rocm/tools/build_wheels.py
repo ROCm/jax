@@ -105,6 +105,7 @@ def build_jaxlib_wheel(
     if compiler == "clang":
         clang_path = find_clang_path()
         if clang_path:
+            LOG.info("Found clang at path: %s", clang_path)
             cmd.append("--clang_path=%s" % clang_path)
         else:
             raise RuntimeError("Clang binary not found in /usr/lib/llvm-*")
