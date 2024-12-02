@@ -65,11 +65,11 @@ def dist_wheels(
     ]
 
     if not image_by_name(image):
-        LOG.info("Could not find existing image: %s", image)
-        LOG.info("Running %s", cmd)
+        LOG.error("Could not find existing image: %s", image)
+        LOG.error("Running %s", cmd)
         _ = subprocess.run(cmd, check=True)
     else:
-        LOG.info("Re-using existing image: %s", image)
+        LOG.error("Re-using existing image: %s", image)
 
     # use image to build JAX/jaxlib wheels
     os.makedirs("wheelhouse", exist_ok=True)
@@ -126,7 +126,7 @@ def dist_wheels(
         ]
     )
 
-    LOG.info("Running: %s", cmd)
+    LOG.error("Running: %s", cmd)
     _ = subprocess.run(cmd, check=True)
 
 
