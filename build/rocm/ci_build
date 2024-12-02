@@ -46,7 +46,6 @@ def dist_wheels(
     rocm_build_num="",
     compiler="gcc",
 ):
-    exit(1)
     if xla_path:
         xla_path = os.path.abspath(xla_path)
 
@@ -66,8 +65,8 @@ def dist_wheels(
     ]
 
     if not image_by_name(image):
-        LOG.error("Could not find existing image: %s", image)
-        LOG.error("Running %s", cmd)
+        LOG.info("Could not find existing image: %s", image)
+        LOG.info("Running %s", cmd)
         _ = subprocess.run(cmd, check=True)
     else:
         LOG.error("Re-using existing image: %s", image)
@@ -127,7 +126,7 @@ def dist_wheels(
         ]
     )
 
-    LOG.error("Running: %s", cmd)
+    LOG.info("Running: %s", cmd)
     _ = subprocess.run(cmd, check=True)
 
 
@@ -350,5 +349,4 @@ def main():
 
 
 if __name__ == "__main__":
-    exit(1)
     main()
