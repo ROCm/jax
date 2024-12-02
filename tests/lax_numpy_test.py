@@ -6300,7 +6300,8 @@ class NumpySignaturesTest(jtu.JaxTestCase):
 _available_numpy_dtypes: list[str] = [dtype.__name__ for dtype in jtu.dtypes.all
                                       if dtype != dtypes.bfloat16]
 
-UNIMPLEMENTED_UFUNCS = {'spacing'}
+# TODO(jakevdp): implement missing ufuncs.
+UNIMPLEMENTED_UFUNCS = {'spacing', 'matvec', 'vecmat'}
 
 
 def _all_numpy_ufuncs() -> Iterator[str]:
