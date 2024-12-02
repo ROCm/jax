@@ -37,8 +37,6 @@
 
 set -eux
 
-exit 1
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/build_common.sh"
 CONTAINER_TYPE="rocm"
