@@ -22,14 +22,9 @@ jobs:
     runs-on:  mi-250
     container:
       image: rocm/dev-ubuntu-22.04:6.2.4
-      options:
-        group-add: video
-        cap-add: SYS_PTRACE
-        security-opt: seccomp=unconfined
-        shm-size: 64G
+      options: --device=/dev/kfd --device=/dev/dri --group-add=video --cap-add=SYS_PTRACE --security-opt=seccomp=unconfined
     env:
       ROCM_VERSION: 6.2.4
-      #WORKSPACE_DIR: ${{ github.run_id }}_${{ github.run_number }}_${{ github.run_attempt }}
     steps:
       - name: Print system info
         run: |
