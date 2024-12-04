@@ -71,7 +71,7 @@ def dist_wheels(
         ".",
     ]
 
-    if True: #not image_by_name(image):
+    if not image_by_name(image):
         LOG.info("Could not find existing image: %s", image)
         LOG.info("Running %s", cmd)
         _ = subprocess.run(cmd, check=True)
