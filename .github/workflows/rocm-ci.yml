@@ -11,13 +11,6 @@ on:
       - rocm-main
 
 jobs:
-  test-docker-container:
-    runs-on: mi-250
-    container:
-      image: rocm/dev-ubuntu-22.04:6.2.4
-    steps:
-      - run: echo hello
-      - run: rocm-smi
   build-docker: # strategy and matrix come here 
     runs-on:  mi-250
     container:
