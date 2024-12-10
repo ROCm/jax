@@ -427,7 +427,6 @@ async def main():
     logging.debug("Disabling NCCL")
     bazel_command_base.append("--config=nonccl")
 
-  print(await executor.run("git config --global --add safe.directory=*"))
   git_hash = utils.get_githash()
 
   # Wheel build command execution
