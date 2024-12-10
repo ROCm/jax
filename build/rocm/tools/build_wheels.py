@@ -29,6 +29,7 @@ import re
 import select
 import subprocess
 import shutil
+import stat
 import sys
 
 
@@ -305,7 +306,7 @@ def main():
             LOG.info("Copying %s into %s" % (whl, wheelhouse_dir))
             shutil.copy(whl, wheelhouse_dir)
 
-# delete the 'dist' directory since it causes permissions issues
+    # delete the 'dist' directory since it causes permissions issues
     logging.info('Deleting dist, egg-info and cache directory')
     shutil.rmtree(os.path.join(args.jax_path, "dist"))
     shutil.rmtree(os.path.join(args.jax_path, "jax.egg-info"))
