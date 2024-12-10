@@ -41,5 +41,5 @@ jobs:
         run: |
           #./${{ github.sha }}/build/rocm/ci_build test ${DOCKER_IMG_NAME}
           cd $WORKSPACE_DIR
-          python3 build/rocm/ci_build test
+          python3 build/rocm/ci_build test jax.rocm
 
