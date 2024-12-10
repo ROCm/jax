@@ -14,7 +14,7 @@ jobs:
   create-build-image:
     runs-on: mi-250
     env:
-      ROCM_VERSION: 6.2.4
+      ROCM_VERSION: "6.2.4"
       WORKSPACE_DIR: ${{ github.run_id }}_${{ github.run_number }}_${{ github.run_attempt }}
     steps:
       - run: echo Add me later
@@ -24,8 +24,8 @@ jobs:
     #  image: rocm/dev-ubuntu-22.04:6.2.4
     #  options: --device=/dev/kfd --device=/dev/dri --group-add=video --cap-add=SYS_PTRACE --security-opt=seccomp=unconfined
     env:
-      PYTHON_VERSION: 3.10
-      ROCM_VERSION: 6.2.4
+      PYTHON_VERSION: "3.10"
+      ROCM_VERSION: "6.2.4"
       WORKSPACE_DIR: ${{ github.run_id }}_${{ github.run_number }}_${{ github.run_attempt }}
     steps:
       - name: Print system info
@@ -41,7 +41,7 @@ jobs:
           ls
           cd $WORKSPACE_DIR
           pwd
-          ./build/rocm/ci_build.sh --runtime --rocm_version $ROCM_VERSION --keep_image --py_version $PYTHNON_VERSION --use_clang true
+          ./build/rocm/ci_build.sh --runtime --rocm_version $ROCM_VERSION --keep_image --py_version $PYTHON_VERSION --use_clang true
       #- name: Archive jax wheels
       #  uses: actions/upload-artifact@v4
       #  with:
