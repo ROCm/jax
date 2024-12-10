@@ -36,9 +36,9 @@ jobs:
         with:
           path: ${{ github.run_id }}_${{ github.run_number }}_${{ github.run_attempt }}
        - name: Set repo ownership
-        run: |
-          # this is to fix GIT not liking owner of the checkout dir
-          chown -R $(id -u):$(id -g) $WORKSPACE_DIR
+         run: |
+           # this is to fix GIT not liking owner of the checkout dir
+           chown -R $(id -u):$(id -g) $WORKSPACE_DIR
       - name: Build JAX
         run: |
           pwd
