@@ -35,10 +35,6 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
         with:
           path: ${{ github.run_id }}_${{ github.run_number }}_${{ github.run_attempt }}
-      - name: Set repo ownership
-        run: |
-          # this is to fix GIT not liking owner of the checkout dir
-          chown -R $(id -u):$(id -g) $WORKSPACE_DIR
       - name: Build JAX
         run: |
           pwd
