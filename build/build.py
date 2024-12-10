@@ -436,7 +436,7 @@ async def main():
     logging.debug("Disabling NCCL")
     bazel_command_base.append("--config=nonccl")
 
-  git_hash = "9340a9bfaac5aa83d425b70806886635f40f9640"
+  git_hash = utils.get_githash()
 
   # Wheel build command execution
   for wheel in args.wheels.split(","):
