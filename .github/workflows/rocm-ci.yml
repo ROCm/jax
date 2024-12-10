@@ -16,7 +16,8 @@ jobs:
     env:
       ROCM_VERSION: 6.2.4
       WORKSPACE_DIR: ${{ github.run_id }}_${{ github.run_number }}_${{ github.run_attempt }}
-    steps: echo Add me later
+    steps:
+      - run: echo Add me later
   build-docker: # strategy and matrix come here 
     runs-on:  mi-250
     #container:
