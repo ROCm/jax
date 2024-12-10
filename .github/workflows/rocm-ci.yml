@@ -11,18 +11,8 @@ on:
       - rocm-main
 
 jobs:
-  create-build-image:
-    runs-on: mi-250
-    env:
-      ROCM_VERSION: "6.2.4"
-      WORKSPACE_DIR: ${{ github.run_id }}_${{ github.run_number }}_${{ github.run_attempt }}
-    steps:
-      - run: echo Add me later
   build-docker: # strategy and matrix come here 
     runs-on:  mi-250
-    #container:
-    #  image: rocm/dev-ubuntu-22.04:6.2.4
-    #  options: --device=/dev/kfd --device=/dev/dri --group-add=video --cap-add=SYS_PTRACE --security-opt=seccomp=unconfined
     env:
       PYTHON_VERSION: "3.10"
       ROCM_VERSION: "6.2.4"
@@ -47,16 +37,6 @@ jobs:
       #  with:
       #    name: rocm_jax_r6_1_3_py3_10_id${{ github.run_id }}
       #    path: ./dist/*.whl
-      #- name: Detect GPUs
-      #  run: |
-      #    rocm-smi
-      #    docker run \
-      #      --group-add video \
-      #      $RENDER_DEVICES \
-      #      --cap-add=SYS_PTRACE \
-      #      --security-opt seccomp=unconfined \
-      #      --shm-size=64G \
-      #      rocm/rocm-terminal rocm-smi
       - name: Run tests
         run: |
           #./${{ github.sha }}/build/rocm/ci_build test ${DOCKER_IMG_NAME}
