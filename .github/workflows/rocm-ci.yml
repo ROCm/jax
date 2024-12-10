@@ -11,7 +11,7 @@ on:
       - rocm-main
 
 jobs:
-  build-docker: # strategy and matrix come here 
+  build-jax-in-docker: # strategy and matrix come here 
     runs-on:  mi-250
     env:
       PYTHON_VERSION: "3.10"
@@ -39,7 +39,6 @@ jobs:
       #    path: ./dist/*.whl
       - name: Run tests
         run: |
-          #./${{ github.sha }}/build/rocm/ci_build test ${DOCKER_IMG_NAME}
           cd $WORKSPACE_DIR
           python3 build/rocm/ci_build test jax.rocm
 
