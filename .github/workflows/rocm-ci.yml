@@ -34,9 +34,11 @@ jobs:
           rocm-smi
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
         with:
-          path: $WORKSPACE_DIR
+          path: ./$WORKSPACE_DIR
       - name: Build JAX
         run: |
+          pwd
+          ls
           cd $WORKSPACE_DIR
           pwd
           ./build/rocm/ci_build.sh --runtime --rocm_version $ROCM_VERSION --keep_image --py_version $PYTHNON_VERSION --use_clang true
