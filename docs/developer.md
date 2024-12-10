@@ -205,17 +205,36 @@ sudo apt install miopen-hip hipfft-dev rocrand-dev hipsparse-dev hipsolver-dev \
     rccl-dev rccl hip-dev rocfft-dev roctracer-dev hipblas-dev rocm-device-libs
 ```
 
-The recommended way to install these dependencies is by running our script, `jax/build/rocm/tools/get_rocm.py`,
+Alternatively, the recommended way to install these dependencies is by running our script, `jax/build/rocm/tools/get_rocm.py`,
 and selecting the appropriate options.
 
-To build jaxlib with ROCM support, you can run the following build commands,
-suitably adjusted for your paths and ROCM version.
-
+You can also use prebuilt ROCm JAX images available on Docker Hub:
+```Bash
+https://hub.docker.com/r/rocm/jax-community/tags
 ```
+
+#### Building JAX for ROCm
+
+Follow these steps to build JAX for ROCm:
+
+1. Clone the Repository
+Clone the ROCm-specific fork of JAX:
+
+```Bash
+git clone https://github.com/ROCm/jax -b <branch_name>
+cd jax
+```
+
+2. Build the Wheels
+Use the following command to build the wheels for JAX:
+
+```Bash
 python3 ./build/build.py build --wheels=jaxlib,jax-rocm-plugin,jax-rocm-pjrt --rocm_version=60 --rocm_path=/opt/rocm-6.2.3
 ```
 to generate three wheels (jaxlib without rocm, jax-rocm-plugin, and
-jax-rocm-pjrt)
+jax-rocm-pjrt). The generated wheels will be located in the `dist/` directory.
+
+#### Additional Information
 
 AMD's fork of the XLA repository may include fixes not present in the upstream
 XLA repository. If you experience problems with the upstream repository, you can
@@ -228,7 +247,7 @@ git clone https://github.com/ROCm/xla.git
 and override the XLA repository with which JAX is built:
 
 ```
-python3 ./build/build.py build --wheels=jax-rocm-plugin --rocm_version=60 --rocm_path=/opt/rocm-6.2.3 --local_xla_path=/rel/xla/
+python3 ./build/build.py build --wheels=jaxlib,jax-rocm-plugin,jax-rocm-pjrt --rocm_version=60 --rocm_path=/opt/rocm-6.2.3 --local_xla_path=/rel/xla/
 ```
 
 For a simplified installation process, we also recommend checking out the `jax/build/rocm/dev_build_rocm.py script`.
