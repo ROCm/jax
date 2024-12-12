@@ -52,7 +52,7 @@ def create_manylinux_build_image(rocm_version, rocm_build_job, rocm_build_num):
         "--build-arg=ROCM_VERSION=%s" % rocm_version,
         "--build-arg=ROCM_BUILD_JOB=%s" % rocm_build_job,
         "--build-arg=ROCM_BUILD_NUM=%s" % rocm_build_num,
-        "--tag=%s" % image,
+        "--tag=%s" % image_name,
         ".",
     ]
 
