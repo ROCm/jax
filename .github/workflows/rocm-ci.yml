@@ -14,6 +14,8 @@ jobs:
   build-jax-in-docker: # strategy and matrix come here 
     runs-on:  mi-250
     env:
+      BASE_IMAGE: "ubuntu:22.04"
+      TEST_IMAGE: ubuntu-jax-${{ github.run_id }}_${{ github.run_number }}_${{ github.run_attempt }}
       PYTHON_VERSION: "3.10"
       ROCM_VERSION: "6.2.4"
       WORKSPACE_DIR: ${{ github.run_id }}_${{ github.run_number }}_${{ github.run_attempt }}
@@ -28,17 +30,22 @@ jobs:
       - name: Build JAX
         run: |
           pwd
-          ls
           cd $WORKSPACE_DIR
           pwd
-          ./build/rocm/ci_build.sh --runtime --rocm_version $ROCM_VERSION --keep_image --py_version $PYTHON_VERSION --use_clang true
-      #- name: Archive jax wheels
-      #  uses: actions/upload-artifact@v4
-      #  with:
-      #    name: rocm_jax_r6_1_3_py3_10_id${{ github.run_id }}
-      #    path: ./dist/*.whl
+          python3 build/rocm/ci_build \
+            --rocm-version $ROCM_VERSION \
+            --base-docker $BASE_IMAGE \
+            --python-versions $PYTHON_VERSION \
+            --compiler=clang \
+            dist_docker \
+            --image-tag $TEST_IMAGE
+      - name: Archive jax wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: rocm_jax_r6_1_3_py3_10_id${{ github.run_id }}
+          path: ./dist/*.whl
       - name: Run tests
         run: |
           cd $WORKSPACE_DIR
-          python3 build/rocm/ci_build test jax.rocm
+          python3 build/rocm/ci_build test $TEST_IMAGE
 
