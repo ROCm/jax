@@ -38,12 +38,8 @@ def image_by_name(name):
     return image_id
 
 
-def get_manylinux_image_name(rocm_version, rocm_build_job, rocm_build_num):
-    return "jax-build-manylinux_2_28_x86_64_rocm%s" % rocm_version.replace(".", "")
-
-
 def create_manylinux_build_image(rocm_version, rocm_build_job, rocm_build_num):
-    image_name = get_manylinux_image_name(rocm_version, rocm_build_job, rocm_build_num)
+    image_name = "jax-build-manylinux_2_28_x86_64_rocm%s" % rocm_version.replace(".", "")
     cmd = [
         "docker",
         "build",
@@ -58,6 +54,7 @@ def create_manylinux_build_image(rocm_version, rocm_build_job, rocm_build_num):
 
     LOG.info("Creating manylinux build image. Running: %s", cmd)
     _ = subprocess.run(cmd, check=True)
+    return image_name
 
 
 def dist_wheels(
@@ -70,7 +67,7 @@ def dist_wheels(
 ):
     # We want to make sure the wheels we build are manylinux compliant. We'll
     # do the build in a container. Build the image for this.
-    create_manylinux_build_image(rocm_version, rocm_build_job, rocm_build_num)
+    image_name = create_manylinux_build_image(rocm_version, rocm_build_job, rocm_build_num)
 
     if xla_path:
         xla_path = os.path.abspath(xla_path)
@@ -123,7 +120,7 @@ def dist_wheels(
         [
             "--init",
             "--rm",
-            image,
+            image_name,
             "bash",
             "-c",
             " ".join(bw_cmd),
