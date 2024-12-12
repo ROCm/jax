@@ -43,7 +43,7 @@ def get_manylinux_image_name(rocm_version, rocm_build_job, rocm_build_num):
 
 
 def create_manylinux_build_image(rocm_version, rocm_build_job, rocm_build_num):
-    image_name = get_manylinux_image_name
+    image_name = get_manylinux_image_name(rocm_version, rocm_build_job, rocm_build_num)
     cmd = [
         "docker",
         "build",
