@@ -10,6 +10,10 @@ on:
     branches:
       - rocm-main
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-jax-in-docker: # strategy and matrix come here 
     runs-on:  mi-250
