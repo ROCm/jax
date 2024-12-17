@@ -34,11 +34,6 @@ jobs:
           ls
       - name: Print system info
         run: |
-          echo "Checking _work/jax"
-          ls /var/lib/github-runner/_work/jax
-          echo "Checking _work/jax/jax"
-          ls /var/lib/github-runner/_work/jax/jax
-          echo "Printing env..."
           whoami
           printenv
           rocm-smi
