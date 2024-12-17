@@ -23,7 +23,6 @@ jobs:
       - name: Print system info
         run: |
           ls
-          rm -rf *
           printenv
           rocm-smi
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
