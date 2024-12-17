@@ -22,7 +22,10 @@ jobs:
     steps:
       - name: Clean up old runs
         run: |
+          ls
+          echo "Removing old workdirs..."
           rm -rf workdir_*
+          ls
       - name: Print system info
         run: |
           echo "Checking _work/jax"
