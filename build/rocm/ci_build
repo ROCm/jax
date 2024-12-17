@@ -27,6 +27,9 @@ import subprocess
 import sys
 
 
+LOG = logging.getLogger("ci_build")
+
+
 def image_by_name(name):
     cmd = ["docker", "images", "-q", "-f", "reference=%s" % name]
     out = subprocess.check_output(cmd)
@@ -307,7 +310,6 @@ def parse_args():
 
 def main():
     logging.basicConfig(level=logging.INFO)
-    LOG = logging.getLogger("ci_build")
     args = parse_args()
 
     if args.action == "dist_wheels":
