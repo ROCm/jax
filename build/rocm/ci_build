@@ -27,10 +27,6 @@ import subprocess
 import sys
 
 
-logging.basicConfig(level=logging.INFO)
-LOG = logging.getLogger("ci_build")
-
-
 def image_by_name(name):
     cmd = ["docker", "images", "-q", "-f", "reference=%s" % name]
     out = subprocess.check_output(cmd)
@@ -97,9 +93,6 @@ def dist_wheels(
 
     cmd = ["docker", "run"]
 
-    own_path = os.path.dirname(os.path.abspath(__file__))
-    repo_path = os.path.abspath(os.path.join(own_path, "..",".."))
-    whl_path = os.path.join(repo_path, "wheelhouse")
     mounts = [
         "-v",
         os.path.abspath("./") + ":/jax",
@@ -232,8 +225,6 @@ def test(image_name):
 
     # NOTE(mrodden): we need jax source dir for the unit test code only,
     # JAX and jaxlib are already installed from wheels
-    own_path = os.path.dirname(os.path.abspath(__file__))
-    repo_path = os.path.abspath(os.path.join(own_path, "..",".."))
     mounts = [
         "-v",
         os.path.abspath("./") + ":/jax",
@@ -315,6 +306,8 @@ def parse_args():
 
 
 def main():
+    logging.basicConfig(level=logging.INFO)
+    LOG = logging.getLogger("ci_build")
     args = parse_args()
 
     if args.action == "dist_wheels":

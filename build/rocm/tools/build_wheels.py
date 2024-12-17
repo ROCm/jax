@@ -306,18 +306,16 @@ def main():
             LOG.info("Copying %s into %s" % (whl, wheelhouse_dir))
             shutil.copy(whl, wheelhouse_dir)
 
-    # delete the 'dist' directory since it causes permissions issues
+    # Delete the 'dist' directory since it causes permissions issues
     logging.info('Deleting dist, egg-info and cache directory')
     shutil.rmtree(os.path.join(args.jax_path, "dist"))
     shutil.rmtree(os.path.join(args.jax_path, "jax.egg-info"))
     shutil.rmtree(os.path.join(args.jax_path, "jax", "__pycache__"))
 
-    # make the wheels delete-abl by the runner
+    # Make the wheels deleteable by the runner
     whl_house = os.path.join(args.jax_path, "wheelhouse")
-    logging.info(f'Changing permissions for {whl_house}')
-    mode = (stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR |
-            stat.S_IRGRP | stat.S_IWGRP | stat.S_IXGRP |
-            stat.S_IROTH | stat.S_IWOTH | stat.S_IXOTH )
+    logging.info("Changing permissions for %s" % whl_house)
+    mode = 0o777
     for item in os.listdir(whl_house):
         whl_path = os.path.join(whl_house, item)
         if os.path.isfile(whl_path):
