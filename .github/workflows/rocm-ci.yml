@@ -18,8 +18,11 @@ jobs:
       TEST_IMAGE: ubuntu-jax-${{ github.run_id }}_${{ github.run_number }}_${{ github.run_attempt }}
       PYTHON_VERSION: "3.10"
       ROCM_VERSION: "6.2.4"
-      WORKSPACE_DIR: ${{ github.run_id }}_${{ github.run_number }}_${{ github.run_attempt }}
+      WORKSPACE_DIR: workdir_${{ github.run_id }}_${{ github.run_number }}_${{ github.run_attempt }}
     steps:
+      - name: Clean up old runs
+        run: |
+          rm -rf $WORKSPACE_DIR
       - name: Print system info
         run: |
           echo "Checking _work/jax"
@@ -27,6 +30,7 @@ jobs:
           echo "Checking _work/jax/jax"
           ls /var/lib/github-runner/_work/jax/jax
           echo "Printing env..."
+          whoami
           printenv
           rocm-smi
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
