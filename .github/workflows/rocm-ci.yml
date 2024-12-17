@@ -26,7 +26,8 @@ jobs:
     steps:
       - name: Clean up old runs
         run: |
-          ls
+          whoami
+          ls -la workdir_12381465738_74_1/build/tools/__pycache__/
           echo "Removing old workdirs..."
           rm -rf workdir_*
           ls
