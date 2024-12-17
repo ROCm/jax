@@ -26,9 +26,10 @@ jobs:
     steps:
       - name: Clean up old runs
         run: |
-          whoami
-          ls -la workdir_12381465738_74_1/build/tools/__pycache__/
-          echo "Removing old workdirs..."
+          ls
+          # Make sure that we own all of the files so that we have permissions to delete them
+          docker run -v "./:/jax" ubuntu /bin/bash -c "chown -R $UID /jax/workdir_*"
+          # Remove any old work directories from this machine
           rm -rf workdir_*
           ls
       - name: Print system info
