@@ -29,7 +29,6 @@ import re
 import select
 import subprocess
 import shutil
-import stat
 import sys
 
 
@@ -315,7 +314,7 @@ def main():
     # Make the wheels deleteable by the runner
     whl_house = os.path.join(args.jax_path, "wheelhouse")
     logging.info("Changing permissions for %s" % whl_house)
-    mode = 0o777
+    mode = 0o664
     for item in os.listdir(whl_house):
         whl_path = os.path.join(whl_house, item)
         if os.path.isfile(whl_path):
