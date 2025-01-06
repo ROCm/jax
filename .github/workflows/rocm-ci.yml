@@ -28,7 +28,7 @@ jobs:
         run: |
           ls
           # Make sure that we own all of the files so that we have permissions to delete them
-          docker run -v "./:/jax" ubuntu /bin/bash -c "chown -R $UID /jax/workdir_*"
+          docker run -v "./:/jax" ubuntu /bin/bash -c "chown -R $UID /jax/workdir_* || true"
           # Remove any old work directories from this machine
           rm -rf workdir_*
           ls
