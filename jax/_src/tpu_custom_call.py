@@ -83,6 +83,7 @@ class MemorySpace(enum.Enum):
   HBM = enum.auto()
   VMEM = enum.auto()
   SEMAPHORE_MEM = enum.auto()
+  SMEM = enum.auto()
 
   @property
   def color(self) -> int:
@@ -92,6 +93,8 @@ class MemorySpace(enum.Enum):
       return 1
     elif self == MemorySpace.SEMAPHORE_MEM:
       return 2
+    elif self == MemorySpace.SMEM:
+      return 4
     else:
       raise ValueError("invalid memory space: " + str(self))
 
@@ -381,6 +384,17 @@ def _lower_tpu_kernel(
     pipeline = PassManager.parse(f"builtin.module({','.join(pipeline)})")
     pipeline.run(module.operation)
     dump_mlir(module, "post-infer-vector-layout")
+
+    pipeline = [
+        (
+            "func.func(tpu-relayout-insertion{"
+            f" sublane-count={sl_cnt} lane-count={l_cnt}"
+            "})"
+        ),
+    ]
+    pipeline = PassManager.parse(f"builtin.module({','.join(pipeline)})")
+    pipeline.run(module.operation)
+    dump_mlir(module, "post-relayout-insertion")
 
     mxu_size = 128 if hardware_generation < 6 else 256
     pipeline = [

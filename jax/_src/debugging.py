@@ -46,7 +46,6 @@ from jax._src.lib.mlir import ir
 from jax._src.lib.mlir.dialects import hlo
 from jax._src.sharding import Sharding
 from jax._src.sharding_impls import NamedSharding, parse_flatten_op_sharding
-from jax._src.api_util import shaped_abstractify
 from jax._src.state import discharge as state_discharge
 
 logger = logging.getLogger(__name__)
@@ -260,7 +259,7 @@ def debug_callback(callback: Callable[..., None], *args: Any,
   static_args, dyn_args = {}, []
   for i, a in enumerate(flat_args):
     try:
-      shaped_abstractify(a)
+      core.shaped_abstractify(a)
       dyn_args.append(a)
     except (AssertionError, TypeError):
       static_args[i] = a
@@ -301,8 +300,9 @@ class _DebugPrintFormatChecker(string.Formatter):
 
 formatter = _DebugPrintFormatChecker()
 
-def _format_print_callback(fmt: str, *args, **kwargs):
-  sys.stdout.write(fmt.format(*args, **kwargs) + "\n")
+def _format_print_callback(fmt: str, np_printoptions, *args, **kwargs):
+  with np.printoptions(**np_printoptions):
+    sys.stdout.write(fmt.format(*args, **kwargs) + "\n")
 
 def debug_print(fmt: str, *args, ordered: bool = False, **kwargs) -> None:
   """Prints values and works in staged out JAX functions.
@@ -339,8 +339,8 @@ def debug_print(fmt: str, *args, ordered: bool = False, **kwargs) -> None:
   # Check that we provide the correct arguments to be formatted.
   formatter.format(fmt, *args, **kwargs)
 
-  debug_callback(functools.partial(_format_print_callback, fmt), *args,
-                 **kwargs, ordered=ordered)
+  debug_callback(functools.partial(_format_print_callback, fmt, np.get_printoptions()),
+                 *args, **kwargs, ordered=ordered)
 
 
 # Sharding visualization

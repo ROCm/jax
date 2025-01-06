@@ -36,24 +36,28 @@ from jaxlib.mlir.dialects import scf
 from jaxlib.mlir.dialects import vector
 import numpy as np
 
+from jax._src.lib import mosaic_gpu_dialect as dialect  # noqa: F401
+
 # mypy: ignore-errors
 
 WARPGROUP_SIZE: int = 128
 DYNAMIC = -9223372036854775808
 DYNAMIC32 = -2147483648
+MBARRIER_BYTES = 8
 
 # pylint: disable=line-too-long, wildcard-import, missing-function-docstring, bad-continuation, g-bad-todo, protected-access, g-explicit-length-test, missing-class-docstring, g-doc-return-or-yield, g-inconsistent-quotes
 
 
-def ptr_as_memref(ptr, memref_ty: ir.MemRefType):
+def ptr_as_memref(ptr, memref_ty: ir.MemRefType, ptr_memory_space: int | None = None):
   i64 = ir.IntegerType.get_signless(64)
   rank = len(memref_ty.shape)
+  ptr_ty = "ptr" if ptr_memory_space is None else f"ptr<{ptr_memory_space}>"
   if rank > 0:
     desc_ty = ir.Type.parse(
-        f"!llvm.struct<(ptr, ptr, i64, array<{rank} x i64>, array<{rank} x i64>)>"
+        f"!llvm.struct<({ptr_ty}, {ptr_ty}, i64, array<{rank} x i64>, array<{rank} x i64>)>"
     )
   else:
-    desc_ty = ir.Type.parse("!llvm.struct<(ptr, ptr, i64)>")
+    desc_ty = ir.Type.parse(f"!llvm.struct<({ptr_ty}, {ptr_ty}, i64)>")
   desc = llvm.UndefOp(desc_ty)
   desc = llvm.InsertValueOp(desc, ptr, [0])  # Allocation
   desc = llvm.InsertValueOp(desc, ptr, [1])  # Aligned Base
@@ -321,6 +325,8 @@ def bytewidth(ty: ir.Type):
     return ir.IntegerType(ty).width // 8
   if ir.FloatType.isinstance(ty):
     return ir.FloatType(ty).width // 8
+  if dialect is not None and ir.Type.parse("!mosaic_gpu.barrier"):
+    return MBARRIER_BYTES
   raise NotImplementedError(ty)
 
 
@@ -328,6 +334,12 @@ def bytewidth(ty: ir.Type):
 class DynamicSlice:
   base: ir.Value | int
   length: int
+
+  def __post_init__(self):
+    if isinstance(self.base, int) and self.base < 0:
+      raise ValueError(f"base must be non-negative, got {self.base}")
+    if self.length < 0:
+      raise ValueError(f"length must be non-negative, got {self.length}")
 
 
 ds = DynamicSlice
@@ -569,7 +581,7 @@ def memref_transpose(ref: ir.Value, permutation: Sequence[int]) -> ir.Value:
 
 
 def parse_indices(
-    index, shape: tuple[int, ...]
+    index, shape: tuple[int, ...], *, check_oob: bool = True
 ) -> tuple[list[ir.Value | int], list[int], list[bool]]:
   if not isinstance(index, tuple):
     index = (index,)
@@ -578,20 +590,42 @@ def parse_indices(
   base_indices = []
   slice_shape = []
   is_squeezed = []
-  for idx, bound in zip(index, shape):
+  for axis, (idx, bound) in enumerate(zip(index, shape)):
     if isinstance(idx, (ir.Operation, ir.OpView)):
       idx = idx.result
     if isinstance(idx, int):
-      base_indices.append(idx)
+      if check_oob and (idx >= bound or (idx < 0 and -idx > bound)):
+        raise IndexError(
+            f"Index {idx} along axis {axis} is out of bounds for shape {shape}"
+        )
+      base_indices.append(idx if idx >= 0 else bound + idx)
       slice_shape.append(1)
       is_squeezed.append(True)
     elif isinstance(idx, slice):
       if idx.step is not None and idx.step != 1:
         raise NotImplementedError("Strided slices not implemented")
-      base_indices.append(idx.start or 0)
-      slice_shape.append((idx.stop or bound) - (idx.start or 0))
+      start = idx.start or 0
+      if start < 0:
+        start = bound + start
+      stop = idx.stop or bound
+      if stop < 0:
+        stop = bound + stop
+      if check_oob and (
+          start < 0 or start >= bound or stop < 0 or stop > bound
+      ):
+        raise IndexError(
+            f"Slice {idx} along axis {axis} is out of bounds for shape {shape}"
+        )
+      base_indices.append(start)
+      slice_shape.append(stop - start)
       is_squeezed.append(False)
     elif isinstance(idx, DynamicSlice):
+      if check_oob and (
+          isinstance(idx.base, int) and idx.base + idx.length > bound
+      ):
+        raise IndexError(
+            f"Slice {idx} along axis {axis} is out of bounds for shape {shape}"
+        )
       base_indices.append(idx.base)
       slice_shape.append(idx.length)
       is_squeezed.append(False)
@@ -713,6 +747,18 @@ class BarrierRef:
     DYNAMIC32 = -2147483648
     return llvm.getelementptr(
         ptr, self.base_address, [self.offset], [DYNAMIC32], i64
+    )
+
+  def as_dialect_barrier(self) -> ir.Value:
+    if self.num_barriers > 1:
+      raise NotImplementedError(
+          f"Only BarrierRef with num_barriers=1 is suppored in the MLIR "
+          f"Mosaic GPU dialect, but got num_barriers={self.num_barriers}"
+      )
+    return ptr_as_memref(
+        self.base_address,
+        ir.MemRefType.get((), ir.Type.parse("!mosaic_gpu.barrier")),
+        ptr_memory_space=3,
     )
 
 
@@ -969,19 +1015,21 @@ def warp_tree_reduce(value, op, group_size):
 def memref_ptr(memref_arg, memory_space=None):
   i64 = ir.IntegerType.get_signless(64)
   memref_ty = ir.MemRefType(memref_arg.type)
-  if len(memref_ty.shape) == 0:
-    raise NotImplementedError
-  elem_bytewidth = bytewidth(memref_ty.element_type)
   rank = len(memref_ty.shape)
   # TODO: Read out memory space from memref
   space = "" if memory_space is None else "<" + str(memory_space) + ">"
   ptr_ty = ir.Type.parse("!llvm.ptr" + space)
-  desc_ty = ir.Type.parse(
-      f"!llvm.struct<({ptr_ty}, {ptr_ty}, i64, array<{rank} x i64>,"
-      f" array<{rank} x i64>)>"
-  )
+  if rank == 0:
+    desc_ty = ir.Type.parse(f"!llvm.struct<({ptr_ty}, {ptr_ty}, i64)>")
+  else:
+    desc_ty = ir.Type.parse(
+        f"!llvm.struct<({ptr_ty}, {ptr_ty}, i64, array<{rank} x i64>,"
+        f" array<{rank} x i64>)>"
+    )
   desc = builtin.UnrealizedConversionCastOp([desc_ty], [memref_arg])
   aligned_ptr = llvm.extractvalue(ptr_ty, desc, [1])
+
+  elem_bytewidth = bytewidth(memref_ty.element_type)
   offset_elems = llvm.extractvalue(i64, desc, [2])
   offset_bytes = llvm.mul(
       offset_elems,

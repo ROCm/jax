@@ -241,7 +241,7 @@ def ir_constant(x, mlir_type=None):
       x = np.array(x, np.float32)
   if not mlir_type:
     mlir_type = _dtype_to_ir_type(x.dtype)
-  if isinstance(x, int) or x.dtype in (np.int32, np.uint32, np.int8):
+  if isinstance(x, int) or np.issubdtype(x.dtype, np.integer):
     return arith.constant(mlir_type, ir.IntegerAttr.get(mlir_type, int(x)))
   elif isinstance(x, float) or x.dtype == np.float32:
     return arith.constant(mlir_type, ir.FloatAttr.get(mlir_type, float(x)))
@@ -547,9 +547,13 @@ def lower_jaxpr_to_module(
   module_name = name_and_src_info.name
   attrs["sym_name"] = ir.StringAttr.get(module_name)
   sym_tab = ir.SymbolTable(m.operation)
+
   func_op = lower_jaxpr_to_func(
-      ctx, jaxpr, mosaic_grid_mapping=mosaic_grid_mapping,
-      name="main", for_verification=for_verification,
+      ctx,
+      jaxpr,
+      mosaic_grid_mapping=mosaic_grid_mapping,
+      name="main",
+      for_verification=for_verification,
   )
   m.body.append(func_op)
   sym_tab.insert(func_op)
@@ -568,6 +572,7 @@ def lower_jaxpr_to_module(
         # We checked above that the block does not require windowing.
         window_params.append(ir.DictAttr.get())
         continue
+
       mlir_func = lower_jaxpr_to_transform_func(
           ctx,
           bm.index_map_jaxpr.jaxpr,
@@ -1458,11 +1463,15 @@ def reduce_lowering_rule(reduce_fn, type_to_kind, type_to_identity):
     if jnp.issubdtype(x_aval.dtype, jnp.floating):
       kind = type_to_kind[jnp.floating]
       val = type_to_identity[jnp.floating]
-      val = ir.FloatAttr.get(ir.F32Type.get(), val)
-    elif jnp.issubdtype(x_aval.dtype, jnp.signedinteger):
-      raise NotImplementedError("Reductions over integers not implemented.")
+      val = ir.FloatAttr.get(aval_to_ir_type(x_aval, shape=()), val)
+    elif x_aval.dtype == jnp.int32:
+      kind = type_to_kind[jnp.signedinteger]
+      val = type_to_identity[jnp.signedinteger]
+      val = ir.IntegerAttr.get(ir.IntegerType.get_signless(32), val)
     elif jnp.issubdtype(x_aval.dtype, jnp.unsignedinteger):
-      raise NotImplementedError("Reductions over integers not implemented.")
+      raise NotImplementedError(
+          "Reductions over unsigned integers not implemented."
+      )
     else:
       raise NotImplementedError(
           f"Reductions over {x_aval.dtype} not implemented.")
@@ -1699,9 +1708,9 @@ def _dot_general_lowering_rule(
           list(bcast_shape), _dtype_to_ir_type(ctx.avals_out[0].dtype)
       )
       if ctx.avals_in[0].shape != bcast_shape:
-        x = vector.BroadcastOp(bcast_shape, x)
+        x = vector.broadcast(bcast_shape, x)
       if ctx.avals_in[1].shape != bcast_shape:
-        y = vector.BroadcastOp(bcast_shape, y)
+        y = vector.broadcast(bcast_shape, y)
     red_type = aval_to_ir_type(lhs_aval.update(shape=(lhs_aval.shape[0],)))
     acc = arith.ConstantOp(
         red_type, ir.DenseElementsAttr.get_splat(red_type, val)
@@ -1901,6 +1910,27 @@ def _concatenate_lowering_rule(ctx: LoweringRuleContext, *xs, dimension):
 lowering_rules[lax.concatenate_p] = _concatenate_lowering_rule
 
 
+def _split_lowering_rule(
+    ctx: LoweringRuleContext, x, *, sizes, axis
+):
+  (x_aval,) = ctx.avals_in
+  slice_size = np.array(x_aval.shape, dtype=np.int64)
+  starts = np.zeros_like(slice_size)
+  strides = np.ones_like(slice_size)
+  outs = []
+  for size, aval_out in zip(sizes, ctx.avals_out):
+    slice_size[axis] = size
+    outs.append(
+        vector.extract_strided_slice(
+            aval_to_ir_type(aval_out), x, starts, slice_size, strides
+        )
+    )
+    starts[axis] += size
+  return outs
+
+lowering_rules[lax.split_p] = _split_lowering_rule
+
+
 def _iota_lowering_rule(ctx: LoweringRuleContext, dtype, shape, dimension,
                         sharding):
   out_type = aval_to_ir_type(ctx.avals_out[0])
@@ -1942,10 +1972,10 @@ def _bcast(x, y, x_aval, y_aval, out_aval):
   out_shape = list(out_aval.shape)
   if x_aval.shape != out_aval.shape:
     x_ty = ir.VectorType.get(out_shape, _dtype_to_ir_type(x_dtype))
-    x = vector.BroadcastOp(x_ty, x)
+    x = vector.broadcast(x_ty, x)
   if y_aval.shape != out_aval.shape:
     y_ty = ir.VectorType.get(out_shape, _dtype_to_ir_type(y_dtype))
-    y = vector.BroadcastOp(y_ty, y)
+    y = vector.broadcast(y_ty, y)
   return x, y
 
 
@@ -1963,6 +1993,36 @@ lowering_rules[lax.add_p] = _add_lowering_rule
 skip_mlir_conversions.add(lax.add_p)
 lowering_rules[ad_util.add_any_p] = _add_lowering_rule
 skip_mlir_conversions.add(ad_util.add_any_p)
+
+
+class FoldingError(Exception):
+  pass
+
+
+def _fold_and_get_constant_value(x):
+  def _fold(x, fuel):
+    if fuel <= 0:
+      raise FoldingError("Folding depth exceeded")
+    op_name = getattr(x.owner, "name", None)
+    binop_folds = {
+        "arith.maxsi": max,
+        "arith.minsi": min,
+    }
+    if op_name == "arith.constant":
+      if ir.IntegerType.isinstance(x.type):
+        return ir.IntegerAttr(x.owner.attributes["value"]).value
+      elif ir.FloatType.isinstance(x.type):
+        return ir.FloatAttr(x.owner.attributes["value"]).value
+      else:
+        raise ValueError(f"Unsupported constant type: {x.type}")
+    if op_name in binop_folds:
+      return binop_folds[op_name](_fold(v, fuel - 1) for v in x.owner.operands)
+    raise FoldingError(f"Folding not supported for {x.owner}")
+
+  try:
+    return _fold(x, 10)
+  except FoldingError:
+    return None
 
 
 def _max_lowering_rule(ctx: LoweringRuleContext, x, y):
@@ -2157,8 +2217,10 @@ lowering_rules[lax.integer_pow_p] = _integer_pow_lowering_rule
 def _exp2_lowering_rule(ctx: LoweringRuleContext, x):
   # exp2 in JAX lowers to exp(ln2 * x), not to pow2. We match that behavior
   # here.
-  return lower_fun(lambda x: jnp.exp(np.log(2) * x), multiple_results=False)(
-      ctx, x)
+  return lower_fun(
+      lambda x: jnp.exp(jnp.astype(np.log(2), x.dtype) * x),
+      multiple_results=False,
+  )(ctx, x)
 
 
 lowering_rules[lax.exp2_p] = _exp2_lowering_rule
@@ -2173,7 +2235,7 @@ def _logistic_lowering_rule(ctx: LoweringRuleContext, x):
   if aval_out.shape == ():
     one = ir_constant(1.0, mlir_type=out_type)
   else:
-    one = vector.BroadcastOp(out_type, ir_constant(1.0))
+    one = vector.broadcast(out_type, ir_constant(1.0))
   denom = arith.addf(one, exp_neg_x)
   return arith.divf(one, denom)
 
@@ -2681,6 +2743,12 @@ lowering_rules[lax.while_p] = _while_lowering_rule
 
 def _cond_lowering_rule(ctx: LoweringRuleContext, *args, branches):
   index, *args = args
+  constant_index = _fold_and_get_constant_value(index)
+
+  if constant_index is not None:
+    return jaxpr_subcomp(
+        ctx.lowering_context.replace(block_shapes=ctx.block_shapes[1:]), branches[constant_index].jaxpr, *args
+    )
   out_types = map(aval_to_ir_type, ctx.avals_out)
   pred = arith.cmpi(
       arith.CmpIPredicate.ne, index, ir_constant(0, index.type)
@@ -3309,10 +3377,7 @@ def _pad_lowering_rule(ctx: LoweringRuleContext, *args, **kwargs):
       )
 
       if isinstance(padding_value, ir.OpResult):
-        pad = vector.BroadcastOp(
-            pad_vec_type,
-            padding_value,
-        ).result
+        pad = vector.broadcast(pad_vec_type, padding_value)
       else:
         scalar_attr = ir.FloatAttr.get(operand.type.element_type, padding_value)
         pad = arith.ConstantOp(
@@ -3351,3 +3416,25 @@ def _pad_lowering_rule(ctx: LoweringRuleContext, *args, **kwargs):
 
 
 lowering_rules[lax.pad_p] = _pad_lowering_rule
+
+
+def _platform_index_lowering(
+    ctx: mlir.LoweringRuleContext,
+    *,
+    platforms: Sequence[Sequence[str]],
+    has_default: bool,
+):
+  for i, ps in enumerate(platforms):
+    # note - slightly odd structure here, as platforms is a seq[seq[str]]
+    if "mosaic" in ps:
+      return ir_constant(i)
+
+  if has_default:
+    return ir_constant(len(platforms))
+
+  raise NotImplementedError(
+      "No mosaic or default platform indexing rule found."
+  )
+
+
+lowering_rules[jax._src.lax.control_flow.platform_index_p] = _platform_index_lowering

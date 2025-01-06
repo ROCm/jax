@@ -90,6 +90,17 @@ def build_jaxlib_wheel(
     jax_path, rocm_path, python_version, xla_path=None, compiler="gcc"
 ):
     use_clang = "true" if compiler == "clang" else "false"
+
+    # Avoid git warning by setting safe.directory.
+    try:
+        subprocess.run(
+            ["git", "config", "--global", "--add", "safe.directory", "*"],
+            check=True,
+        )
+    except subprocess.CalledProcessError as e:
+        print(f"Failed to configure Git safe directory: {e}")
+        raise
+
     cmd = [
         "python",
         "build/build.py",

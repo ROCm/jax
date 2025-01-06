@@ -363,20 +363,29 @@ def TPU_BroadcastInSublanesOp : TPU_Op<"broadcast_in_sublanes", [Pure]> {
 def TPU_UnpackSubelementsOp : TPU_Op<"unpack_subelements", [Pure]> {
   let arguments = (ins
     AnyVectorOfNonZeroRank:$source,
-    I32Attr:$index
+    I32Attr:$index,
+    TPU_PackFormatEnum:$pack_format
   );
   let results = (outs AnyVectorOfNonZeroRank:$output);
   let assemblyFormat = [{ $source `,` $index attr-dict `:` type($source) `->` type($output) }];
 }
 
 // Integer packs are always signed at the moment.
-def TPU_PackSubelementsOp : TPU_Op<"pack_subelements", [Pure]> {
+def TPU_PackSubelementsOp : TPU_Op<"pack_subelements", [Pure, SameTypeOperands]> {
   let arguments = (ins
-    Variadic<AnyVectorOfNonZeroRank>:$sources,
+    Variadic<TPU_Vreg>:$sources,
+    DenseI32ArrayAttr:$positions,
     TPU_PackFormatEnum:$pack_format
   );
-  let results = (outs AnyVectorOfNonZeroRank:$output);
+  let results = (outs TPU_Vreg:$output);
   let assemblyFormat = [{ $sources attr-dict `:` type($sources) `->` type($output) }];
+  let builders = [
+    OpBuilder<(ins "::mlir::VectorType":$output_type, "::mlir::ArrayRef<::mlir::Value>":$padded_sources, "::mlir::tpu::PackFormat":$pack_format)>,
+  ];
+  let extraClassDeclaration = [{
+    static ::mlir::SmallVector<::mlir::Value> getPaddedSources(::mlir::ValueRange sources, ::mlir::ArrayRef<int32_t> positions, int packing_factor);
+  }];
+  let hasVerifier = 1;
 }
 
 def TPU_GatherOp : TPU_Op<"gather", [Pure]> {
@@ -837,6 +846,19 @@ def InferVectorLayoutPass : Pass<"tpu-infer-vector-layout", "::mlir::func::FuncO
     "::mlir::tpu::TPUDialect",
   ];
   let constructor = "::mlir::tpu::createInferVectorLayoutPass()";
+  let options = [
+    Option<"lane_count", "lane-count", "int", /*default=*/"128", "">,
+    Option<"sublane_count", "sublane-count", "int", /*default=*/"8", "">,
+  ];
+}
+
+def RelayoutInsertionPass : Pass<"tpu-relayout-insertion", "::mlir::func::FuncOp"> {
+  let dependentDialects = [
+    "::mlir::arith::ArithDialect",
+    "::mlir::func::FuncDialect",
+    "::mlir::tpu::TPUDialect",
+  ];
+  let constructor = "::mlir::tpu::createRelayoutInsertionPass()";
   let options = [
     Option<"lane_count", "lane-count", "int", /*default=*/"128", "">,
     Option<"sublane_count", "sublane-count", "int", /*default=*/"8", "">,

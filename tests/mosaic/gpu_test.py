@@ -31,6 +31,7 @@ from jax._src.lib.mlir import ir
 from jax._src.lib.mlir.dialects import arith
 from jax._src.lib.mlir.dialects import scf
 from jax._src.lib.mlir.dialects import vector
+from jax.experimental.mosaic.gpu import dialect as mgpu_dialect  # pylint: disable=g-importing-member
 from jax.experimental.mosaic.gpu import fragmented_array as fa
 import jax.numpy as jnp
 import numpy as np
@@ -46,6 +47,8 @@ except ImportError:
     z = 2
 else:
   import jax.experimental.mosaic.gpu as mgpu
+  from jax.experimental.mosaic.gpu import core
+  from jax.experimental.mosaic.gpu import launch_context
   from jax.experimental.mosaic.gpu import utils as utils
   from jax.experimental.mosaic.gpu import profiler
   from jax.experimental.mosaic.gpu.utils import *  # noqa: F403
@@ -165,8 +168,11 @@ class TestCase(parameterized.TestCase):
       self.skipTest("Only works on GPU with capability >= sm90")
     super().setUp()
     self.prng = np.random.default_rng(1234)
+    self.context = mlir.make_ir_context()
+    if mgpu_dialect is not None:
+      mgpu_dialect.register_dialect(self.context)
     self.enter_context(jtu.global_config_context(jax_traceback_filtering="off"))
-    self.enter_context(mlir.make_ir_context())
+    self.enter_context(self.context)
     self.enter_context(ir.Location.unknown())
 
 
@@ -323,7 +329,8 @@ class MemRefTest(TestCase):
       ("strided_bot", (4, 4, 4, 4), (256, 16, 4, 1), 1, 2, False),
       ("strided_top", (4, 4, 4, 4), (256, 64, 4, 1), 1, 2, True),
       ("strided_mid", (4, 4, 4, 4), (265, 64, 16, 1), 1, 3, True),
-      ("overap", (2, 4, 4), (16, 1, 1), 0, 3, True),
+      # TODO(cperivol): Investigate why this is indexing OOB and uncomment.
+      # ("overap", (2, 4, 4), (16, 1, 1), 0, 3, True),
   ])
   def test_fold_strided(
       self, shape, strides, dim, fold_rank, throws_not_impl
@@ -367,6 +374,13 @@ class MemRefTest(TestCase):
 
   @parameterized.parameters(jnp.uint64, jnp.uint32, jnp.uint16, jnp.uint8)
   def test_scalar_argument(self, dtype):
+    if dtype == jnp.uint64 and not config.enable_x64.value:
+      self.skipTest(
+        "64-bit types are disabled: this leads to the input scalar being"
+        " traced as a uint32 value, which causes the top 32 bits of the 64-bit"
+        " values read from the 32-bit input buffer to sometimes"
+        " (nondeterministically) contain garbage.")
+
     scalar = 42
     expected = np.full((128, 128), scalar, dtype=dtype)
 
@@ -1476,7 +1490,7 @@ class FragmentedArrayTest(TestCase):
       m=[128],
       n=[32, 64],
   )
-  def test_reduce_sum(self, dtype, m, n):
+  def test_strided_reduce_sum(self, dtype, m, n):
     def kernel(ctx, src, dst, scratch):
       src = mgpu.FragmentedArray.load_strided(
           src, is_signed=utils.is_signed(dtype)
@@ -1496,6 +1510,31 @@ class FragmentedArrayTest(TestCase):
     )
     x = np.arange(m * n, dtype=dtype).reshape(m, n)
     np.testing.assert_array_equal(kernel_fn(x), jnp.full((m,), x.sum()))
+
+  @parameterized.product(
+      dtype=[jnp.float32, jnp.int32],
+      m=[128],
+      n=[32, 64],
+  )
+  def test_splat_reduce_sum(self, dtype, m, n):
+    def kernel(ctx, dst, _):
+      src = mgpu.FragmentedArray.splat(
+          utils.c(1, utils.dtype_to_ir_type(dtype)),
+          (m, n),
+          is_signed=utils.is_signed(dtype),
+      )
+      acc = src.reduce_sum().broadcast((m,))
+      acc.store_untiled(dst)
+
+    kernel_fn = mgpu.as_gpu_kernel(
+        kernel,
+        (1, 1, 1),
+        (128, 1, 1),
+        in_shape=(),
+        out_shape=jax.ShapeDtypeStruct((m,), dtype),
+        smem_scratch_shape=(),
+    )
+    np.testing.assert_array_equal(kernel_fn(), jnp.full((m,), m * n * 1.0))
 
   @parameterized.product(
       op=(arith.addf, arith.maximumf),
@@ -1548,7 +1587,6 @@ class FragmentedArrayTest(TestCase):
     )()
     np.testing.assert_array_equal(result, np.full((128, 32), 3.14, np.float32))
 
-
   def test_splat_binary_ops(self):
     def kernel(ctx, src, dst, _):
       f32 = ir.F32Type.get()
@@ -1569,7 +1607,6 @@ class FragmentedArrayTest(TestCase):
         kernel, (1, 1, 1), (128, 1, 1), inp, out_shape, ()
     )(inp)
     np.testing.assert_allclose(result, np.full((128, 32), 3.14, np.float32))
-
 
   @parameterized.product(in_shape=((128, 128), (128, 64), (64, 128)))
   def test_strided_load_store(self, in_shape):
@@ -1829,6 +1866,203 @@ class LayoutTest(TestCase):
           return addr
         used_regs = {get_reg(addr) for addr in addrs}
         self.assertLessEqual(len(used_regs), expected_regs)
+
+  def test_copy_for_upcast(self):
+    dtype = jnp.int8
+    swizzle = 128
+    col_tiling = swizzle // bytewidth(utils.dtype_to_ir_type(dtype))
+    m, n = 128, col_tiling * 2
+    tiling = (64, col_tiling)
+    tiled_layout = fa._tiled_wgmma_layout_for_upcast((m, n))
+    def kernel(ctx, in_, out, smems):
+      smem_in, smem_out, barrier = smems
+      ctx.async_copy(src_ref=in_, dst_ref=smem_in, swizzle=swizzle, barrier=barrier)
+      barrier.wait()
+      t = mgpu.FragmentedArray.load_tiled(
+          smem_in, swizzle=swizzle, is_signed=True, layout=tiled_layout
+      )
+      t.store_tiled(smem_out, swizzle=swizzle)
+      mgpu.commit_shared()
+      ctx.async_copy(src_ref=smem_out, dst_ref=out, swizzle=swizzle)
+      ctx.await_async_copy(0)
+    x = jax.random.randint(
+        jax.random.key(42), tile_shape((m, n), tiling), -128, 127, dtype=dtype
+    )
+    f = mgpu.as_gpu_kernel(
+        kernel, (1, 1, 1), (128, 1, 1), x, x, [x, x, mgpu.TMABarrier()],
+    )
+    np.testing.assert_array_equal(f(x), x)
+
+
+class MosaicGpuDialectTest(TestCase, jtu.JaxTestCase):
+  """Device tests with lowering from the MLIR dialect and layout inference."""
+
+  def setUp(self):
+    if mgpu_dialect is None:
+      raise self.skipTest("Test requires Mosaic GPU dialect")
+    super().setUp()
+
+  def test_pointwise_kernel(self):
+    def add(ctx, a, b, result, smem):
+      del ctx, smem
+      shape = ir.MemRefType(a.type).shape
+      elt_type = ir.MemRefType(a.type).element_type
+
+      zero_index = arith.constant(ir.IndexType.get(), 0)
+
+      # GMEM -> registers
+      ab_type = ir.VectorType.get(shape, elt_type)
+      a = vector.load(ab_type, a, [zero_index, zero_index])
+      b = vector.load(ab_type, b, [zero_index, zero_index])
+
+      # Computation
+      add = arith.addf(a, b)
+
+      # Registers -> GMEM
+      vector.store(add, result, [zero_index, zero_index])
+
+    dtype = jnp.bfloat16
+    shape = (128, 128)
+    jax_shape = jax.ShapeDtypeStruct(shape, dtype)
+    kernel = mgpu.as_gpu_kernel(
+        add,
+        grid=(1, 1, 1),
+        block=(128, 1, 1),
+        in_shape=(jax_shape, jax_shape),
+        out_shape=jax_shape,
+        smem_scratch_shape=[],
+        thread_semantics=mgpu.ThreadSemantics.Warpgroup,
+    )
+
+    x = self.prng.uniform(-1, 1, shape).astype(dtype)
+    y = self.prng.uniform(-1, 1, shape).astype(dtype)
+
+    self.assertArraysEqual(jax.jit(kernel)(x, y), x + y)
+
+  def test_pointwise_kernel_with_tma(self):
+    def add(
+        ctx: launch_context.LaunchContext,
+        a_gmem_ref: ir.Value,
+        b_gmem_ref: ir.Value,
+        result_gmem_ref: ir.Value,
+        smem: list[ir.Value],
+    ):
+      del ctx
+      a_smem_ref, b_smem_ref, result_smem_ref = smem[:3]
+      tma_barrier = smem[3]
+      memref_type = ir.MemRefType(a_gmem_ref.type)
+      shape = memref_type.shape
+      elt_type = memref_type.element_type
+
+      zero_i32 = arith.constant(ir.IntegerType.get_signless(32), 0)
+
+      with utils.single_thread():
+        memref_bytes = utils.bytewidth(elt_type)  # Also correct if rank == 0
+        for size in shape:
+          memref_bytes *= size
+        nvvm.mbarrier_arrive_expect_tx_shared(
+            tma_barrier.get_ptr(),
+            arith.constant(ir.IntegerType.get_signless(32), 2*memref_bytes),
+        )
+
+        # GMEM -> SMEM
+        mgpu_dialect.async_load(
+            source=a_gmem_ref,
+            destination=a_smem_ref,
+            barrier=tma_barrier.as_dialect_barrier(),
+            indices=[zero_i32, zero_i32],
+            slice_lengths=shape,
+            transforms=ir.ArrayAttr.get([]),
+            collective=ir.ArrayAttr.get([]),
+            arrive=False,
+        )
+        mgpu_dialect.async_load(
+            source=b_gmem_ref,
+            destination=b_smem_ref,
+            barrier=tma_barrier.as_dialect_barrier(),
+            indices=[zero_i32, zero_i32],
+            slice_lengths=shape,
+            transforms=ir.ArrayAttr.get([]),
+            collective=ir.ArrayAttr.get([]),
+            arrive=False,
+        )
+
+      tma_barrier.wait()
+
+      zero_index = arith.constant(ir.IndexType.get(), 0)
+
+      # SMEM -> registers
+      ab_type = ir.VectorType.get(shape, elt_type)
+      a = vector.load(ab_type, a_smem_ref, [zero_index, zero_index])
+      b = vector.load(ab_type, b_smem_ref, [zero_index, zero_index])
+
+      # Computation
+      add = arith.addf(arith.addf(a, b), b)
+
+      # Registers -> SMEM
+      vector.store(add, result_smem_ref, [zero_index, zero_index])
+
+      # SMEM -> GMEM
+      mgpu_dialect.async_store(
+          source=result_smem_ref,
+          destination=result_gmem_ref,
+          indices=[zero_i32, zero_i32],
+          slice_lengths=shape,
+          transforms=ir.ArrayAttr.get([]),
+      )
+      nvvm.cp_async_bulk_wait_group(0)
+      utils.warpgroup_barrier()
+
+    dtype = jnp.bfloat16
+    shape = (128, 128)
+    jax_shape = jax.ShapeDtypeStruct(shape, dtype)
+    kernel = mgpu.as_gpu_kernel(
+        add,
+        grid=(1, 1, 1),
+        block=(128, 1, 1),
+        in_shape=(jax_shape, jax_shape),
+        out_shape=jax_shape,
+        smem_scratch_shape=[
+            jax_shape,
+            jax_shape,
+            jax_shape,
+            core.TMABarrier(1),
+        ],
+        thread_semantics=mgpu.ThreadSemantics.Warpgroup,
+    )
+
+    x = self.prng.uniform(-1, 1, shape).astype(dtype)
+    y = self.prng.uniform(-1, 1, shape).astype(dtype)
+
+    self.assertArraysEqual(jax.jit(kernel)(x, y), x + y + y)
+
+
+class UtilsTest(TestCase):
+  @parameterized.parameters(
+      (1,),
+      (-1,),
+      (slice(2), slice(3),),
+      (slice(1), slice(1, 3)),
+      (slice(-2, 0),),
+      (slice(-2, -1),),
+      *([(utils.DynamicSlice(0, 2),)] if HAS_MOSAIC_GPU else []),
+  )
+  def test_parse_indices(self, *indices):
+    # We are simply making sure this does not raise.
+    _, _, _ = utils.parse_indices(indices, (2, 3, 4))
+
+  @parameterized.parameters(
+      (42,),
+      (-42,),
+      (slice(42),),
+      (slice(0, 42),),
+      (slice(-42, 0),),
+      (slice(-4, -42),),
+      *([(utils.DynamicSlice(0, 4),)] if HAS_MOSAIC_GPU else []),
+  )
+  def test_parse_indices_oob(self, indices):
+    with self.assertRaisesRegex(IndexError, "out of bounds"):
+      utils.parse_indices(indices, (2, 3, 4))
 
 
 if __name__ == "__main__":

@@ -56,12 +56,12 @@ from jax._src import source_info_util
 from jax._src import traceback_util
 from jax._src import pjit
 from jax._src import xla_bridge as xb
-from jax._src.core import eval_jaxpr, ShapedArray
+from jax._src.core import eval_jaxpr, shaped_abstractify, ShapedArray
 from jax._src.api_util import (
     flatten_fun, flatten_fun_nokwargs, flatten_fun_nokwargs2, argnums_partial,
     flatten_axes, donation_vector,
     rebase_donate_argnums, _ensure_index, _ensure_index_tuple,
-    shaped_abstractify, apply_flat_fun_nokwargs, check_callable, debug_info,
+    apply_flat_fun_nokwargs, check_callable, debug_info,
     result_paths, flat_out_axes, debug_info_final, fun_sourceinfo)
 from jax._src.lax import lax as lax_internal
 from jax._src.lib import jax_jit
@@ -2186,8 +2186,6 @@ def _infer_src_sharding(src, x) -> Sharding | None:
   if src is not None:
     return src  # pytype: disable=bad-return-type
   if isinstance(x, array.ArrayImpl):
-    return x.sharding
-  if config.sharding_in_types.value and hasattr(x, 'sharding'):
     return x.sharding
   if isinstance(x, core.Tracer):
     val = x.to_concrete_value()

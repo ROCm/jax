@@ -43,7 +43,6 @@ import jax
 from jax import errors
 from jax import jit
 from jax import lax
-from jax._src import api_util
 from jax._src import config
 from jax._src import core
 from jax._src import deprecations
@@ -68,7 +67,7 @@ from jax._src.typing import (
 )
 from jax._src.util import (
     NumpyComplexWarning, canonicalize_axis as _canonicalize_axis,
-    ceil_of_ratio, partition_list, safe_zip, set_module, subvals,unzip2,
+    ceil_of_ratio, partition_list, safe_zip, set_module, unzip2,
     tuple_replace)
 from jax.sharding import (Sharding, SingleDeviceSharding, NamedSharding,
                           PartitionSpec as P)
@@ -192,7 +191,7 @@ class _ScalarMeta(type):
 
 def _abstractify_scalar_meta(x):
   raise TypeError(f"JAX scalar type {x} cannot be interpreted as a JAX array.")
-api_util._shaped_abstractify_handlers[_ScalarMeta] = _abstractify_scalar_meta
+core.pytype_aval_mappings[_ScalarMeta] = _abstractify_scalar_meta
 
 def _make_scalar_type(np_scalar_type: type) -> _ScalarMeta:
   meta = _ScalarMeta(np_scalar_type.__name__, (object,),
@@ -3273,10 +3272,10 @@ def _split(op: str, ary: ArrayLike,
   if (isinstance(indices_or_sections, (tuple, list)) or
       isinstance(indices_or_sections, (np.ndarray, Array)) and
       indices_or_sections.ndim > 0):
-    indices_or_sections = [
+    split_indices = np.asarray([0] + [
         core.concrete_dim_or_error(i_s, f"in jax.numpy.{op} argument 1")
-        for i_s in indices_or_sections]
-    split_indices = [0] + list(indices_or_sections) + [size]
+        for i_s in indices_or_sections] + [size])
+    sizes = list(np.diff(split_indices))
   else:
     if core.is_symbolic_dim(indices_or_sections):
       raise ValueError(f"jax.numpy.{op} with a symbolic number of sections is "
@@ -3285,21 +3284,14 @@ def _split(op: str, ary: ArrayLike,
                                                f"in jax.numpy.{op} argument 1")
     part_size, r = divmod(size, num_sections)
     if r == 0:
-      split_indices = [i * part_size
-                       for i in range(num_sections + 1)]
+      sizes = [part_size] * num_sections
     elif op == "array_split":
-      split_indices = (
-        [i * (part_size + 1) for i in range(r + 1)] +
-        [i * part_size + ((r + 1) * (part_size + 1) - 1)
-         for i in range(num_sections - r)])
+      sizes = [(part_size + 1)] * r + [part_size] * (num_sections - r)
     else:
       raise ValueError(f"array split does not result in an equal division: rest is {r}")
-  split_indices = [i if core.is_symbolic_dim(i) else np.int64(i)  # type: ignore[misc]
-                   for i in split_indices]
-  starts, ends = [0] * ndim(ary), shape(ary)
-  _subval = lambda x, i, v: subvals(x, [(i, v)])
-  return [lax.slice(ary, _subval(starts, axis, start), _subval(ends, axis, end))
-          for start, end in zip(split_indices[:-1], split_indices[1:])]
+  sizes = [i if core.is_symbolic_dim(i) else np.int64(i)  # type: ignore[misc]
+           for i in sizes]
+  return list(lax.split(ary, sizes, axis=axis))
 
 
 @export
@@ -4662,7 +4654,11 @@ def unstack(x: ArrayLike, /, *, axis: int = 0) -> tuple[Array, ...]:
       "Unstack requires arrays with rank > 0, however a scalar array was "
       "passed."
     )
-  return tuple(moveaxis(x, axis, 0))
+  dimensions = (axis,)
+  return tuple(
+    lax.squeeze(t, dimensions)
+    for t in lax.split(x, (1,) * x.shape[axis], axis=axis)
+  )
 
 
 @export
@@ -5735,10 +5731,9 @@ def astype(x: ArrayLike, dtype: DTypeLike | None,
 
   # We offer a more specific warning than the usual ComplexWarning so we prefer
   # to issue our warning.
-  with warnings.catch_warnings():
-    warnings.simplefilter("ignore", ComplexWarning)
-    result = lax_internal._convert_element_type(
-      x_arr, dtype, sharding=_normalize_to_sharding(device))
+  result = lax_internal._convert_element_type(
+    x_arr, dtype, sharding=_normalize_to_sharding(device),
+    warn_on_complex_to_real_cast=False)
   return _array_copy(result) if copy else result
 
 
@@ -8345,18 +8340,41 @@ def diagonal(a: ArrayLike, offset: int = 0, axis1: int = 0,
     Array([4, 8], dtype=int32)
   """
   util.check_arraylike("diagonal", a)
-  a_shape = shape(a)
+
   if ndim(a) < 2:
     raise ValueError("diagonal requires an array of at least two dimensions.")
   offset = core.concrete_or_error(operator.index, offset, "'offset' argument of jnp.diagonal()")
 
-  a = moveaxis(a, (axis1, axis2), (-2, -1))
+  def _default_diag(a):
+    a_shape = shape(a)
 
-  diag_size = max(0, min(a_shape[axis1] + min(offset, 0),
-                         a_shape[axis2] - max(offset, 0)))
-  i = arange(diag_size)
-  j = arange(abs(offset), abs(offset) + diag_size)
-  return a[..., i, j] if offset >= 0 else a[..., j, i]
+    a = moveaxis(a, (axis1, axis2), (-2, -1))
+
+    diag_size = max(
+        0, min(a_shape[axis1] + min(offset, 0), a_shape[axis2] - max(offset, 0))
+    )
+    i = arange(diag_size)
+    j = arange(abs(offset), abs(offset) + diag_size)
+    return a[..., i, j] if offset >= 0 else a[..., j, i]
+
+
+  # The mosaic lowering rule for diag is only defined for square arrays.
+  # TODO(mvoz): Add support for offsets.
+  if shape(a)[0] != shape(a)[1] or ndim(a) != 2 or offset != 0 or _dtype(a) == bool_:
+    return _default_diag(a)
+  else:
+    a_shape_eye = eye(shape(a)[0], dtype=_dtype(a))
+
+    def _mosaic_diag(a):
+      def _sum(x, axis):
+        return lax.reduce(
+            x,
+            np.array(0, _dtype(x)),
+            lax.add if _dtype(x) != bool_ else lax.bitwise_or,
+            (axis,),
+        )
+      return _sum(lax.mul(a_shape_eye, a), axis=0)
+    return lax.platform_dependent(a, default=_default_diag, mosaic=_mosaic_diag)
 
 
 @export

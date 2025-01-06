@@ -66,22 +66,6 @@ using ImplicitDim = VectorLayout::ImplicitDim;
 
 static constexpr int kLayoutLog = 10;
 
-class Print {
- public:
-  explicit Print(Operation *t) : payload_(t) {}
-  Operation *payload_;
-
- private:
-  friend std::ostream &operator<<(std::ostream &, Print);
-};
-
-std::ostream &operator<<(std::ostream &os, Print p) {
-  std::string s;
-  llvm::raw_string_ostream tmp_os(s);
-  p.payload_->print(tmp_os);
-  os << tmp_os.str();
-  return os;
-}
 
 bool is_fully_replicated(const Layout &layout) {
   static LayoutOffsets replicated_offsets = {std::nullopt, std::nullopt};
@@ -182,11 +166,6 @@ class VectorLayoutInferer {
         auto false_ty = dyn_cast<VectorType>(op.getFalseValue().getType());
         TPU_CHECK_OP(static_cast<bool>(true_ty) == static_cast<bool>(false_ty),
                      "Only one side of arith is a vector?");
-        if (true_ty) {
-          TPU_CHECK_OP(true_ty.getElementTypeBitWidth() == kNativeBitwidth &&
-                           false_ty.getElementTypeBitWidth() == kNativeBitwidth,
-                       "Only 32-bit select supported");
-        }
         if (inferElementwise(&any_op).failed()) {
           return failure();
         }
@@ -1668,10 +1647,17 @@ class VectorLayoutInferer {
     Layout dst_layout;
     if (layout.tiling() == nativeTiling(src_bitwidth)) {
       // If the source is already in native tiling, we can unpack it directly.
-      src_layout = layout;
+      std::array<int64_t, 2> dst_native_tiling = nativeTiling(dst_bitwidth);
+      LayoutOffsets offsets = {layout.offsets()[0]
+                                   ? *layout.offsets()[0] % dst_native_tiling[0]
+                                   : LayoutOffset(),
+                               layout.offsets()[1]};
+      DCHECK_LT(offsets[1].value_or(0), dst_native_tiling[1]);
+      src_layout = VectorLayout(src_bitwidth, offsets, layout.tiling(),
+                                layout.implicit_dim());
       dst_layout =
-          VectorLayout(dst_bitwidth, layout.offsets(),
-                       nativeTiling(dst_bitwidth), layout.implicit_dim());
+          VectorLayout(dst_bitwidth, offsets, dst_native_tiling,
+                       layout.implicit_dim());
     } else if (dst_bitwidth == 32 &&
                default_tiling_[0] % layout.tiling()[0] == 0 &&
                default_tiling_[1] == layout.tiling()[1]) {
@@ -1680,13 +1666,17 @@ class VectorLayoutInferer {
       // tiling through the op.
       // TODO(jevinjiang): we can relax this for non-32bit as well.
       src_layout = layout;
-      dst_layout = VectorLayout(32, layout.offsets(), src_layout->tiling(),
-                                layout.implicit_dim());
+      dst_layout = VectorLayout(dst_bitwidth, layout.offsets(),
+                                src_layout->tiling(), layout.implicit_dim());
     } else {
-      // TODO(b/335863273): we should also reduce offsets.
-      src_layout = VectorLayout(src_bitwidth, layout.offsets(), default_tiling_,
+      LayoutOffsets offsets = {
+          layout.offsets()[0] ? *layout.offsets()[0] % default_tiling_[0]
+                              : LayoutOffset(),
+          layout.offsets()[1] ? *layout.offsets()[1] % default_tiling_[1]
+                              : LayoutOffset()};
+      src_layout = VectorLayout(src_bitwidth, offsets, default_tiling_,
                                 layout.implicit_dim());
-      dst_layout = VectorLayout(dst_bitwidth, layout.offsets(), default_tiling_,
+      dst_layout = VectorLayout(dst_bitwidth, offsets, default_tiling_,
                                 layout.implicit_dim());
     }
     setLayout(op, src_layout, dst_layout);
@@ -1931,72 +1921,6 @@ class VectorLayoutInferer {
       op->removeAttr("out_layout");
       return WalkResult::advance();
     });
-  }
-
-  void setInLayout(Operation *op, ArrayRef<Layout> in) {
-    CHECK_EQ(in.size(), op->getNumOperands()) << Print(op);
-    SmallVector<Attribute, 4> in_attrs;
-    in_attrs.reserve(in.size());
-    for (const Layout &p : in) {
-      in_attrs.push_back(VectorLayoutAttr::get(op->getContext(), p));
-    }
-    op->setAttr("in_layout", ArrayAttr::get(op->getContext(), in_attrs));
-  }
-
-  void setOutLayout(Operation *op, Layout out) {
-    setOutLayout(op, ArrayRef<Layout>(out));
-  }
-
-  void setOutLayout(Operation *op, ArrayRef<Layout> out) {
-    SmallVector<Attribute, 4> out_attrs;
-    out_attrs.reserve(out.size());
-    for (const Layout &p : out) {
-      out_attrs.push_back(VectorLayoutAttr::get(op->getContext(), p));
-    }
-    op->setAttr("out_layout", ArrayAttr::get(op->getContext(), out_attrs));
-  }
-
-  void setLayout(Operation *op, Layout in, Layout out) {
-    setLayout(op, ArrayRef<Layout>(in), ArrayRef<Layout>(out));
-  }
-
-  void setLayout(Operation *op, ArrayRef<Layout> in, Layout out) {
-    setLayout(op, in, ArrayRef<Layout>(out));
-  }
-
-  void setLayout(Operation *op, Layout in, ArrayRef<Layout> out) {
-    setLayout(op, ArrayRef<Layout>(in), out);
-  }
-
-  void setLayout(Operation *op, ArrayRef<Layout> in, ArrayRef<Layout> out) {
-    setInLayout(op, in);
-    setOutLayout(op, out);
-  }
-
-  SmallVector<Layout, 4> getInLayout(Operation *op) {
-    CHECK(op);
-    CHECK(op->getAttr("in_layout"));
-    auto in_attrs = op->getAttrOfType<ArrayAttr>("in_layout").getValue();
-    CHECK_EQ(in_attrs.size(), op->getNumOperands());
-    SmallVector<Layout, 4> in_layouts;
-    in_layouts.reserve(op->getNumOperands());
-    for (int i = 0; i < op->getNumOperands(); ++i) {
-      in_layouts.push_back(cast<VectorLayoutAttr>(in_attrs[i]).getLayout());
-    }
-    return in_layouts;
-  }
-
-  SmallVector<Layout, 4> getOutLayout(Operation *op) {
-    CHECK(op);
-    CHECK(op->getAttr("out_layout"));
-    auto out_attrs = op->getAttrOfType<ArrayAttr>("out_layout").getValue();
-    CHECK_EQ(out_attrs.size(), op->getNumResults());
-    SmallVector<Layout, 4> out_layouts;
-    out_layouts.reserve(op->getNumResults());
-    for (int i = 0; i < op->getNumResults(); ++i) {
-      out_layouts.push_back(cast<VectorLayoutAttr>(out_attrs[i]).getLayout());
-    }
-    return out_layouts;
   }
 
   Layout getLayout(Value v) {
