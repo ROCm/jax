@@ -28,6 +28,8 @@ If you submitted your PR upstream with `open-upstream`, you should see your chan
 the next time the `ROCm Nightly Upstream Sync` workflow is run and the PR that it creates is
 merged.
 
+When using the `open-upstream` label to move changes to upstream, it's best to put the label on the PR when you either close or merge the PR. The GitHub Actions workflow that handles the `open-upstream` label uses `git rebase --onto` to set up the changes destined for upstream. Adding the label and creating this branch long after the PR has been merged or closed can cause merge conflicts with new upstream code and cause the workflow to fail. Adding the label right after creating your PR means that 1) any changes you make to your downstream PR while it is in review won't make it to upstream, and it is up to you to cherry-pick those changes into the upstream branch or remove and re-add the `open-upstream` label to get the Actions workflow to do it for you, and 2) that you're proposing changes to upstream that the rest of the AMD team might still have comments on.
+
 ## Daily Upstream Sync
 
 Every day, GitHub Actions will attempt to run the `ROCm Nightly Upstream Sync` workflow. This job
