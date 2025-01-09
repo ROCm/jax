@@ -1,7 +1,13 @@
 # ROCm CI Dev Guide
 
-This guide lays out how to do some dev operations, what branches live in this repo, and what CI
-workflows live in this repo.
+This guide lays out how to do some dev operations, what branches live in this repo, and what CI workflows live in this repo.
+
+# Quick Tips
+
+1. Always use "Squash and Merge" when merging PRs into `rocm-main` (unless you're merging the daily sync from upstream).
+2. When submitting a PR to `rocm-main`, make sure that your feature branch started from `rocm-main`. When you started working on your feature, did you do `git checkout rocm-main && git checkout -b <my feature branch>`?
+3. Always fill out your PR's description with an explanation of why we need this change to give context to your fellow devs (and your future self).
+4. In the PR description, link to the story or GitHub issue that this PR solves.
 
 # Processes
 
