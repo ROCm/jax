@@ -54,6 +54,8 @@ def dist_wheels(
     except subprocess.CalledProcessError as e:
         print(f"Failed to remove Docker image {image}: {e}")
 
+    os.environ["DOCKER_BUILDKIT"] = "1"
+
     cmd = [
         "docker",
         "build",
@@ -165,6 +167,8 @@ def dist_docker(
     python_version = python_versions[0]
 
     md = _fetch_jax_metadata(xla_path)
+
+    os.environ["DOCKER_BUILDKIT"] = "1"
 
     cmd = [
         "docker",
