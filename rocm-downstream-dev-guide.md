@@ -24,7 +24,11 @@ This guide lays out how to do some dev operations, what branches live in this re
 7. Depending on if your specific change, either:
   a. If this is a normal, run-of-the-mill change that we want to put upstream, add the
      `open-upstream` label to your PR and close your PR. In a few minutes, Actions will
-     comment on your PR with a link that lets you open the same PR into upstream.
+     comment on your PR with a link that lets you open a new PR into upstream. The link will
+     autofill some PR info, and the new PR be created on a new branch that has the same name
+     as your old feature branch, but with the `-upstream` suffix appended to the end of it.
+     If upstream reviewers request some changes to the new PR before merging, you can add
+     or modify commits on the new `-upstream` feature branch.
   b. If this is an urgent change that we want in `rocm-main` right now but also want upstream,
      add the `open-upstream` label, merge your PR, and then follow the link that 
   c. If this is a change that we only want to keep in `rocm/jax` and not push into upstream,
