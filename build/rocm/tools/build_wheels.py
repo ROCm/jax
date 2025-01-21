@@ -35,7 +35,7 @@ import sys
 LOG = logging.getLogger(__name__)
 
 
-GPU_DEVICE_TARGETS = "gfx900 gfx906 gfx908 gfx90a gfx940 gfx941 gfx942 gfx1030 gfx1100"
+GPU_DEVICE_TARGETS = "gfx900 gfx906 gfx908 gfx90a gfx940 gfx941 gfx942 gfx1030 gfx1100 gfx1200 gfx1201"
 
 
 def build_rocm_path(rocm_version_str):
@@ -90,11 +90,22 @@ def build_jaxlib_wheel(
     jax_path, rocm_path, python_version, xla_path=None, compiler="gcc"
 ):
     use_clang = "true" if compiler == "clang" else "false"
+
+    # Avoid git warning by setting safe.directory.
+    try:
+        subprocess.run(
+            ["git", "config", "--global", "--add", "safe.directory", "*"],
+            check=True,
+        )
+    except subprocess.CalledProcessError as e:
+        print(f"Failed to configure Git safe directory: {e}")
+        raise
+
     cmd = [
         "python",
         "build/build.py",
-        "build"
-        "--wheels=jaxlib,jax-rocm-plugin,jax-rocm-pjrt"
+        "build",
+        "--wheels=jaxlib,jax-rocm-plugin,jax-rocm-pjrt",
         "--rocm_path=%s" % rocm_path,
         "--rocm_version=60",
         "--use_clang=%s" % use_clang,
