@@ -77,9 +77,6 @@ class System(object):
             # Update indexes.
             subprocess.check_call(["apt-get", "update"])
 
-        # Update indexes.
-        subprocess.check_call(["apt-get", "update"])
-
         LOG.info("Running %r" % cmd)
         subprocess.check_call(cmd, env=env)
 
