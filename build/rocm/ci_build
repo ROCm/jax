@@ -59,6 +59,7 @@ def dist_wheels(
         "build",
         "-f",
         "build/rocm/build_wheels/Dockerfile.manylinux_2_28_x86_64.rocm",
+        "--no-cache",
         "--build-arg=ROCM_VERSION=%s" % rocm_version,
         "--build-arg=ROCM_BUILD_JOB=%s" % rocm_build_job,
         "--build-arg=ROCM_BUILD_NUM=%s" % rocm_build_num,
