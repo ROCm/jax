@@ -59,7 +59,36 @@ jobs:
           name: rocm_jax_r${{ env.ROCM_VERSION }}_py${{ env.PYTHON_VERSION  }}_id${{ github.run_id }}
           path: ./dist/*.whl
       - name: Run tests
+        env:
+          GPU_COUNT: "8"
+          GFX: "gfx90a"
         run: |
           cd $WORKSPACE_DIR
-          python3 build/rocm/ci_build test $TEST_IMAGE --test-cmd "pytest tests/core_test.py"
+          python3 build/rocm/ci_build test $TEST_IMAGE --test-cmd <<-_BAZEL_CMD
+            bazel test -k
+              --jobs=4
+              --test_verbose_timeout_warnings=true
+              --test_output=all
+              --test_summary=detailed
+              #--build_event_text_file=jax_test_report.log
+              --local_test_jobs=1
+              --test_env=JAX_ACCELERATOR_COUNT=${GPU_COUNT}
+              --test_env=JAX_TESTS_PER_ACCELERATOR=${GPU_COUNT}
+              --test_env=JAX_SKIP_SLOW_TESTS=0
+              --verbose_failures=true
+              --config=rocm
+              --action_env=ROCM_PATH=/opt/rocm
+              --test_env=CLANG_PATH=/opt/rocm/lib/llvm/bin/clang-18
+              --action_env=CLANG_COMPILER_PATH=/opt/rocm/lib/llvm/bin/clang-18
+              --repo_env=CC=/opt/rocm/lib/llvm/bin/clang-18
+              --repo_env=BAZEL_COMPILER=/opt/rocm/lib/llvm/bin/clang-18
+              --action_env=TF_ROCM_AMDGPU_TARGETS=${GFX}
+              --test_tag_filters=-multiaccelerator
+              --test_env=XLA_PYTHON_CLIENT_ALLOCATOR=platform
+              --test_env=JAX_EXCLUDE_TEST_TARGETS=PmapTest.testSizeOverflow
+              //tests:gpu_tests
+              //tests:backend_independent_tests
+              //tests/pallas:gpu_tests
+              //tests/pallas:backend_independent_tests
+          _BAZEL_CMD
 
