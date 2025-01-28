@@ -170,6 +170,7 @@ nanobind_extension(
         "@com_google_absl//absl/container:flat_hash_map",
         "@com_google_absl//absl/strings:str_format",
         "@nanobind",
+        "@local_config_rocm//rocm:miopen",
     ],
 )
 
@@ -424,6 +425,7 @@ nanobind_extension(
         "//jaxlib:kernel_nanobind_helpers",
         "@local_config_rocm//rocm:rocm_headers",
         "@nanobind",
+        "@local_config_rocm//rocm:hip",
     ],
 )
 
@@ -467,6 +469,7 @@ nanobind_extension(
         "@local_config_rocm//rocm:rocm_headers",
         "@nanobind",
         "@xla//xla/ffi/api:ffi",
+        "@local_config_rocm//rocm:hiprt",
     ],
 )
 
@@ -530,6 +533,7 @@ nanobind_extension(
         "//jaxlib/gpu:triton_cc_proto",
         "@com_google_absl//absl/status:statusor",
         "@nanobind",
+        "@local_config_rocm//rocm:hiprt",
     ],
 )
 
