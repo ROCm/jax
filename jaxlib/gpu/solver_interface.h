@@ -42,6 +42,27 @@ struct RealType<gpuDoubleComplex> {
   using value = double;
 };
 
+#define JAX_GPU_SOLVER_EXPAND_GetrfBatched_DEFINITION(ReturnType, FunctionName)            \
+  template <typename T>                                                       \
+  ReturnType FunctionName(                                                    \
+      JAX_GPU_SOLVER_##FunctionName##_ARGS(T, typename RealType<T>::value)) { \
+    return absl::UnimplementedError(absl::StrFormat(                          \
+        #FunctionName " not implemented for type %s", typeid(T).name()));     \
+  }                                                                           \
+  template <>                                                                 \
+  ReturnType FunctionName<float>(                                             \
+      JAX_GPU_SOLVER_##FunctionName##_ARGS(float, float));                    \
+  template <>                                                                 \
+  ReturnType FunctionName<double>(                                            \
+      JAX_GPU_SOLVER_##FunctionName##_ARGS(double, double));                  \
+  template <>                                                                 \
+  ReturnType FunctionName<gpublasComplex>(                                        \
+      JAX_GPU_SOLVER_##FunctionName##_ARGS(gpublasComplex, float));               \
+  template <>                                                                 \
+  ReturnType FunctionName<gpublasDoubleComplex>(                                  \
+      JAX_GPU_SOLVER_##FunctionName##_ARGS(gpublasDoubleComplex, double))
+
+
 #define JAX_GPU_SOLVER_EXPAND_DEFINITION(ReturnType, FunctionName)            \
   template <typename T>                                                       \
   ReturnType FunctionName(                                                    \
@@ -78,7 +99,7 @@ JAX_GPU_SOLVER_EXPAND_DEFINITION(absl::Status, Getrf);
 #define JAX_GPU_SOLVER_GetrfBatched_ARGS(Type, ...)                       \
   gpublasHandle_t handle, int n, Type **a, int lda, int *ipiv, int *info, \
       int batch
-JAX_GPU_SOLVER_EXPAND_DEFINITION(absl::Status, GetrfBatched);
+JAX_GPU_SOLVER_EXPAND_GetrfBatched_DEFINITION(absl::Status, GetrfBatched);
 #undef JAX_GPU_SOLVER_GetrfBatched_ARGS
 
 // QR decomposition: geqrf
