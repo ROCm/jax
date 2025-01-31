@@ -64,7 +64,7 @@ jobs:
           GFX: "gfx90a"
         run: |
           cd $WORKSPACE_DIR
-          python3 build/rocm/ci_build test $TEST_IMAGE --test-cmd <<-_BAZEL_CMD
+          python3 build/rocm/ci_build test $TEST_IMAGE --test-cmd "
             bazel test -k
               --jobs=4
               --test_verbose_timeout_warnings=true
@@ -90,5 +90,5 @@ jobs:
               //tests:backend_independent_tests
               //tests/pallas:gpu_tests
               //tests/pallas:backend_independent_tests
-          _BAZEL_CMD
+          "
 
