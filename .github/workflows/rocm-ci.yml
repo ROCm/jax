@@ -5,7 +5,7 @@ on:
   # but only for the rocm-main branch
   push:
     branches:
-      - rocm-main
+      - runner-test
   pull_request:
     branches:
       - rocm-main
