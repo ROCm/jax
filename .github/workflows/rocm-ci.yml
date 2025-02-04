@@ -65,6 +65,12 @@ jobs:
         run: |
           cd $WORKSPACE_DIR
           bazel_cmd=(
+            wget https://github.com/bazelbuild/bazel/releases/download/7.5.0/bazel-7.5.0-installer-linux-x86_64.sh
+            &&
+            chmod +x bazel-7.5.0-installer-linux-x86_64.sh
+            &&
+            ./bazel-7.5.0-installer-linux-x86_64.sh
+            &&
             bazel test -k
               --jobs=4
               --test_verbose_timeout_warnings=true
