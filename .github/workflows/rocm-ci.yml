@@ -9,6 +9,7 @@ on:
   pull_request:
     branches:
       - rocm-main
+  workflow_dispatch:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
