@@ -17,7 +17,7 @@ concurrency:
 
 jobs:
   build-jax-in-docker: # strategy and matrix come here 
-    runs-on:  mi-250 upstream-test
+    runs-on: upstream-test
     env:
       BASE_IMAGE: "ubuntu:22.04"
       TEST_IMAGE: ubuntu-jax-${{ github.run_id }}_${{ github.run_number }}_${{ github.run_attempt }}
