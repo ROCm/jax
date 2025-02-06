@@ -70,11 +70,6 @@ RUN --mount=type=cache,mode=0755,target=/root/.cache/pip \
         flatbuffers \
         hypothesis
 
-# Install Bazel
-RUN wget https://github.com/bazelbuild/bazel/releases/download/7.5.0/bazel-7.5.0-installer-linux-x86_64.sh && \
-    chmod u+x bazel-7.5.0-installer-linux-x86_64.sh && \
-    ./bazel-7.5.0-installer-linux-x86_64.sh
-
 ################################################################################
 FROM rocm_base AS rt_build
 ################################################################################
