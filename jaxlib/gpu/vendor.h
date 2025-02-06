@@ -425,12 +425,10 @@ constexpr uint32_t kNumThreadsPerWarp = 32;
 // TODO(Ruturaj4): Currently equivalent API does exist in
 // MIOpen lib. Remove when MIOpen support is complete.
 #define MIOPEN_STATUS_SUCCESS 0
-<<<<<<< HEAD
-// TODO(PhamBinh): Figure out later to use hipComplex or hipFloatComplex
-typedef hipFloatComplex gpuComplex;
-typedef hipDoubleComplex gpuDoubleComplex;
 
-typedef hipFloatComplex gpublasComplex;
+typedef hipComplex gpuComplex;
+typedef hipDoubleComplex gpuDoubleComplex;
+typedef hipComplex gpublasComplex;
 typedef hipDoubleComplex gpublasDoubleComplex;
 
 typedef hipsolverHandle_t gpusolverDnHandle_t;
