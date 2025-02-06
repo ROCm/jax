@@ -65,16 +65,14 @@ jobs:
         run: |
           cd $WORKSPACE_DIR
           bazel_cmd=(
-            wget https://github.com/bazelbuild/bazel/releases/download/7.5.0/bazel-7.5.0-installer-linux-x86_64.sh
-            &&
-            chmod +x bazel-7.5.0-installer-linux-x86_64.sh
-            &&
-            ./bazel-7.5.0-installer-linux-x86_64.sh
-            &&
-            bazel test -k
+            wget "https://github.com/bazelbuild/bazelisk/releases/download/v1.25.0/bazelisk-linux-amd64"
+            "&&"
+            chmod +x bazelisk-linux-amd64
+            "&&"
+            ./bazelisk-linux-amd64 test -k
               --jobs=4
               --test_verbose_timeout_warnings=true
-              --test_output=al
+              --test_output=all
               --test_summary=detailed
               --local_test_jobs=1
               --test_env=JAX_ACCELERATOR_COUNT=${GPU_COUNT}
