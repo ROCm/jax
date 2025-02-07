@@ -153,7 +153,7 @@ cc_library(
     ],
 )
 
-nanobind_extension(
+pybind_extension(
     name = "_rnn",
     srcs = ["//jaxlib/gpu:rnn.cc"],
     copts = [
