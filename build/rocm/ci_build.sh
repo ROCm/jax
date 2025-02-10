@@ -98,6 +98,10 @@ while [[ $# -gt 0 ]]; do
           JAX_USE_CLANG="$2"
           shift 2
           ;;
+        --gpu_device_targets)  
+          GPU_DEVICE_TARGETS="$2"  
+          shift 2  
+          ;;
         *)
           POSITIONAL_ARGS+=("$1")
           shift
@@ -164,6 +168,7 @@ fi
     --rocm-build-job=$ROCM_BUILD_JOB \
     --rocm-build-num=$ROCM_BUILD_NUM \
     --compiler=$JAX_COMPILER \
+    --gpu_device_targets=$GPU_DEVICE_TARGETS \
     dist_docker \
     --dockerfile $DOCKERFILE_PATH \
     --image-tag $DOCKER_IMG_NAME
