@@ -11,8 +11,9 @@ RUN --mount=type=cache,target=/var/cache/dnf \
     --mount=type=bind,source=build/rocm/tools/get_rocm.py,target=get_rocm.py \
     python3 get_rocm.py --rocm-version=$ROCM_VERSION --job-name=$ROCM_BUILD_JOB --build-num=$ROCM_BUILD_NUM
 
-ARG GPU_DEVICE_TARGETS="gfx900 gfx906 gfx908 gfx90a gfx940 gfx941 gfx942 gfx1030 gfx1100 gfx1200 gfx1201"
-RUN printf '%s\n' > /opt/rocm/bin/target.lst ${GPU_DEVICE_TARGETS}
+ARG GPU_DEVICE_TARGETS
+ENV GPU_DEVICE_TARGETS_DEFAULT="gfx900 gfx906 gfx908 gfx90a gfx940 gfx941 gfx942 gfx1030 gfx1100 gfx1200 gfx1201"
+RUN printf '%s\n' > /opt/rocm/bin/target.lst "${GPU_DEVICE_TARGETS:-$GPU_DEVICE_TARGETS_DEFAULT}"
 
 # Install LLVM 18 and dependencies.
 RUN --mount=type=cache,target=/var/cache/dnf \
