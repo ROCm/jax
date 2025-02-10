@@ -250,6 +250,12 @@ def parse_args():
         default="gcc",
         help="Compiler backend to use when compiling jax/jaxlib",
     )
+    p.add_argument(
+        "--gpu_device_targets",
+        type=str,
+        default="",
+        help="GPU device targets passed from job",
+    )
 
     p.add_argument("jax_path", help="Directory where JAX source directory is located")
 
@@ -278,7 +284,7 @@ def main():
 
     rocm_path = build_rocm_path(args.rocm_version)
 
-    update_rocm_targets(rocm_path, GPU_DEVICE_TARGETS)
+    update_rocm_targets(rocm_path, args.gpu_device_targets)
 
     for py in python_versions:
         build_jaxlib_wheel(args.jax_path, rocm_path, py, args.xla_path, args.compiler)
