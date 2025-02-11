@@ -158,6 +158,7 @@ build:rocm --config=rocm_base
 build:rocm --action_env=TF_ROCM_CLANG="1"
 build:rocm --action_env=CLANG_COMPILER_PATH="/usr/lib/llvm-18/bin/clang"
 build:rocm --copt=-Wno-gnu-offsetof-extensions
+build:rocm --copt=-Wno-c23-extensions
 build:rocm --copt=-Qunused-arguments
 build:rocm --action_env=TF_HIPCC_CLANG="1"
 
