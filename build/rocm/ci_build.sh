@@ -98,9 +98,13 @@ while [[ $# -gt 0 ]]; do
           JAX_USE_CLANG="$2"
           shift 2
           ;;
-        --gpu_device_targets)  
-          GPU_DEVICE_TARGETS="$2"  
-          shift 2  
+        --gpu_device_targets) 
+          if [[ -n "$2" ]]; then 
+            GPU_DEVICE_TARGETS="$2"  
+            shift 2  
+          else
+            GPU_DEVICE_TARGETS=""
+            shift 1
           ;;
         *)
           POSITIONAL_ARGS+=("$1")
