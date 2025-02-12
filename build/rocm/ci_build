@@ -215,7 +215,6 @@ def test(image_name, test_cmd):
     cmd = [
         "docker",
         "run",
-        "-it",
         "--rm",
     ]
 
