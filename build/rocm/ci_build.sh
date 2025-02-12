@@ -105,6 +105,7 @@ while [[ $# -gt 0 ]]; do
           else
             GPU_DEVICE_TARGETS=""
             shift 1
+          fi
           ;;
         *)
           POSITIONAL_ARGS+=("$1")
