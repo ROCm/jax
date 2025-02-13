@@ -99,6 +99,7 @@ while [[ $# -gt 0 ]]; do
           shift 2
           ;;
         --gpu_device_targets) 
+          echo "Value of \$2: '$2'"
           if [[ -n "$2" && "${2// /}"!="--custom_install" ]]; then 
             GPU_DEVICE_TARGETS="$2"  
             shift 2  
