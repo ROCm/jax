@@ -253,7 +253,7 @@ def parse_args():
     p.add_argument(
         "--gpu_device_targets",
         type=str,
-        default="",
+        default="gfx900 gfx906 gfx908 gfx90a gfx940 gfx941 gfx942 gfx1030 gfx1100 gfx1200 gfx1201",
         help="GPU device targets passed from job",
     )
 
