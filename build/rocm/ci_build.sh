@@ -100,9 +100,12 @@ while [[ $# -gt 0 ]]; do
           ;;
         --gpu_device_targets) 
           echo "Value of \$2: '[$2]'"
-          if [[ -n "$2" && "${2// /}"!="--custom_install" ]]; then 
-            GPU_DEVICE_TARGETS="$2"  
-            shift 2  
+          if [[ "$2" == "--custom_install" ]]; then 
+            GPU_DEVICE_TARGETS="" 
+            shift 2
+          elif [[ -n "$2" ]]; then
+            GPU_DEVICE_TARGETS="$2"
+            shift 2
           else
             GPU_DEVICE_TARGETS=""
             shift 1
