@@ -99,7 +99,7 @@ while [[ $# -gt 0 ]]; do
           shift 2
           ;;
         --gpu_device_targets) 
-          if [[ -n "$2" && "$2"!="--" ]]; then 
+          if [[ -n "$2" && "$2"!="--custom_install" ]]; then 
             GPU_DEVICE_TARGETS="$2"  
             shift 2  
           else
