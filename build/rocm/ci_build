@@ -183,7 +183,7 @@ def dist_docker(
         "--target",
         "rt_build",
         "--build-arg=ROCM_VERSION=%s" % rocm_version,
-        "--build-arg=GPU_DEVICE_TARGETS" %gpu_device_targets,
+        "--build-arg=GPU_DEVICE_TARGETS" % gpu_device_targets,
         "--build-arg=ROCM_BUILD_JOB=%s" % rocm_build_job,
         "--build-arg=ROCM_BUILD_NUM=%s" % rocm_build_num,
         "--build-arg=BASE_DOCKER=%s" % base_docker,
