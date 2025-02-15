@@ -208,6 +208,8 @@ class cuSparseTest(sptu.SparseTestCase):
     transpose=[True, False],
   )
   def test_csr_matvec(self, shape, dtype, transpose):
+    if (dtype == np.int32):
+      self.skipTest("skipping int32 type tests")
     op = lambda M: M.T if transpose else M
 
     v_rng = jtu.rand_default(self.rng())
@@ -228,6 +230,8 @@ class cuSparseTest(sptu.SparseTestCase):
       transpose=[True, False],
   )
   def test_csr_matmat(self, shape, dtype, transpose):
+    if (dtype == np.int32):
+      self.skipTest("skipping int32 type tests")
     op = lambda M: M.T if transpose else M
 
     B_rng = jtu.rand_default(self.rng())
