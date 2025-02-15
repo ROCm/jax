@@ -90,7 +90,7 @@ def dist_wheels(
         "--compiler",
         compiler,
         "--gpu_device_targets",
-        ${gpu_device_targets},
+        gpu_device_targets,
     ]
 
     if xla_path:
