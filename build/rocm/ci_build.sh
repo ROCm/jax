@@ -177,7 +177,7 @@ fi
     --rocm-build-job=$ROCM_BUILD_JOB \
     --rocm-build-num=$ROCM_BUILD_NUM \
     --compiler=$JAX_COMPILER \
-    --gpu_device_targets=$GPU_DEVICE_TARGETS \
+    --gpu_device_targets="${GPU_DEVICE_TARGETS}" \
     dist_docker \
     --dockerfile $DOCKERFILE_PATH \
     --image-tag $DOCKER_IMG_NAME
