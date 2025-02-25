@@ -107,7 +107,7 @@ setup(
         # ROCm support for ROCm 6.0 and above.
         'rocm': [
           f"jaxlib=={_current_jaxlib_version}",
-          f"jax-rocm60-plugin>={_current_jaxlib_version},<={_jax_version}",
+          "jax-rocm60-plugin>=0.5.0",
         ],
 
         # For automatic bootstrapping distributed jobs in Kubernetes
