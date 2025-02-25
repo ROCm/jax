@@ -26,7 +26,7 @@ jobs:
           gh auth status
           gh repo sync rocm/jax -b main
         env:
-          GH_TOKEN: ${{ steps.generate-token.outputs.token }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   create-sync-branch:
     needs: sync-main
     runs-on: ubuntu-latest
@@ -38,7 +38,7 @@ jobs:
       - name: Create branch
         run: |
           git fetch
-          git checkout origin/main 
+          git checkout origin/main
           git checkout -b $SYNC_BRANCH_NAME
           # Try and merge rocm-main into this new branch so that we don't run upstream's CI code
           git config --global user.email "github-actions@github.com"
