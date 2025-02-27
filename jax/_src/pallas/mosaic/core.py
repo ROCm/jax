@@ -28,7 +28,6 @@ from jax._src import core as jax_core
 from jax._src import dtypes
 from jax._src import util
 from jax._src.pallas import core as pallas_core
-from jax._src.pallas import pallas_call
 import jax.numpy as jnp
 import numpy as np
 

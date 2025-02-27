@@ -324,12 +324,9 @@ class NumpyLinalgTest(jtu.JaxTestCase):
   # for GPU/TPU.
   @jtu.run_on_devices("cpu")
   def testEigvals(self, shape, dtype):
-<<<<<<< HEAD
-=======
     self.skipTest("Skip tests on ROCm")
     if jtu.test_device_matches(["gpu"]) and jtu.jaxlib_version() <= (0, 4, 35):
       self.skipTest("eig on GPU requires jaxlib version > 0.4.35")
->>>>>>> 790fe78b8 (Skip tests on ROCm (#235))
     rng = jtu.rand_default(self.rng())
     args_maker = lambda: [rng(shape, dtype)]
     a, = args_maker()
@@ -350,12 +347,9 @@ class NumpyLinalgTest(jtu.JaxTestCase):
   )
   @jtu.run_on_devices("cpu")
   def testEigBatching(self, shape, dtype):
-<<<<<<< HEAD
-=======
     self.skipTest("Skip on ROCm")
     if jtu.test_device_matches(["gpu"]) and jtu.jaxlib_version() <= (0, 4, 35):
       self.skipTest("eig on GPU requires jaxlib version > 0.4.35")
->>>>>>> 790fe78b8 (Skip tests on ROCm (#235))
     rng = jtu.rand_default(self.rng())
     shape = (10,) + shape
     args = rng(shape, dtype)
