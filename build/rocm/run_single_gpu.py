@@ -14,7 +14,6 @@
 # limitations under the License.
 
 import os
-import csv
 import json
 import argparse
 import threading
@@ -77,7 +76,7 @@ def generate_final_report(shell=False, env_vars={}):
     # Generate json reports.
     combine_json_reports()
     # Generate csv reports.
-    combine_csv_reports()
+    #combine_csv_reports()
 
 
 def run_shell_command(cmd, shell=False, env_vars={}):
@@ -147,9 +146,6 @@ def run_test(testmodule, gpu_tokens, continue_on_fail):
             "pytest",
             "--json-report",
             f"--json-report-file={base_dir}/{testfile}_log.json",
-            f"--csv={base_dir}/{testfile}_log.csv",
-            "--csv-columns",
-            "id,module,name,file,status,duration",
             f"--html={base_dir}/{testfile}_log.html",
             "--reruns",
             "3",
@@ -163,9 +159,6 @@ def run_test(testmodule, gpu_tokens, continue_on_fail):
             "pytest",
             "--json-report",
             f"--json-report-file={base_dir}/{testfile}_log.json",
-            f"--csv={base_dir}/{testfile}_log.csv",
-            "--csv-columns",
-            "id,module,name,file,status,duration",
             f"--html={base_dir}/{testfile}_log.html",
             "--reruns",
             "3",
