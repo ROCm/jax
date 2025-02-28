@@ -38,14 +38,17 @@ jobs:
       - name: Create branch
         run: |
           git fetch
-          git checkout origin/main 
+          git checkout origin/main
           git checkout -b $SYNC_BRANCH_NAME
           # Try and merge rocm-main into this new branch so that we don't run upstream's CI code
           git config --global user.email "github-actions@github.com"
           git config --global user.name "GitHub Actions"
-          git merge origin/rocm-main || true
-          # If the merge creates conflicts, we want to abort and push to origin anyways so that a dev can resolve the conflicts
-          git merge --abort || true
+          if git merge origin/rocm-main --ff-only; then
+            echo "Merged rocm-main into CI branch"
+            echo "merged=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "merged=0" >> "$GITHUB_OUTPUT"
+          fi
           git push origin HEAD
   open-sync-pr:
     needs: create-sync-branch
@@ -61,6 +64,11 @@ jobs:
         run: |
           gh pr create --repo $GITHUB_REPOSITORY --head $SYNC_BRANCH_NAME --base rocm-main --title "CI: $(date +%x) upstream sync" --body "Daily sync with upstream"
           gh pr merge --repo $GITHUB_REPOSITORY --merge --auto $SYNC_BRANCH_NAME
+          # If the merge failed, leave a comment on the PR telling devs how to fix it
+          if [[ $MERGED == 0 ]]; then
+            gh pr comment --repo $GITHUB_REPOSITORY --body "Merging of this branch with rocm-main has failed and must be resolved by a dev. In your local repo, please run git fetch origin; git checkout $SYNC_BRANCH_NAME; git merge rocm-main` and then git push origin $SYNC_BRANCH_MAIN once any conflicts have been resolved."
+          fi
         env:
+          MERGED: ${{ needs.create-sync-branch.outputs.merged }}
           GH_TOKEN: ${{ steps.generate-token.outputs.token }}
 
