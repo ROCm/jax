@@ -42,22 +42,6 @@ def combine_json_reports():
   with open(combined_json_file, 'w') as outfile:
     json.dump(combined_data, outfile, indent=4)
 
-
-def combine_csv_reports():
-  all_csv_files = [f for f in os.listdir(base_dir) if f.endswith('_log.csv')]
-  combined_csv_file = f"{base_dir}/final_compiled_report.csv"
-  with open(combined_csv_file, mode='w', newline='') as outfile:
-    csv_writer = csv.writer(outfile)
-    for i, csv_file in enumerate(all_csv_files):
-      with open(os.path.join(base_dir, csv_file), mode='r') as infile:
-        csv_reader = csv.reader(infile)
-        if i == 0:
-          # write headers only once
-          csv_writer.writerow(next(csv_reader))
-        for row in csv_reader:
-          csv_writer.writerow(row)
-
-
 def generate_final_report(shell=False, env_vars={}):
   env = os.environ
   env = {**env, **env_vars}
@@ -72,8 +56,6 @@ def generate_final_report(shell=False, env_vars={}):
 
   # Generate json reports.
   combine_json_reports()
-  # Generate csv reports.
-  combine_csv_reports()
 
 
 def run_shell_command(cmd, shell=False, env_vars={}):
@@ -134,15 +116,11 @@ def run_test(testmodule, gpu_tokens, continue_on_fail):
   if continue_on_fail:
     cmd = ["python3", "-m", "pytest",
           "--json-report", f"--json-report-file={base_dir}/{testfile}_log.json",
-          f"--csv={base_dir}/{testfile}_log.csv",
-          "--csv-columns", "id,module,name,file,status,duration",
           f"--html={base_dir}/{testfile}_log.html",
           "--reruns", "3", "-v", testmodule]
   else:
     cmd = ["python3", "-m", "pytest",
           "--json-report", f"--json-report-file={base_dir}/{testfile}_log.json",
-          f"--csv={base_dir}/{testfile}_log.csv",
-          "--csv-columns", "id,module,name,file,status,duration",
           f"--html={base_dir}/{testfile}_log.html",
           "--reruns", "3", "-x", "-v", testmodule]
 
