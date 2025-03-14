@@ -286,6 +286,15 @@ class FfiTest(jtu.JaxTestCase):
 # new FFI interface. Once more are available, consider using something that
 # can be run on multiple platforms.
 def ffi_call_lu_pivots_to_permutation(pivots, permutation_size, **kwargs):
+  if jtu.test_device_matches(["rocm"]):
+    return jex.ffi.ffi_call(
+        "hip_lu_pivots_to_permutation",
+        jax.ShapeDtypeStruct(
+            shape=pivots.shape[:-1] + (permutation_size,),
+            dtype=pivots.dtype,
+        ),
+        **kwargs,
+    )(pivots)
   return jex.ffi.ffi_call(
       "cu_lu_pivots_to_permutation",
       jax.ShapeDtypeStruct(
