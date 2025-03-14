@@ -10,5 +10,5 @@ def pytest_json_modifyreport(json_report):
     if (not INCLUDE_SKIPS
             and "summary" in json_report
             and "total" in json_report["summary"]):
-        json_report["summary"]["unskipped_total"] = json_report["summary"]["total"] - json_report["summary"].get("skipped")
+        json_report["summary"]["unskipped_total"] = json_report["summary"]["total"] - json_report["summary"].get("skipped", 0)
         del json_report["summary"]["total"]
