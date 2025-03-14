@@ -388,6 +388,7 @@ cc_library(
         "@com_google_absl//absl/algorithm:container",
         "@com_google_absl//absl/status",
         "@local_config_rocm//rocm:rocm_headers",
+        "@local_config_rocm//rocm:hip",
         "@xla//xla/ffi/api:c_api",
         "@xla//xla/ffi/api:ffi",
         "@xla//xla/service:custom_call_status",
@@ -444,6 +445,7 @@ cc_library(
         "@com_google_absl//absl/strings:str_format",
         "@com_google_absl//absl/synchronization",
         "@com_google_absl//absl/types:span",
+        "@local_config_rocm//rocm:hip",
         "@xla//xla/ffi/api:ffi",
     ],
 )
@@ -489,6 +491,7 @@ cc_library(
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings:str_format",
         "@com_google_absl//absl/synchronization",
+        "@local_config_rocm//rocm:hip",
         "@tsl//tsl/platform:env",
         "@xla//xla/service:custom_call_status",
         "@xla//xla/tsl/util:env_var",
