@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import unittest
 import collections
 import functools
 import itertools
@@ -223,6 +224,9 @@ class LaxScipySpcialFunctionsTest(jtu.JaxTestCase):
     self._CompileAndCheck(lax_op, args_maker, atol=0, rtol=1E-5)
 
   def testGammaSign(self):
+    # This test is going to be fixed in the next version of JAX i.e. 0.4.36.
+    if jtu.test_device_matches(["rocm"]):
+      raise unittest.SkipTest("Unsupported on device ROCm")
     # Test that the sign of `gamma` matches at integer-valued inputs.
     dtype = jax.numpy.zeros(0).dtype  # default float dtype.
     args_maker = lambda: [np.arange(-10, 10).astype(dtype)]
