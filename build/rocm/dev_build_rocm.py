@@ -77,16 +77,17 @@ def build_jax_xla(xla_path, rocm_version, rocm_target, use_clang, clang_path):
     build_command = [
         "python3",
         "./build/build.py",
-        "build"
+        "build",
         f"--use_clang={str(use_clang).lower()}",
-        "--wheels=jaxlib,jax-rocm-plugin,jax-rocm-pjrt"
-        "--rocm_path=%/opt/rocm-{rocm_version}/",
+        "--wheels=jaxlib,jax-rocm-plugin,jax-rocm-pjrt",
+        f"--rocm_path=/opt/rocm-{rocm_version}/",
         "--rocm_version=60",
         f"--rocm_amdgpu_targets={rocm_target}",
-        bazel_options,
         "--verbose"
     ]
-
+    
+    if bazel_options != "":
+        build_command.append(bazel_options)
     if clang_option:
         build_command.append(clang_option)
 
