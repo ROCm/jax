@@ -89,8 +89,8 @@ def dist_wheels(
         pyver_string,
         "--compiler",
         compiler,
-        "--gpu_device_targets",
-        gpu_device_targets,
+        "--gpu-device-targets",
+        gpu_device_targets.replace(" ", ","),
     ]
 
     if xla_path:
