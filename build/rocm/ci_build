@@ -7,7 +7,7 @@
 # You may obtain a copy of the License at
 #
 #     https://www.apache.org/licenses/LICENSE-2.0
-#bui
+#
 # Unless required by applicable law or agreed to in writing, software
 # distributed under the License is distributed on an "AS IS" BASIS,
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -24,6 +24,10 @@ import argparse
 import os
 import subprocess
 import sys
+from typing import List
+
+
+DEFAULT_GPU_DEVICE_TARGETS = "gfx900,gfx906,gfx908,gfx90a,gfx940,gfx941,gfx942,gfx1030,gfx1100,gfx1101,gfx1200,gfx1201"
 
 
 def image_by_name(name):
@@ -37,7 +41,7 @@ def dist_wheels(
     rocm_version,
     python_versions,
     xla_path,
-    gpu_device_targets,
+    gpu_device_targets: List[str],
     rocm_build_job="",
     rocm_build_num="",
     compiler="gcc",
@@ -66,7 +70,7 @@ def dist_wheels(
         "--build-arg=ROCM_BUILD_JOB=%s" % rocm_build_job,
         "--build-arg=ROCM_BUILD_NUM=%s" % rocm_build_num,
         "--tag=%s" % image,
-        "--build-arg=GPU_DEVICE_TARGETS=%s" % gpu_device_targets,
+        "--build-arg=GPU_DEVICE_TARGETS=%s" % " ".join(gpu_device_targets),
         ".",
     ]
 
@@ -90,7 +94,7 @@ def dist_wheels(
         "--compiler",
         compiler,
         "--gpu-device-targets",
-        gpu_device_targets.replace(" ", ","),
+        ",".join(gpu_device_targets),
     ]
 
     if xla_path:
@@ -156,7 +160,7 @@ def _fetch_jax_metadata(xla_path):
 
 def dist_docker(
     rocm_version,
-    gpu_device_targets,
+    gpu_device_targets: List[str],
     base_docker,
     python_versions,
     xla_path,
@@ -183,7 +187,7 @@ def dist_docker(
         "--target",
         "rt_build",
         "--build-arg=ROCM_VERSION=%s" % rocm_version,
-        "--build-arg=GPU_DEVICE_TARGETS=%s" % gpu_device_targets,
+        "--build-arg=GPU_DEVICE_TARGETS=%s" % " ".join(gpu_device_targets),
         "--build-arg=ROCM_BUILD_JOB=%s" % rocm_build_job,
         "--build-arg=ROCM_BUILD_NUM=%s" % rocm_build_num,
         "--build-arg=BASE_DOCKER=%s" % base_docker,
@@ -234,7 +238,7 @@ def test(image_name, test_cmd):
     cmd.extend(mounts)
     cmd.extend(gpu_args)
 
-    container_cmd = "cd /jax && " + test_cmd 
+    container_cmd = "cd /jax && " + test_cmd
     cmd.append(image_name)
     cmd.extend(
         [
@@ -247,11 +251,42 @@ def test(image_name, test_cmd):
     subprocess.check_call(cmd)
 
 
+def parse_gpu_targets(targets_string):
+    # catch case where targets_string was empty.
+    # None should already be caught by argparse, but
+    # it doesn't hurt to check twice
+    if not targets_string:
+        targets_string = DEFAULT_GPU_DEVICE_TARGETS
+
+    if "," in targets_string:
+        targets = targets_string.split(",")
+    elif " " in targets_string:
+        targets = targets_string.split(" ")
+    else:
+        targets = targets_string
+
+    res = []
+    # cleanup and validation
+    for t in targets:
+        if not t:
+            continue
+
+        if not t.startswith("gfx"):
+            raise ValueError("Invalid GPU architecture target: %r" % t)
+
+        res.append(t.strip())
+
+    if not res:
+        raise ValueError("GPU_DEVICE_TARGETS cannot be empty")
+
+    return res
+
+
 def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument(
         "--base-docker",
-         default="",
+        default="",
         help="Argument to override base docker in dockerfile",
     )
 
@@ -290,10 +325,11 @@ def parse_args():
         choices=["gcc", "clang"],
         help="Compiler backend to use when compiling jax/jaxlib",
     )
+
     p.add_argument(
-        "--gpu_device_targets",
-        default="gfx900 gfx906 gfx908 gfx90a gfx940 gfx941 gfx942 gfx1030 gfx1100 gfx1100 gfx1200 gfx1201",
-        help="Compiler backend to use when compiling jax/jaxlib",
+        "--gpu-device-targets",
+        default=DEFAULT_GPU_DEVICE_TARGETS,
+        help="List of AMDGPU device targets passed from job",
     )
 
     subp = p.add_subparsers(dest="action", required=True)
@@ -302,7 +338,10 @@ def parse_args():
 
     testp = subp.add_parser("test")
     testp.add_argument("image_name")
-    testp.add_argument("--test-cmd", default="./build/rocm/build_rocm.sh && ./build/rocm/run_single_gpu.py -c && ./build/rocm/run_multi_gpu.sh")
+    testp.add_argument(
+        "--test-cmd",
+        default="./build/rocm/build_rocm.sh && ./build/rocm/run_single_gpu.py -c && ./build/rocm/run_multi_gpu.sh",
+    )
 
     ddp = subp.add_parser("dist_docker")
     ddp.add_argument("--dockerfile", default="build/rocm/Dockerfile.ms")
@@ -314,13 +353,14 @@ def parse_args():
 
 def main():
     args = parse_args()
+    gpu_device_targets = parse_gpu_targets(args.gpu_device_targets)
 
     if args.action == "dist_wheels":
         dist_wheels(
             args.rocm_version,
             args.python_versions,
             args.xla_source_dir,
-            args.gpu_device_targets,
+            gpu_device_targets,
             args.rocm_build_job,
             args.rocm_build_num,
         )
@@ -333,14 +373,14 @@ def main():
             args.rocm_version,
             args.python_versions,
             args.xla_source_dir,
-            args.gpu_device_targets,
+            gpu_device_targets,
             args.rocm_build_job,
             args.rocm_build_num,
             args.compiler,
         )
         dist_docker(
             args.rocm_version,
-            args.gpu_device_targets,
+            gpu_device_targets,
             args.base_docker,
             args.python_versions,
             args.xla_source_dir,

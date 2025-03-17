@@ -51,6 +51,7 @@ ROCM_BUILD_NUM=""
 BASE_DOCKER="ubuntu:22.04"
 CUSTOM_INSTALL=""
 JAX_USE_CLANG=""
+GPU_DEVICE_TARGETS=""
 POSITIONAL_ARGS=()
 
 RUNTIME_FLAG=0
@@ -99,7 +100,6 @@ while [[ $# -gt 0 ]]; do
           shift 2
           ;;
         --gpu_device_targets) 
-          echo "Value of \$2: '[$2]'"
           if [[ "$2" == "--custom_install" ]]; then 
             GPU_DEVICE_TARGETS="" 
             shift 2
@@ -177,7 +177,7 @@ fi
     --rocm-build-job=$ROCM_BUILD_JOB \
     --rocm-build-num=$ROCM_BUILD_NUM \
     --compiler=$JAX_COMPILER \
-    --gpu_device_targets="${GPU_DEVICE_TARGETS}" \
+    --gpu-device-targets="${GPU_DEVICE_TARGETS}" \
     dist_docker \
     --dockerfile $DOCKERFILE_PATH \
     --image-tag $DOCKER_IMG_NAME
