@@ -86,7 +86,7 @@ def build_jax_xla(xla_path, rocm_version, rocm_target, use_clang, clang_path):
         "--verbose"
     ]
     
-    if bazel_options != "":
+    if bazel_options:
         build_command.append(bazel_options)
     if clang_option:
         build_command.append(clang_option)
