@@ -98,19 +98,21 @@ static const auto* kEventElapsed =
         .Ret<ffi::BufferR0<ffi::F32>>()  // elapsed_ms
         .To([](gpuStream_t stream, auto start, auto end, auto out) {
           gpuStreamSynchronize(stream);
-          auto start_event = std::make_unique<gpuEvent_t>();
-          auto end_event = std::make_unique<gpuEvent_t>();
-          absl::MakeCleanup([&]() {
-            gpuEventDestroy(*start_event);
-            gpuEventDestroy(*end_event);
-          });
-          gpuMemcpy(start_event.get(), start.untyped_data(), sizeof(gpuEvent_t),
+          gpuEvent_t start_event = nullptr;
+          gpuEvent_t end_event = nullptr;
+
+          absl::Cleanup cleanup = [&]() {
+            gpuEventDestroy(start_event);
+            gpuEventDestroy(end_event);
+          };
+
+          gpuMemcpy(&start_event, start.untyped_data(), sizeof(gpuEvent_t),
                     gpuMemcpyDeviceToHost);
-          gpuMemcpy(end_event.get(), end.untyped_data(), sizeof(gpuEvent_t),
+          gpuMemcpy(&end_event, end.untyped_data(), sizeof(gpuEvent_t),
                     gpuMemcpyDeviceToHost);
+
           float elapsed;
-          if (auto res =
-                  gpuEventElapsedTime(&elapsed, *start_event, *end_event);
+          if (auto res = gpuEventElapsedTime(&elapsed, start_event, end_event);
               res) {
             return ffi::Error::Internal(absl::StrCat(
                 "Failed to get elapsed time between events: ", ToString(res)));
@@ -193,6 +195,12 @@ void callback_complete(CUcontext context, uint32_t streamId,
       THROW_IF_CUPTI_ERROR(status);
     }
   }
+
+  size_t num_dropped;
+  THROW_IF_CUPTI_ERROR(
+      cuptiActivityGetNumDroppedRecords(context, streamId, &num_dropped),
+      "failed to get number of dropped activity records");
+  THROW_IF(num_dropped > 0, "activity records were dropped");
 }
 
 NB_MODULE(_mosaic_gpu_ext, m) {
