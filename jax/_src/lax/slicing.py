@@ -1476,7 +1476,8 @@ def _dynamic_slice_transpose_rule(t, operand, *start_indices, slice_sizes):
   if type(t) is ad_util.Zero:
     return [ad_util.Zero(operand.aval)] + [None] * len(start_indices)
   else:
-    zeros = lax.full(operand_shape, 0, operand_dtype)
+    zeros = lax.full(operand_shape, 0, operand_dtype,
+                     sharding=operand.aval.sharding)
     return ([dynamic_update_slice_p.bind(zeros, t, *start_indices)] +
             [None] * len(start_indices))
 
@@ -1606,7 +1607,7 @@ def _dynamic_update_slice_shape_rule(operand, update, *start_indices):
 
 def _dynamic_update_slice_sharding_rule(operand, update, *start_indices):
   if operand.sharding != update.sharding:
-    raise TypeError(
+    raise core.ShardingTypeError(
         "dynamic_update_slice update sharding must be equal to operand"
         " sharding, got update sharding"
         f" {update.str_short(mesh_axis_types=True)} for operand sharding"

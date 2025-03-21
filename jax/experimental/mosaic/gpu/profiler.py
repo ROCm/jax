@@ -21,6 +21,7 @@ from typing import Callable, ParamSpec, TypeVar
 import warnings
 
 import jax
+from jax._src import stages
 from jax._src.lib import xla_client
 import jax.numpy as jnp
 from jaxlib.mlir import ir
@@ -98,23 +99,24 @@ def _measure_events(
 
 
 def _measure_cupti(f, aggregate):
-  def run(*args, **kwargs):
-    mosaic_gpu_lib._mosaic_gpu_ext._cupti_init()
-    try:
-      results = jax.block_until_ready(jax.jit(f)(*args, **kwargs))
-    finally:
-      timings = mosaic_gpu_lib._mosaic_gpu_ext._cupti_get_timings()
-    return results, timings
+  if not isinstance(f, (stages.Wrapped, stages.Compiled)):
+    f = jax.jit(f)
 
   def wrapper(*args, **kwargs):
-    run(*args, **kwargs)  # Warmup.
-    results, timings = run(*args, **kwargs)
+    jax.block_until_ready(f(*args, **kwargs))  # Warmup.
+    mosaic_gpu_lib._mosaic_gpu_ext._cupti_init()
+    try:
+      results = jax.block_until_ready(f(*args, **kwargs))
+    finally:
+      timings = mosaic_gpu_lib._mosaic_gpu_ext._cupti_get_timings()
+
     if not timings:
       return results, None
     elif aggregate:
       return results, sum(item[1] for item in timings)
     else:
       return results, timings
+
   return wrapper
 
 

@@ -26,6 +26,7 @@ import jax
 from jax import lax
 from jax._src import test_util as jtu
 from jax._src.pallas.mosaic_gpu import pipeline as mgpu_pipeline
+from jax._src.pallas import pallas_call
 from jax.experimental import pallas as pl
 from jax.experimental.pallas import mosaic_gpu as plgpu
 import jax.numpy as jnp
@@ -59,6 +60,9 @@ class PallasTest(jtu.JaxTestCase):
   def setUp(self):
     if not jtu.is_cuda_compute_capability_at_least("9.0"):
       self.skipTest("Only works on a GPU with capability >= sm90")
+    context_stack = contextlib.ExitStack()
+    context_stack.enter_context(pallas_call._PALLAS_USE_MOSAIC_GPU(True))
+    self.addCleanup(context_stack.close)
 
     super().setUp()
 
@@ -76,6 +80,13 @@ class PallasSm90ATest(PallasTest, jtu.CudaArchSpecificTest):
 
   def setUp(self):
     self.skip_unless_sm90a()
+    super().setUp()
+
+
+class PallasSm100ATest(PallasTest, jtu.CudaArchSpecificTest):
+
+  def setUp(self):
+    self.skip_unless_sm100a()
     super().setUp()
 
 
@@ -1121,16 +1132,44 @@ class PallasCallTest(PallasTest):
         ),
     )
     def kernel(x_ref, o_ref):
-      acc = _sum_same_dtype(x_ref[...])
+      acc_sum = _sum_same_dtype(x_ref[...])
       acc2, acc = jax.lax.cond(
-          acc % 2 == 0,
-          lambda: (acc * 2, acc),
-          lambda: (acc, acc * 2),
+          acc_sum % 2 == 0,
+          lambda: (acc_sum * 2, x_ref[...]),
+          lambda: (acc_sum, x_ref[...]),
       )
-      o_ref[...] = jnp.broadcast_to(acc + acc2, o_ref.shape)
+      o_ref[...] = jnp.broadcast_to(_sum_same_dtype(acc) + acc2, o_ref.shape)
 
     x = jnp.arange(256, dtype=jnp.int32)
     np.testing.assert_array_equal(kernel(x), jnp.broadcast_to(jnp.sum(x) * 3, [256]))
+
+  # Not testing with warpgroup semantics, because we want to enforce a layout.
+  def test_tile_slicing(self):
+    shape = (256, 128)
+    block_spec = plgpu.GPUBlockSpec(
+        transforms=(
+            plgpu.TilingTransform((64, 64)),
+            plgpu.SwizzleTransform(128),
+        )
+    )
+    @functools.partial(
+        pl.pallas_call,
+        in_specs=[block_spec],
+        out_specs=block_spec,
+        out_shape=jax.ShapeDtypeStruct((64, 64), jnp.uint16),
+    )
+    def kernel(x_ref, o_ref):
+      def sum_tiles(row, acc):
+        row_slice = pl.ds(row * 64, 64)
+        for col in range(128 // 64):
+          acc += x_ref[row_slice, pl.ds(col * 64, 64)]
+        return acc
+      acc = plgpu.layout_cast(jnp.zeros((64, 64), jnp.uint16), plgpu.Layout.WGMMA)
+      o_ref[...] = _fori_loop(False, 0, 256 // 64, sum_tiles, acc)
+
+    x = jnp.arange(math.prod(shape), dtype=jnp.uint16).reshape(shape)
+    y = x.reshape(256 // 64, 64, 128 // 64, 64).sum(axis=(0, 2), dtype=jnp.uint16)
+    np.testing.assert_array_equal(kernel(x), y)
 
   def test_input_output_aliases(self):
     # Note that we're writing to the input pointer, which should alias b_ptr.
@@ -1497,6 +1536,28 @@ class PallasCallSm90ATest(PallasSm90ATest):
         grid=(1, 1),
     )(a, b)
     np.testing.assert_allclose(res, a @ b, rtol=1e-3)
+
+
+class PallasCallSm100ATest(PallasSm100ATest):
+
+  def test_tmem_alloc(self):
+    mesh = plgpu.GPUMesh(num_threads=1, axis_names=("x"))
+    @pl.run_state
+    def inner(y_ref):
+      @pl.core_map(mesh)
+      def _():
+        def scope(tmem_ref, smem_ref):
+          # Issue a write so the TMEM load is not DCE'd.
+          smem_ref[...] = tmem_ref[...]
+          plgpu.commit_smem()
+          plgpu.copy_smem_to_gmem(smem_ref, y_ref)
+          plgpu.wait_smem_to_gmem(0)
+        pl.run_scoped(scope,
+          plgpu.TMEM((128, 128), jnp.float32),
+          plgpu.SMEM((128, 128), jnp.float32))
+    y_init = jnp.zeros((128, 128), np.float32)
+    # Test that this runs without errors.
+    jax.block_until_ready(inner(y_init))
 
 
 class PipelineTest(PallasTest):
@@ -2079,7 +2140,6 @@ class CoreMapTest(PallasTest):
         result.shape)
     np.testing.assert_array_equal(result, ref)
 
-
   def test_cross_wg_barrier(self):
     mesh = plgpu.GPUMesh(num_threads=2, axis_names=("wg",))
 
@@ -2099,6 +2159,34 @@ class CoreMapTest(PallasTest):
       y_init = jnp.zeros((2, 128), np.int32)
       return inner(y_init)
     np.testing.assert_array_equal(f(), np.repeat([0, 1], 128).reshape(2, 128))
+
+  def test_cluster(self):
+    mesh = plgpu.GPUMesh(grid=(2,), cluster=(2,), axis_names=("x", "cluster"))
+
+    @jax.jit
+    def f():
+      @pl.run_state
+      def inner(ref):
+        @pl.core_map(mesh)
+        def kernel():
+          block_idx = jax.lax.axis_index("x")
+          cluster_idx = jax.lax.axis_index("cluster")
+          pl.debug_print("block: {} cluster: {}", block_idx, cluster_idx)
+
+          ref[...] = ref[...]
+      return inner(jnp.zeros(128, np.int32))
+
+    with self.capture_stdout() as output:
+      jax.block_until_ready(f())
+    self.assertEqual(
+        set(output().splitlines()),
+        {
+            "block: 0 cluster: 0",
+            "block: 1 cluster: 0",
+            "block: 0 cluster: 1",
+            "block: 1 cluster: 1",
+        },
+    )
 
 
 class ExamplesTest(PallasTest):
