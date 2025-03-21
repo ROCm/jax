@@ -21,6 +21,7 @@ import argparse
 import functools
 import os
 import pathlib
+import subprocess
 import tempfile
 
 from bazel_tools.tools.python.runfiles import runfiles
@@ -150,6 +151,40 @@ def prepare_wheel_rocm(
           "__main__/jaxlib/version.py",
       ],
   )
+
+  # NOTE(mrodden): this is a hack to change/set rpath values
+  # in the shared objects that are produced by the bazel build
+  # before they get pulled into the wheel build process.
+  # we have to do this change here because setting rpath
+  # using bazel requires the rpath to be valid during the build
+  # which won't be correct until we make changes to
+  # the xla/tsl/jax plugin build
+
+  try:
+    subprocess.check_output(["which", "patchelf"])
+  except subprocess.CalledProcessError as ex:
+    mesg = (
+        "rocm plugin and kernel wheel builds require patchelf. "
+        "please install 'patchelf' and run again"
+    )
+    raise Exception(mesg) from ex
+
+  files = [
+      f"_blas.{pyext}",
+      f"_linalg.{pyext}",
+      f"_prng.{pyext}",
+      f"_solver.{pyext}",
+      f"_sparse.{pyext}",
+      f"_hybrid.{pyext}",
+      f"_rnn.{pyext}",
+      f"_triton.{pyext}",
+      f"rocm_plugin_extension.{pyext}",
+  ]
+  runpath = '$ORIGIN/../rocm/lib:$ORIGIN/../../rocm/lib'
+  # patchelf --force-rpath --set-rpath $RUNPATH $so
+  for f in files:
+    so_path = os.path.join(plugin_dir, f)
+    subprocess.check_call(["patchelf", "--force-rpath", "--set-rpath", runpath, so_path])
 
 # Build wheel for cuda kernels
 if args.enable_rocm:
