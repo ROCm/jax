@@ -4,8 +4,9 @@ ARG ROCM_VERSION=6.1.1
 ARG ROCM_BUILD_JOB
 ARG ROCM_BUILD_NUM
 
-# Install system GCC and C++ libraries.
-RUN yum install -y gcc-c++.x86_64
+# Install system GCC and C++ libraries, and build deps
+RUN --mount=type=cache,target=/var/cache/dnf \
+    dnf install -y gcc-c++.x86_64 patchelf numactl-devel
 
 RUN --mount=type=cache,target=/var/cache/dnf \
     --mount=type=bind,source=build/rocm/tools/get_rocm.py,target=get_rocm.py \
