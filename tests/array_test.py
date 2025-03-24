@@ -368,8 +368,6 @@ class JaxArrayTest(jtu.JaxTestCase):
       array.ArrayImpl(core.ShapedArray(shape, np.float32), s, bufs, committed=True)
 
   def test_duplicated_devices_in_arrays(self):
-    if xc._version <= 274:
-      self.skipTest('Test requires jaxlib version 275')
     shape = (8, 2)
     mesh = jtu.create_mesh((1, 2), ('x', 'y'))
     # Sharding device ids = {0, 1}
@@ -1300,6 +1298,18 @@ class ShardingTest(jtu.JaxTestCase):
     msg = "jax.make_array_from_single_device_arrays `arrays` argument"
     with self.assertRaisesRegex(TypeError, msg):
       jax.jit(f)(x)
+
+  def test_make_array_from_single_device_arrays_tuple(self):
+    mesh = jtu.create_mesh((2, 2), ('x', 'y'))
+    shape = (8, 8)
+    s = jax.sharding.NamedSharding(mesh, P('x', 'y'))
+    inp_data = np.arange(math.prod(shape)).reshape(shape)
+
+    arrays = tuple(
+        jax.device_put(inp_data[index], d)
+        for d, index in s.addressable_devices_indices_map(shape).items())
+
+    jax.make_array_from_single_device_arrays(shape, s, arrays)  # doesn't crash
 
   def test_make_array_from_single_device_arrays_bad_inputs(self):
     x = jnp.arange(10)

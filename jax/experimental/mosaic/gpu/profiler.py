@@ -21,6 +21,7 @@ from typing import Callable, ParamSpec, TypeVar
 import warnings
 
 import jax
+from jax._src import stages
 from jax._src.lib import xla_client
 import jax.numpy as jnp
 from jaxlib.mlir import ir
@@ -97,24 +98,25 @@ def _measure_events(
   return outs, float(elapsed)
 
 
-def _measure_cupti(f, aggregate):
-  def run(*args, **kwargs):
-    mosaic_gpu_lib._mosaic_gpu_ext._cupti_init()
-    try:
-      results = jax.block_until_ready(jax.jit(f)(*args, **kwargs))
-    finally:
-      timings = mosaic_gpu_lib._mosaic_gpu_ext._cupti_get_timings()
-    return results, timings
+def _measure_cupti(f, aggregate, *, finalize=True):
+  if not isinstance(f, (stages.Wrapped, stages.Compiled)):
+    f = jax.jit(f)
 
   def wrapper(*args, **kwargs):
-    run(*args, **kwargs)  # Warmup.
-    results, timings = run(*args, **kwargs)
+    jax.block_until_ready(f(*args, **kwargs))  # Warmup.
+    mosaic_gpu_lib._mosaic_gpu_ext._cupti_init()
+    try:
+      results = jax.block_until_ready(f(*args, **kwargs))
+    finally:
+      timings = mosaic_gpu_lib._mosaic_gpu_ext._cupti_get_timings(finalize)
+
     if not timings:
       return results, None
     elif aggregate:
       return results, sum(item[1] for item in timings)
     else:
       return results, timings
+
   return wrapper
 
 
@@ -131,6 +133,7 @@ def measure(f: Callable, *, mode: str = "events", aggregate: bool = True
     mode: The mode of operation. Possible values are:
 
       - "cupti", for CUPTI-based profiling.
+      - "cupti_no_finalize", as above, but CUPTI left attached to the process.
       - "events", for CUDA events-based profiling.
 
       The two modes use different measurement methodologies and should not be
@@ -173,10 +176,12 @@ def measure(f: Callable, *, mode: str = "events", aggregate: bool = True
     In an attempt to minimize the second effect, internally the events-based
     implementation may execute ``f`` more than once to "warm up" and exclude
     compilation time from the measurement.
-  """
+  """  # fmt: skip
   match mode:
     case "cupti":
       return _measure_cupti(f, aggregate)
+    case "cupti_no_finalize":
+      return _measure_cupti(f, aggregate, finalize=False)
     case "events":
       if not aggregate:
         raise ValueError(f"{aggregate=} is not supported with {mode=}")

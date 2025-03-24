@@ -4995,11 +4995,13 @@ class ShardingInTypesTest(jtu.JaxTestCase):
       return x * y
 
     with self.assertRaisesRegex(
-        TypeError, "mul got incompatible shardings for broadcasting"):
+        core.ShardingTypeError,
+        "mul got incompatible shardings for broadcasting"):
       g(arr1, jax.device_put(np_inp1, NamedSharding(mesh, P('y', 'x'))))
 
     with self.assertRaisesRegex(
-        TypeError, "mul got incompatible shardings for broadcasting"):
+        core.ShardingTypeError,
+        "mul got incompatible shardings for broadcasting"):
       g(arr1, jax.device_put(np_inp1, NamedSharding(mesh, P(('x', 'y')))))
 
   @parameterized.named_parameters(
@@ -5098,14 +5100,14 @@ class ShardingInTypesTest(jtu.JaxTestCase):
   @parameterized.named_parameters(
       ('fail1', P('x', None), P(None, 'x'),
        "dot_general operation.*produces an illegally sharded result",
-       TypeError),
+       core.ShardingTypeError),
       ('fail2', P('x', 'y'), P('x', 'y'),
        "dot_general requires contracting dimensions to have consistent sharding",
-       TypeError),
+       core.ShardingTypeError),
       ('contracting1', P('x', 'y'), P('y', None),
-       'Contracting dimensions are sharded', ValueError),
+       'Contracting dimensions are sharded', core.ShardingTypeError),
       ('other_half_tp', P(None, 'y'), P('y', None),
-       'Contracting dimensions are sharded', ValueError),
+       'Contracting dimensions are sharded', core.ShardingTypeError),
   )
   @jtu.with_user_mesh((2, 2), ('x', 'y'))
   def test_dot_general_error(self, spec1, spec2, error_msg, error_type, mesh):
@@ -5127,14 +5129,14 @@ class ShardingInTypesTest(jtu.JaxTestCase):
     arr2 = jax.device_put(np.ones((8, 2, 4)),
                           NamedSharding(mesh, P('y', 'z', 'x')))
     with self.assertRaisesRegex(
-        TypeError,
+        core.ShardingTypeError,
         'dot_general requires lhs batch dimensions and rhs batch dimensions to'
         ' have the consistent sharding'):
       jax.lax.dot_general(
           arr1, arr2, dimension_numbers=(([2], [1]), ([0], [0])))
 
     with self.assertRaisesRegex(
-        TypeError,
+        core.ShardingTypeError,
         'dot_general requires lhs batch dimensions and rhs batch dimensions to'
         ' have the consistent sharding'):
       jnp.einsum('abc,acz->abz', arr1, arr2)
@@ -5569,7 +5571,7 @@ class ShardingInTypesTest(jtu.JaxTestCase):
       return y
 
     if error_msg:
-      with self.assertRaisesRegex(ValueError, error_msg):
+      with self.assertRaisesRegex(core.ShardingTypeError, error_msg):
         f(arr)
     else:
       out = f(arr)
@@ -5608,7 +5610,7 @@ class ShardingInTypesTest(jtu.JaxTestCase):
 
     arr3 = jax.device_put(np_inp, NamedSharding(mesh, P('y', 'x')))
     with self.assertRaisesRegex(
-        TypeError, "select cases must have the same shardings"):
+        core.ShardingTypeError, "select cases must have the same shardings"):
       f(arr1 == arr2, arr1, arr3)
 
   def test_explicit_mode_no_context_mesh(self):
@@ -5778,10 +5780,10 @@ class ShardingInTypesTest(jtu.JaxTestCase):
     out = jax.jit(jax.grad(g))(arr)
     self.assertEqual(out.sharding, arr.sharding)
 
-    with self.assertRaisesRegex(NotImplementedError, "slicing on sharded dims"):
+    with self.assertRaisesRegex(core.ShardingTypeError, "slicing on sharded dims"):
       f(jax.device_put(np_inp, NamedSharding(mesh, P('x', 'y'))))
 
-    with self.assertRaisesRegex(NotImplementedError, "slicing on sharded dims"):
+    with self.assertRaisesRegex(core.ShardingTypeError, "slicing on sharded dims"):
       f(jax.device_put(np_inp, NamedSharding(mesh, P(None, ('x', 'y')))))
 
   @jtu.with_user_mesh((2, 2), ('x', 'y'))
@@ -5842,13 +5844,13 @@ class ShardingInTypesTest(jtu.JaxTestCase):
     out = jax.jit(jax.grad(g))(arr)
     self.assertEqual(out.sharding, arr.sharding)
 
-    with self.assertRaisesRegex(NotImplementedError, "padding on sharded dims"):
+    with self.assertRaisesRegex(core.ShardingTypeError, "padding on sharded dims"):
       f(arr, ((2, 3, 0), ), None)
 
-    with self.assertRaisesRegex(NotImplementedError, "padding on sharded dims"):
+    with self.assertRaisesRegex(core.ShardingTypeError, "padding on sharded dims"):
       f(arr, ((0, 3, 0), ), None)
 
-    with self.assertRaisesRegex(NotImplementedError, "padding on sharded dims"):
+    with self.assertRaisesRegex(core.ShardingTypeError, "padding on sharded dims"):
       arr = jax.device_put(np_inp, NamedSharding(mesh, P(('x', 'y'))))
       f(arr, ((4, 4, 1),), None)
 
@@ -5879,7 +5881,7 @@ class ShardingInTypesTest(jtu.JaxTestCase):
     self.assertArraysEqual(out, np.concatenate([arr1, arr2], axis=1))
 
     with self.assertRaisesRegex(
-        TypeError, "All operands should have the same sharding"):
+        core.ShardingTypeError, "All operands should have the same sharding"):
       arr3 = jax.device_put(np.arange(4.).reshape(4, 1),
                             NamedSharding(mesh, P('x')))
       f(arr1, arr3)
@@ -6147,7 +6149,7 @@ class ShardingInTypesTest(jtu.JaxTestCase):
     f(arr)
     self.check_wsc_in_lowered(f.lower(arr).as_text())
 
-    with self.assertRaisesRegex(NotImplementedError, "split on sharded dims"):
+    with self.assertRaisesRegex(core.ShardingTypeError, "split on sharded dims"):
       f(arr, sizes=(1, 1), axis=1)
 
     def g(x):
@@ -6360,8 +6362,8 @@ class ShardingInTypesTest(jtu.JaxTestCase):
   def test_intermediate_einsum(self, mesh):
     shape1 = (8, 32, 1, 16)
     shape2 = (8, 32, 1, 8)
-    np_inp1 = np.arange(math.prod(shape1)).reshape(shape1)
-    np_inp2 = np.arange(math.prod(shape2)).reshape(shape2)
+    np_inp1 = np.ones(math.prod(shape1)).reshape(shape1)
+    np_inp2 = np.ones(math.prod(shape2)).reshape(shape2)
 
     s = NamedSharding(mesh, P('data'))
     arr1 = jax.device_put(np_inp1, s)
@@ -6387,9 +6389,9 @@ class ShardingInTypesTest(jtu.JaxTestCase):
     shape1 = (8, 32, 2*16)
     shape2 = (8, 32, 2, 8)
     shape3 = (8, 32, 2, 8)
-    np_inp1 = np.arange(math.prod(shape1)).reshape(shape1)
-    np_inp2 = np.arange(math.prod(shape2)).reshape(shape2)
-    np_inp3 = np.arange(math.prod(shape3)).reshape(shape3)
+    np_inp1 = np.ones(math.prod(shape1)).reshape(shape1)
+    np_inp2 = np.ones(math.prod(shape2)).reshape(shape2)
+    np_inp3 = np.ones(math.prod(shape3)).reshape(shape3)
 
     arr1 = jax.device_put(np_inp1, s)
     arr2 = jax.device_put(np_inp2, s)
@@ -6436,8 +6438,8 @@ class ShardingInTypesTest(jtu.JaxTestCase):
   def test_intermediate_einsum_conflict_error(self, mesh):
     shape1 = (8, 32, 1, 16)
     shape2 = (8, 32, 1, 8)
-    np_inp1 = np.arange(math.prod(shape1)).reshape(shape1)
-    np_inp2 = np.arange(math.prod(shape2)).reshape(shape2)
+    np_inp1 = np.ones(math.prod(shape1)).reshape(shape1)
+    np_inp2 = np.ones(math.prod(shape2)).reshape(shape2)
 
     arr1 = jax.device_put(
         np_inp1, NamedSharding(mesh, P(None, None, None, 'data')))
@@ -6452,7 +6454,7 @@ class ShardingInTypesTest(jtu.JaxTestCase):
     # Errors out on the intermediate einsum: `bthj,bthD->bthjD`
     # because of a conflict
     with self.assertRaisesRegex(
-        TypeError,
+        core.ShardingTypeError,
         'dot_general operation.*produces an illegally sharded result'):
       f(arr1, arr2, arr3)
 
@@ -7089,6 +7091,30 @@ class ShardingInTypesTest(jtu.JaxTestCase):
     self.assertEqual(out.dtype, to_dtype)
     self.assertEqual(out.shape, expected_shape)
     self.assertEqual(out.sharding, NamedSharding(mesh, expected_spec))
+
+  @jtu.with_user_mesh((2,), ('x',))
+  def test_dynamic_slice(self, mesh):
+    np_inp = np.arange(16., dtype=np.float32)
+    s = NamedSharding(mesh, P('x'))
+    arr = jax.device_put(np_inp, s)
+
+    @jax.jit
+    def f(x):
+      y = lax.dynamic_slice_in_dim(x, jnp.array(1, dtype=np.int32), 2)
+      self.assertEqual(y.aval.sharding.spec, P('x'))
+      return y
+
+    out = f(arr)
+    self.assertEqual(out.sharding, s)
+
+    def g(x):
+      return jnp.sum(f(x))
+
+    out = jax.jit(jax.grad(g))(arr)
+    self.assertEqual(out.sharding, arr.sharding)
+
+    out = jax.grad(g)(arr)
+    self.assertEqual(out.sharding, arr.sharding)
 
   def test_auto_axes_computation_follows_data_error(self):
     mesh = jtu.create_mesh((2,), ('x',), axis_types=(AxisType.Explicit,))
