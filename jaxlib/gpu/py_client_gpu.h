@@ -1,4 +1,4 @@
-/* Copyright 2024 The JAX Authors.
+/* Copyright 2022 The JAX Authors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -13,21 +13,25 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#ifndef JAXLIB_GPU_BLAS_HANDLE_POOL_H_
-#define JAXLIB_GPU_BLAS_HANDLE_POOL_H_
+#ifndef JAX_JAXLIB_GPU_PY_CLIENT_GPU_H_
+#define JAX_JAXLIB_GPU_PY_CLIENT_GPU_H_
 
-#include "absl/status/statusor.h"
+#include <cstddef>
+
 #include "jaxlib/gpu/vendor.h"
-#include "jaxlib/gpu/handle_pool.h"
+#include "xla/ffi/ffi.h"
+#include "xla/service/custom_call_status.h"
 
 namespace jax {
+namespace JAX_GPU_NAMESPACE {
 
-using BlasHandlePool = HandlePool<gpublasHandle_t, gpuStream_t>;
+void XlaPythonGpuCallback(gpuStream_t stream, void** buffers,
+                          const char* opaque, size_t opaque_len,
+                          XlaCustomCallStatus* status);
 
-template <>
-absl::StatusOr<BlasHandlePool::Handle> BlasHandlePool::Borrow(
-    gpuStream_t stream);
+XLA_FFI_DECLARE_HANDLER_SYMBOL(kXlaFfiPythonGpuCallback);
 
+}  // namespace JAX_GPU_NAMESPACE
 }  // namespace jax
 
-#endif  // JAXLIB_GPU_BLAS_HANDLE_POOL_H_
+#endif  // JAX_JAXLIB_GPU_PY_CLIENT_GPU_H_
