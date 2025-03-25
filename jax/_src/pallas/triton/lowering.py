@@ -1120,7 +1120,7 @@ triton_lowering_rules.update({
 def _minus(x: ir.Value) -> ir.Value:
   if tt_dialect.PointerType.isinstance(_element_type(x.type)):
     raise NotImplementedError(f"unsupported type: {x.type}")
-  return _sub(_full(x.type, 0), x)
+  return _sub(_zeros_like(x), x)
 
 
 def _add(x: ir.Value, y: ir.Value):
@@ -1260,6 +1260,10 @@ _greater_equal = functools.partial(
 )
 
 
+def _is_nan(x: ir.Value) -> ir.Value:
+  return arith_dialect.cmpf(arith_dialect.CmpFPredicate.UNO, x, x)
+
+
 _JAX_TO_TRITON_BINARY = {
     lax.add_p: _add,
     lax.sub_p: _sub,
@@ -1373,7 +1377,7 @@ def _broadcast_to_rule(ctx: LoweringRuleContext, x, shape: Sequence[int]):
 @register_lowering(lax.integer_pow_p)
 def _integer_pow_rule(ctx: LoweringRuleContext, x, *, y: int):
   if y == 0:
-    return _full(x.type, 1)
+    return _ones_like(x)
 
   is_reciprocal = y < 0
   if is_reciprocal:
@@ -1393,7 +1397,7 @@ def _integer_pow_rule(ctx: LoweringRuleContext, x, *, y: int):
   acc = _cast(acc, x_aval.dtype, out_aval.dtype)
   if is_reciprocal:
     signed = jnp.issubdtype(out_aval.dtype, jnp.signedinteger)
-    return  _truediv(_full(acc.type, 1), acc, signed=signed)
+    return  _truediv(_ones_like(acc), acc, signed=signed)
   else:
     return acc
 
@@ -1514,6 +1518,22 @@ def _full(t: ir.Type, v: object) -> ir.Type:
     return result
 
 
+def _zeros(t: ir.Type) -> ir.Value:
+  return _full(t, 0)
+
+
+def _zeros_like(x: ir.Value) -> ir.Value:
+  return _full(x.type, 0)
+
+
+def _ones(t: ir.Type) -> ir.Value:
+  return _full(t, 1)
+
+
+def _ones_like(x: ir.Value) -> ir.Value:
+  return _full(x.type, 1)
+
+
 def _splat(x: ir.value, shape: Sequence[int]) -> ir.Value:
   if ir.RankedTensorType.isinstance(x.type):
     raise TypeError("cannot splat a tensor")
@@ -1552,7 +1572,7 @@ def _int_int_cast(src: ir.Value, dst_type: ir.Type, signed: bool) -> ir.Value:
   dst_element_type = ir.IntegerType(_element_type(dst_type))
   assert src_element_type != dst_element_type
   if dst_element_type.width == 1:
-    return _not_equal(src, _full(src.type, 0), signed=signed)
+    return _not_equal(src, _zeros_like(src), signed=signed)
 
   if src_element_type.width == dst_element_type.width:
     return arith_dialect.bitcast(dst_type, src)
@@ -1572,7 +1592,7 @@ def _float_int_cast(
     raise NotImplementedError(f"cannot cast {src} tp {dst_type}")
   dst_element_type = ir.IntegerType(_element_type(dst_type))
   if dst_element_type.width == 1:
-    return _not_equal(src, _full(src.type, 0), signed=signed)
+    return _not_equal(src, _zeros_like(src), signed=signed)
   else:
     # We clamp the float value to the min/max integer destination value
     # in order to match JAX/XLA casting behavior. Note that this differs
@@ -1675,7 +1695,7 @@ def _ir_cast(src: ir.Value, dst_type: ir.Type, *,
       return tt_dialect.ptr_to_int(dst_type, src)
     elif dst_element_type.width == 1:
       x = _ir_cast(src, ir.IntegerType.get_signless(64), signed=signed)
-      zero = _full(x.type, 0)
+      zero = _zeros_like(x)
       return _ir_cast(_not_equal(x, zero, signed=signed), dst_type, signed=signed)
   if isinstance(
       src_element_type, ir.IntegerType
@@ -1778,6 +1798,28 @@ def _concatenate_lowering_rule(ctx: LoweringRuleContext, *args, dimension):
   )
 
 
+@register_lowering(lax.split_p)
+def _split_lowering_rule(ctx: LoweringRuleContext, x, *, sizes, axis):
+  pass
+  # TODO(cjfj): Add support for larger powers of 2.
+  num_parts = len(sizes)
+  if num_parts != pallas_utils.next_power_of_2(num_parts):
+    raise NotImplementedError("Only power-of-2 num parts supported.")
+  if any(size != sizes[0] for size in sizes):
+    raise NotImplementedError("Only equal-sized splits are supported.")
+
+  def split_into_2(x):
+    shape = ir.RankedTensorType(x.type).shape
+    x = _reshape(x, shape[:axis] + [2, shape[axis] // 2] + shape[axis + 1 :])
+    permutation = tuple(d for d in range(len(shape) + 1) if d != axis) + (axis,)
+    return tuple(tt_dialect.split(tt_dialect.trans(x, permutation)))
+
+  x_parts = (x,)
+  while len(x_parts) < num_parts:
+    x_parts = sum(map(split_into_2, x_parts), ())
+  return x_parts
+
+
 def _compute_offsets_from_indices(
     block_info: BlockInfo, nd_indexer: NDIndexer
 ) -> ir.Value:
@@ -1798,7 +1840,7 @@ def _compute_offsets_from_indices(
   # Use 64-bit indexing when offset might be >= 2**32 bytes.
   offset_eltype = ir.IntegerType.get_signless(64 if full_size > 2**32 else 32)
   if indexer_shape:
-    offsets = _full(ir.RankedTensorType.get(indexer_shape, offset_eltype), 0)
+    offsets = _zeros(ir.RankedTensorType.get(indexer_shape, offset_eltype))
   else:
     offsets = _ir_constant(0, offset_eltype)
 
@@ -2070,7 +2112,7 @@ def _masked_load_lowering_rule(
     offsets = _ir_cast(offsets, ir.IntegerType.get_signless(32), signed=False)
     in_msb = _mod(offsets, _full(offsets.type, 2), signed=False)
     if jaxlib_version < (0, 5, 2):
-      in_msb = arith_dialect.xori(in_msb, _full(in_msb.type, 1))
+      in_msb = arith_dialect.xori(in_msb, _ones_like(in_msb))
     shift = _mul(in_msb, _full(in_msb.type, 4))
     shift = _ir_cast(shift, values.type, signed=False)
     values = arith_dialect.shrui(values, shift)
@@ -2198,6 +2240,14 @@ def _transpose_lowering(ctx: LoweringRuleContext, x, *, permutation):
 _TF32_PRECISIONS = (lax.Precision.HIGH, lax.Precision.DEFAULT)
 
 
+def _as_bf16(x):
+  return _ir_cast(x, _dtype_to_ir_type(jnp.bfloat16), signed=False)
+
+
+def _as_f32(x):
+  return _ir_cast(x, _dtype_to_ir_type(jnp.float32), signed=False)
+
+
 @register_lowering(lax.dot_general_p)
 def _dot_general_lowering(
     ctx: LoweringRuleContext,
@@ -2237,6 +2287,9 @@ def _dot_general_lowering(
           | lax.DotAlgorithmPreset.F16_F16_F32
           | lax.DotAlgorithmPreset.BF16_BF16_BF16
           | lax.DotAlgorithmPreset.BF16_BF16_F32
+          | lax.DotAlgorithmPreset.BF16_BF16_F32_X3
+          | lax.DotAlgorithmPreset.BF16_BF16_F32_X6
+          | lax.DotAlgorithmPreset.BF16_BF16_F32_X9
       ):
         input_precision = None
       case _:
@@ -2275,7 +2328,40 @@ def _dot_general_lowering(
 
   m, _ = a_type.shape
   _, n = b_type.shape
-  acc = _full(ir.RankedTensorType.get([m, n], _dtype_to_ir_type(acc_dtype)), 0)
+  acc = _zeros(ir.RankedTensorType.get([m, n], _dtype_to_ir_type(acc_dtype)))
+
+  if precision in (
+      lax.DotAlgorithmPreset.BF16_BF16_F32_X3,
+      lax.DotAlgorithmPreset.BF16_BF16_F32_X6,
+      lax.DotAlgorithmPreset.BF16_BF16_F32_X9,
+  ):
+    a_bf16 = _as_bf16(a)
+    b_bf16 = _as_bf16(b)
+    a_err0 = _sub(a, _as_f32(a_bf16))
+    b_err0 = _sub(b, _as_f32(b_bf16))
+    a_err0_bf16 = _as_bf16(a_err0)
+    b_err0_bf16 = _as_bf16(b_err0)
+    a_err1_bf16 = _as_bf16(_sub(a_err0, _as_f32(a_err0_bf16)))
+    b_err1_bf16 = _as_bf16(_sub(b_err0, _as_f32(b_err0_bf16)))
+    # Accumulate the smallest values first to reduce the numeric error.
+    if precision == lax.DotAlgorithmPreset.BF16_BF16_F32_X9:
+      acc = tt_dialect.dot(a_err1_bf16, b_err0_bf16, acc)
+      acc = tt_dialect.dot(a_err1_bf16, b_err1_bf16, acc)
+      acc = tt_dialect.dot(a_err0_bf16, b_err1_bf16, acc)
+    if precision in (
+        lax.DotAlgorithmPreset.BF16_BF16_F32_X6,
+        lax.DotAlgorithmPreset.BF16_BF16_F32_X9,
+    ):
+      acc = tt_dialect.dot(a_err1_bf16, b_bf16, acc)
+      acc = tt_dialect.dot(a_bf16, b_err1_bf16, acc)
+      acc = tt_dialect.dot(a_err0_bf16, b_err0_bf16, acc)
+    acc = tt_dialect.dot(a_err0_bf16, b_bf16, acc)
+    acc = tt_dialect.dot(a_bf16, b_err0_bf16, acc)
+    # If `a` rounding error is zero and `b` is `inf` then `acc` may contain
+    # `NaN`s (as `0 * inf = NaN`), and vice versa.
+    acc = arith_dialect.select(_is_nan(acc), _zeros_like(acc), acc)
+    a, b = a_bf16, b_bf16
+
   acc = tt_dialect.dot(a, b, acc, input_precision=input_precision)
   return _cast(acc, acc_dtype, out_aval.dtype)
 

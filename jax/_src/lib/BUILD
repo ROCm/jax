@@ -44,6 +44,8 @@ py_library_providing_imports_info(
         "//jaxlib/mosaic/python:tpu_dialect",
         "//jaxlib:cpu_feature_guard",
         "//jaxlib:utils",
+        "//jaxlib/xla:xla_client",
+        "//jaxlib/xla:xla_extension",
         "//jaxlib/triton",
         "//jaxlib/mlir/_mlir_libs:register_jax_dialects",
         "//jaxlib/mlir:arithmetic_dialect",
@@ -60,6 +62,5 @@ py_library_providing_imports_info(
         "//jaxlib/mlir:sparse_tensor_dialect",
         "//jaxlib/mlir:stablehlo_dialect",
         "//jaxlib/mlir:vector_dialect",
-        # xla_client
     ]),
 )

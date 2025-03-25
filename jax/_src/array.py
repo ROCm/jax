@@ -43,7 +43,7 @@ from jax._src.sharding import Sharding
 from jax._src.sharding_impls import (
     PmapSharding, SingleDeviceSharding,
     device_replica_id_map, hashed_index, num_addressable_indices,
-    local_to_global_shape, use_concrete_mesh)  # pyformat: disable
+    local_to_global_shape, _internal_use_concrete_mesh)  # pyformat: disable
 from jax._src.typing import ArrayLike, DLDeviceType, DTypeLike
 from jax._src.util import safe_zip, unzip3, use_cpp_class, use_cpp_method, cache
 import numpy as np
@@ -1024,7 +1024,7 @@ def make_array_from_single_device_arrays(
     shape : Shape of the output ``jax.Array``. This conveys information already included with
       ``sharding`` and ``arrays`` and serves as a double check.
     sharding: Sharding: A global Sharding instance which describes how the output jax.Array is laid out across devices.
-    arrays: Sequence of ``jax.Array``\s that are each single device addressable. ``len(arrays)``
+    arrays: `list` or `tuple` of ``jax.Array``\s that are each single device addressable. ``len(arrays)``
       must equal ``len(sharding.addressable_devices)`` and the shape of each array must be the same. For multiprocess code,
       each process will call with a different ``arrays`` argument that corresponds to that processes' data.
       These arrays are commonly created via ``jax.device_put``.
@@ -1071,14 +1071,15 @@ def make_array_from_single_device_arrays(
   if dtypes.issubdtype(aval.dtype, dtypes.extended):
     return aval.dtype._rules.make_sharded_array(aval, sharding, arrays,
                                                 committed=True)
+  arrays = list(arrays) if isinstance(arrays, tuple) else arrays
   # TODO(phawkins): ideally the cast() could be checked.
   try:
     return ArrayImpl(aval, sharding, cast(Sequence[ArrayImpl], arrays),
                     committed=True)
   except TypeError:
-    if not isinstance(arrays, Sequence):
+    if not isinstance(arrays, list):
       raise TypeError("jax.make_array_from_single_device_arrays `arrays` "
-                      "argument must be a Sequence (list or tuple), but got "
+                      "argument must be a list or tuple, but got "
                       f"{type(arrays)}.")
     if any(isinstance(arr, core.Tracer) for arr in arrays):
       raise ValueError(
@@ -1149,7 +1150,7 @@ def shard_device_array(x, devices, indices, sharding):
   else:
     # TODO(yashkatariya): Maybe this should be set when we call the handler in
     # InputsHandler.__call__?
-    with use_concrete_mesh(None):
+    with _internal_use_concrete_mesh(None):
       shards = x._multi_slice(start_indices, limit_indices, removed_dims)
   aval = core.shaped_abstractify(x)
   return pxla.batched_device_put(aval, sharding, shards, devices)

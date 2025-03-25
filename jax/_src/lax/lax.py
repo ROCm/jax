@@ -66,8 +66,8 @@ from jax._src.lax.utils import (
 from jax._src.lib.mlir import ir
 from jax._src.lib.mlir.dialects import chlo
 from jax._src.lib.mlir.dialects import hlo
-from jax._src.lib import xla_extension_version
 from jax._src.sharding_impls import (PmapSharding, NamedSharding,
+                                     ShardingContext, SPMDAxisContext,
                                      PartitionSpec as P, canonicalize_sharding)
 from jax._src.typing import Array, ArrayLike, DimSize, DuckTypedArray, DTypeLike, Shape
 from jax._src.util import (NumpyComplexWarning, cache, canonicalize_axis,
@@ -1141,6 +1141,7 @@ def mul(x: ArrayLike, y: ArrayLike) -> Array:
 
   .. _stablehlo.multiply: https://openxla.org/stablehlo/spec#multiply
   """
+  x, y = core.standard_insert_pbroadcast(x, y)
   return mul_p.bind(x, y)
 
 @export
@@ -1611,6 +1612,7 @@ def _convert_element_type(
        (sharding._is_concrete and getattr(operand, 'sharding', None) == sharding))):
     return operand
   else:
+    operand, = core.standard_insert_pbroadcast(operand)
     return convert_element_type_p.bind(
         operand, new_dtype=new_dtype, weak_type=bool(weak_type),
         sharding=sharding)
@@ -2267,11 +2269,6 @@ class DotAlgorithmPreset(enum.Enum):
       case DotAlgorithmPreset.BF16_BF16_F32_X6:
         return hlo.DotAlgorithm.get(bf16, bf16, f32, 1, 1, 6, False)
       case DotAlgorithmPreset.BF16_BF16_F32_X9:
-        if xla_extension_version < 320:
-          raise ValueError(
-              "The dot algorithm BF16_BF16_F32_X9 requires XLA extension "
-              "version >= 320."
-          )
         return hlo.DotAlgorithm.get(bf16, bf16, f32, 1, 1, 9, False)
       case DotAlgorithmPreset.TF32_TF32_F32:
         return hlo.DotAlgorithm.get(tf32, tf32, f32, 1, 1, 1, False)
@@ -3811,7 +3808,7 @@ def broadcasting_sharding_rule(name, *avals):
   for a in avals:
     if a.sharding is not None and not a.sharding.mesh.empty:
       if mesh is not None and mesh != a.sharding.mesh:
-        raise ValueError(
+        raise core.ShardingTypeError(
             f'Mesh for all inputs should be equal. Got one mesh: {mesh} and'
             f' another mesh: {a.sharding.mesh}')
       mesh = a.sharding.mesh
@@ -3845,11 +3842,20 @@ def broadcasting_sharding_rule(name, *avals):
             result_specs[i] = s
           elif (result_specs[i] is not None and s is not None and
                 result_specs[i] != s):
-            raise TypeError(
+            raise core.ShardingTypeError(
                 f'{name} got incompatible shardings for broadcasting: '
                 f'{", ".join(map(str, map(tuple, specs)))}.')
   return NamedSharding(mesh, P(*result_specs))
 
+def standard_vma_rule(prim_name, *avals, **kwargs):
+  vma, *vmas = [a.vma for a in avals]
+  if not all(vma == vma_ for vma_ in vmas):
+    raise ValueError(
+        f'Primitive {prim_name} requires varying manual axes '
+        f'to match, but got {[vma, *vmas]}. Please open an issue at '
+        'https://github.com/jax-ml/jax/issues and as a temporary '
+        'workaround pass the check_rep=False argument to shard_map')
+  return vma
 
 def naryop(result_dtype, accepted_dtypes, name, allow_extended_dtype=False,
            require_same_dtypes=True):
@@ -3858,8 +3864,9 @@ def naryop(result_dtype, accepted_dtypes, name, allow_extended_dtype=False,
                        require_same=require_same_dtypes)
   shape_rule = partial(broadcasting_shape_rule, name)
   sharding_rule = partial(broadcasting_sharding_rule, name)
-  prim = standard_primitive(shape_rule, dtype_rule, name,
-                            sharding_rule=sharding_rule)
+  prim = standard_primitive(
+      shape_rule, dtype_rule, name, sharding_rule=sharding_rule,
+      vma_rule=partial(standard_vma_rule, name))
   batching.defbroadcasting(prim)
   pe.def_trivial_padding(prim)
   return prim
@@ -4710,7 +4717,8 @@ convert_element_type_p.def_abstract_eval(
     partial(standard_abstract_eval, convert_element_type_p,
             _convert_element_type_shape_rule, _convert_element_type_dtype_rule,
             _convert_element_type_weak_type_rule,
-            _convert_element_type_sharding_rule))
+            _convert_element_type_sharding_rule,
+            partial(standard_vma_rule, convert_element_type_p.name)))
 ad.defjvp2(convert_element_type_p, _convert_element_type_jvp_rule)
 ad.primitive_transposes[convert_element_type_p] = _convert_element_type_transpose_rule
 batching.defvectorized(convert_element_type_p)
@@ -4996,13 +5004,13 @@ def _dot_general_shape_computation(lhs_shape, rhs_shape, dimension_numbers):
 def _check_specs_match(lhs_spec, rhs_spec, msg):
   for l, r in zip(lhs_spec, rhs_spec):
     if l is not None and r is not None and l != r:
-      raise TypeError(msg)
+      raise core.ShardingTypeError(msg)
 
 def _dot_general_sharding_rule(lhs, rhs, *, dimension_numbers, precision,
                                preferred_element_type: DTypeLike | None,
                                out_sharding):
   if lhs.sharding.mesh != rhs.sharding.mesh:
-    raise ValueError(
+    raise core.ShardingTypeError(
         'Mesh of both lhs and rhs should match. Got lhs:'
         f' {lhs.sharding.mesh} and rhs: {rhs.sharding.mesh}')
 
@@ -5026,7 +5034,7 @@ def _dot_general_sharding_rule(lhs, rhs, *, dimension_numbers, precision,
 
   for l, r in zip(lhs_contracting_spec, rhs_contracting_spec):
     if l is not None and r is not None:
-      raise ValueError(
+      raise core.ShardingTypeError(
           'Contracting dimensions are sharded and it is ambiguous how the'
           ' output should be sharded. Please specify the output sharding via'
           ' the `out_sharding` parameter of einsum. Or reshard your input via'
@@ -5371,15 +5379,26 @@ pe.padding_rules[dot_general_p] = _dot_general_padding_rule
 core.pp_eqn_rules[dot_general_p] = _dot_general_pp_rule
 batching.ragged_prop_rules[dot_general_p] = _dot_general_ragged_prop_rule
 
-def precision_attr(precision: Precision) -> ir.ArrayAttr:
+
+def _full_precision(precision: Precision) -> tuple[Precision, Precision]:
   if precision is None or isinstance(precision, (DotAlgorithm, DotAlgorithmPreset)):
-    full_precision = (Precision.DEFAULT, Precision.DEFAULT)
+    return (Precision.DEFAULT, Precision.DEFAULT)
   elif not isinstance(precision, tuple):
-    full_precision = (precision, precision)
+    return (precision, precision)
   else:
-    full_precision = precision
+    return precision
+
+
+def precision_attr(precision: Precision) -> ir.ArrayAttr:
   return ir.ArrayAttr.get(
-      [hlo.PrecisionAttr.get(str(p)) for p in full_precision])
+      [hlo.PrecisionAttr.get(str(p)) for p in _full_precision(precision)]
+  )
+
+
+def chlo_precision_attr(precision: Precision) -> ir.ArrayAttr:
+  return ir.ArrayAttr.get(
+      [chlo.PrecisionAttr.get(str(p)) for p in _full_precision(precision)]
+  )
 
 
 def dot_algorithm_attr(precision: CanonicalPrecision, lhs_dtype: DTypeLike,
@@ -5417,9 +5436,7 @@ def get_algorithm_compute_types(
   return lhs_dtype, rhs_dtype, out_type
 
 
-def _dot_general_lower(ctx, lhs, rhs, *, dimension_numbers,
-                       precision, preferred_element_type: np.dtype | None,
-                       out_sharding, platform: str = "default"):
+def _handle_dot_precision(ctx, lhs, rhs, precision, platform):
   def _is_fp8_mixed_precision_matmul(_lhs_dtypes, _rhs_dtypes):
     fp8_dtypes = (dtypes.float8_e4m3fn, dtypes.float8_e5m2,
                   dtypes.float8_e5m2fnuz, dtypes.float8_e4m3fnuz)
@@ -5430,19 +5447,12 @@ def _dot_general_lower(ctx, lhs, rhs, *, dimension_numbers,
     if dtypes.float8_e8m0fnu is not None:
       fp8_dtypes += (dtypes.float8_e8m0fnu,)
     return _lhs_dtypes in fp8_dtypes and _rhs_dtypes in fp8_dtypes
-  del preferred_element_type  # Implied by the output aval
-  lhs_aval, rhs_aval = ctx.avals_in
+
+  # The *_ lets us reuse this for ragged_dot_general, which has group_sizes.
+  lhs_aval, rhs_aval, *_ = ctx.avals_in
   lhs_dtype, rhs_dtype = lhs_aval.dtype, rhs_aval.dtype
   aval_out, = ctx.avals_out
   accumulation_aval = aval_out
-  (lhs_contracting, rhs_contracting), (lhs_batch, rhs_batch) = dimension_numbers
-
-  dot_dnums = hlo.DotDimensionNumbers.get(
-      lhs_batching_dimensions=list(lhs_batch),
-      rhs_batching_dimensions=list(rhs_batch),
-      lhs_contracting_dimensions=list(lhs_contracting),
-      rhs_contracting_dimensions=list(rhs_contracting))
-
   algorithm_kwarg = {}
   if isinstance(precision, (DotAlgorithm, DotAlgorithmPreset)):
     # The CPU backend silently ignores the algorithm spec, so we check here to
@@ -5500,7 +5510,22 @@ def _dot_general_lower(ctx, lhs, rhs, *, dimension_numbers,
                                  core.ShapedArray(lhs_aval.shape, aval_out.dtype))
           rhs = mlir.convert_hlo(ctx, rhs, rhs_aval,
                                  core.ShapedArray(rhs_aval.shape, aval_out.dtype))
+  return lhs, rhs, accumulation_aval, algorithm_kwarg
 
+
+def _dot_general_lower(ctx, lhs, rhs, *, dimension_numbers,
+                       precision, preferred_element_type: np.dtype | None,
+                       out_sharding, platform: str = "default"):
+  del preferred_element_type  # Implied by the output aval
+  lhs, rhs, accumulation_aval, algorithm_kwarg = _handle_dot_precision(
+      ctx, lhs, rhs, precision, platform
+  )
+  (lhs_contracting, rhs_contracting), (lhs_batch, rhs_batch) = dimension_numbers
+  dot_dnums = hlo.DotDimensionNumbers.get(
+      lhs_batching_dimensions=list(lhs_batch),
+      rhs_batching_dimensions=list(rhs_batch),
+      lhs_contracting_dimensions=list(lhs_contracting),
+      rhs_contracting_dimensions=list(rhs_contracting))
   result = hlo.dot_general(
       mlir.aval_to_ir_type(accumulation_aval),
       lhs,
@@ -5509,7 +5534,7 @@ def _dot_general_lower(ctx, lhs, rhs, *, dimension_numbers,
       precision_config=precision_attr(precision),
       **algorithm_kwarg,
   )
-
+  aval_out, = ctx.avals_out
   result = mlir.lower_with_sharding_in_types(ctx, result, aval_out)
   if accumulation_aval.dtype != aval_out.dtype:
     result = mlir.convert_hlo(ctx, result, accumulation_aval, aval_out)
@@ -6028,9 +6053,84 @@ def _ragged_dot_general_impl(
       )
 
 
+def _ragged_dot_general_lower(
+    ctx,
+    lhs,
+    rhs,
+    group_sizes,
+    *,
+    ragged_dot_dimension_numbers,
+    precision,
+    preferred_element_type: np.dtype | None,
+    group_offset: Array | None = None,
+    platform: str = 'default',
+):
+  if group_offset is not None:
+    raise NotImplementedError('Unimplemented group_offset support.')
+
+  # TODO(pravnar): Remove this once we have sharding support.
+  def use_default_lowering():
+    axis_context = ctx.module_context.axis_context
+    return (
+        isinstance(axis_context, SPMDAxisContext)
+        or isinstance(axis_context, ShardingContext)
+        and axis_context.num_devices > 1
+    )
+  if use_default_lowering():
+    result = mlir.lower_fun(_ragged_dot_general_impl, multiple_results=False)(
+        ctx, lhs, rhs, group_sizes,
+        ragged_dot_dimension_numbers=ragged_dot_dimension_numbers,
+        precision=precision,
+        preferred_element_type=preferred_element_type,
+        group_offset=group_offset
+    )
+    (aval_out,) = ctx.avals_out
+    return mlir.lower_with_sharding_in_types(ctx, result, aval_out)
+
+  del preferred_element_type  # Implied by the output aval
+  lhs, rhs, accumulation_aval, _ = _handle_dot_precision(
+      ctx, lhs, rhs, precision, platform
+  )
+  (lhs_contracting, rhs_contracting), (lhs_batch, rhs_batch) = (
+      ragged_dot_dimension_numbers.dot_dimension_numbers
+  )
+  ragged_dot_dnums = chlo.RaggedDotDimensionNumbers.get(
+      lhs_batching_dimensions=list(lhs_batch),
+      rhs_batching_dimensions=list(rhs_batch),
+      lhs_contracting_dimensions=list(lhs_contracting),
+      rhs_contracting_dimensions=list(rhs_contracting),
+      lhs_ragged_dimensions=list(
+          ragged_dot_dimension_numbers.lhs_ragged_dimensions
+      ),
+      rhs_group_dimensions=list(
+          ragged_dot_dimension_numbers.rhs_group_dimensions
+      ),
+  )
+  result = chlo.ragged_dot(
+      mlir.aval_to_ir_type(accumulation_aval),
+      lhs,
+      rhs,
+      group_sizes,
+      ragged_dot_dnums,
+      precision_config=chlo_precision_attr(precision),
+  )
+  (aval_out,) = ctx.avals_out
+  result = mlir.lower_with_sharding_in_types(ctx, result, aval_out)
+  if accumulation_aval.dtype != aval_out.dtype:
+    result = mlir.convert_hlo(ctx, result, accumulation_aval, aval_out)
+  return [result]
+
+
 mlir.register_lowering(ragged_dot_general_p,
                        mlir.lower_fun(_ragged_dot_general_impl,
                                       multiple_results=False))
+
+for platform in ['tpu']:
+  mlir.register_lowering(
+      ragged_dot_general_p,
+      partial(_ragged_dot_general_lower, platform=platform),
+      platform=platform,
+  )
 
 
 def _broadcast_in_dim_shape_rule(operand, *, shape, broadcast_dimensions,
@@ -6384,7 +6484,7 @@ def _concatenate_sharding_rule(*operands, **kwargs):
     return core.get_cur_mesh_sharding()
   if not all(s == non_empty_s[0] for s in non_empty_s):
     ss = ", ".join(str(o.sharding) for o in operands)
-    raise TypeError(
+    raise core.ShardingTypeError(
         f"All operands should have the same sharding. Got shardings {ss}")
   return non_empty_s[0]
 
@@ -6703,7 +6803,7 @@ def _split_on_one_axis(op_shape, new_sizes, name):
     else:
       count += 1
       if count > 1:
-        raise ValueError(
+        raise core.ShardingTypeError(
             f'{name} on more than 1 axis is not supported. Please specify'
             ' the sharding of the output via the `sharding` argument of'
             f' jax.lax.reshape. Got operand.shape={op_shape} and {new_sizes=}')
@@ -6744,7 +6844,7 @@ def _reshape_sharding_rule(operand, *, new_sizes, dimensions, sharding):
     return _merge_an_axis_sharding_rule(operand, operand_merge, new_sizes,
                                         dimensions)
 
-  raise ValueError(
+  raise core.ShardingTypeError(
       'This reshape is not supported. Please specify the sharding of'
       ' the output via the `out_sharding` argument of jax.lax.reshape. Got'
       f' operand shape: {operand.shape}, new sizes: {new_sizes} and'
@@ -6777,7 +6877,7 @@ def _split_an_axis_sharding_rule(operand, out_split, new_sizes, dimensions):
       elif dimensions is None and out[0] % _get_spec_size(sp, mesh) == 0:
         new_spec.extend([sp] + [None] * (len(out) - 1))
       else:
-        raise ValueError(
+        raise core.ShardingTypeError(
             'This reshape is not supported. Please specify the sharding of the'
             ' output via the `sharding` argument of jax.lax.reshape. Got'
             f' operand shape: {operand.shape}, new sizes: {new_sizes} and'
@@ -6802,7 +6902,7 @@ def _merge_an_axis_sharding_rule(operand, operand_merge, new_sizes, dimensions):
         assert new_size % _get_spec_size(sp[0], mesh) == 0
         new_spec.append(sp[0])
       else:
-        raise ValueError(
+        raise core.ShardingTypeError(
             'This reshape is not supported. Please specify the sharding of the'
             ' output via the `sharding` argument of jax.lax.reshape. Got'
             f' operand shape: {operand.shape}, new sizes: {new_sizes} and'
@@ -6985,10 +7085,11 @@ def _select_sharding_rule(which, *cases):
     return core.get_cur_mesh_sharding()
   if any(s != non_empty_s[0] for s in non_empty_s[1:]):
     msg = "select cases must have the same shardings, got [{}]."
-    raise TypeError(msg.format(", ".join([str(c.sharding) for c in cases])))
+    raise core.ShardingTypeError(
+        msg.format(", ".join([str(c.sharding) for c in cases])))
   if (which.shape and not which.sharding.mesh.empty and
       which.sharding != non_empty_s[0]):
-    raise TypeError(
+    raise core.ShardingTypeError(
         'select `which` must be scalar or have the same sharding as cases, got'
         f' `which` sharding {which.sharding} but case sharding'
         f' {cases[0].sharding}.')
