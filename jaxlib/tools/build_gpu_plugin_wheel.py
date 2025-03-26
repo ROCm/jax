@@ -21,6 +21,7 @@ import argparse
 import functools
 import os
 import pathlib
+import stat
 import subprocess
 import tempfile
 
@@ -162,8 +163,14 @@ def prepare_rocm_plugin_wheel(sources_path: pathlib.Path, *, cpu, rocm_version):
   shared_obj_path = os.path.join(plugin_dir, "xla_rocm_plugin.so")
   runpath = '$ORIGIN/../rocm/lib:$ORIGIN/../../rocm/lib'
   # patchelf --force-rpath --set-rpath $RUNPATH $so
+  fix_perms = False
+  perms = os.stat(shared_obj_path).st_mode
+  if not perms & stat.S_IWUSR:
+      fix_perms = True
+      os.chmod(shared_obj_path, perms | stat.S_IWUSR)
   subprocess.check_call(["patchelf", "--force-rpath", "--set-rpath", runpath, shared_obj_path])
-
+  if fix_perms:
+      os.chmod(shared_obj_path, perms)
 
 
 tmpdir = None
