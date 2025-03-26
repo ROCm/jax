@@ -68,7 +68,7 @@ from jax._src.sharding_impls import (
     NamedSharding, GSPMDSharding,
     SingleDeviceSharding, PmapSharding, AUTO, UNSPECIFIED, UnspecifiedValue,
     prepare_axis_resources, parse_flatten_op_sharding, canonicalize_sharding,
-    flatten_spec)
+    flatten_spec, _internal_use_concrete_mesh)
 from jax._src.layout import Layout, DeviceLocalLayout, AutoLayout
 from jax._src.state import discharge as state_discharge, RefEffect, AbstractRef
 from jax._src.traceback_util import api_boundary
@@ -240,10 +240,10 @@ def _set_states(attrs_tracked, vals):
     jax_setattr(obj, attr, val)
 
 def _get_states(attrs_tracked):
-  from jax.experimental.attrs import jax_getattr
+  from jax.experimental.attrs import jax_getattr, dne_sentinel
   vals = []
   for treedef, _, (obj, attr) in attrs_tracked:
-    tree = jax_getattr(obj, attr)
+    tree = jax_getattr(obj, attr) if hasattr(obj, attr) else dne_sentinel
     leaves, treedef_ = tree_flatten(tree)
     assert treedef == treedef_
     vals.extend(leaves)
@@ -689,8 +689,10 @@ def _infer_params_cached(
 def _infer_params(
     fun: Callable, ji: PjitInfo, args: tuple[Any, ...], kwargs: dict[str, Any]
   ) -> tuple[PjitParams, list[Any]]:
-  if ji.use_resource_env:
-    with sharding_impls.use_mesh(mesh_lib.thread_resources.env.physical_mesh):
+  if ji.use_resource_env:  # pjit
+    phys_mesh = mesh_lib.thread_resources.env.physical_mesh
+    with (_internal_use_concrete_mesh(phys_mesh),
+          mesh_lib.use_abstract_mesh(phys_mesh.abstract_mesh)):
       return _infer_params_internal(fun, ji, args, kwargs)
   return _infer_params_internal(fun, ji, args, kwargs)
 
@@ -1352,11 +1354,11 @@ def _attr_token(
     fun: lu.WrappedFun,
     in_type: core.InputType | tuple[core.AbstractValue, ...]
 ) -> int:
-  from jax.experimental.attrs import jax_getattr
+  from jax.experimental.attrs import jax_getattr, dne_sentinel
   cases = seen_attrs_get(fun, in_type)
   for i, records in enumerate(cases):
     for obj, attr, treedef, avals in records:
-      val = jax_getattr(obj, attr)
+      val = jax_getattr(obj, attr) if hasattr(obj, attr) else dne_sentinel
       vals, treedef_ = tree_flatten(val)
       avals_ = map(core.shaped_abstractify, vals)
       if treedef != treedef_ or avals != avals_: break
@@ -1365,8 +1367,8 @@ def _attr_token(
   return len(cases)
 
 def _attr_update(fun, in_type, i, attrs_tracked):
-  from jax.experimental.attrs import jax_getattr
-  leaves = lambda obj, attr: tree_leaves(jax_getattr(obj, attr))
+  from jax.experimental.attrs import jax_getattr, dne_sentinel
+  leaves = lambda obj, attr: tree_leaves(jax_getattr(obj, attr) if hasattr(obj, attr) else dne_sentinel)
   records = [(obj, attr, init_tree, map(core.shaped_abstractify, leaves(obj, attr)))
              for init_tree, _, (obj, attr) in attrs_tracked]
   cases = seen_attrs_get(fun, in_type)
@@ -1571,14 +1573,12 @@ def _resolve_in_shardings(args, pjit_in_shardings: Sequence[PjitSharding]
             'Passing non-trivial shardings for numpy '
             'inputs is not allowed. To fix this error, either specify a '
             'replicated sharding explicitly or use '
-            '`jax.experimental.multihost_utils.host_local_array_to_global_array(...)` '
+            '`jax.make_array_from_process_local_data(...)` '
             'to convert your host local numpy inputs to a jax.Array which you '
-            'can pass to pjit. '
+            'can pass to jit. '
             'If the numpy input is the same on each process, then you can use '
             '`jax.make_array_from_callback(...) to create a `jax.Array` which '
-            'you can pass to pjit. '
-            'Please see the jax.Array migration guide for more information '
-            'https://jax.readthedocs.io/en/latest/jax_array_migration.html#handling-of-host-local-inputs-to-pjit-like-batch-etc. '
+            'you can pass to jit. '
             f'Got arg shape: {arg.shape}, arg value: {arg}')
       if not isinstance(arg_s, UnspecifiedValue) and arg_s._is_concrete:
         # jax.jit does not allow resharding across different memory kinds even
@@ -2905,41 +2905,3 @@ def get_unconstrained_dims(sharding: NamedSharding):
   assert sharding.spec is not None
   return {i for i, axes in enumerate(sharding.spec)
           if axes is PartitionSpec.UNCONSTRAINED}
-
-
-def get_op_sharding_from_executable(
-    executable) -> tuple[Sequence[xc.OpSharding], Sequence[xc.OpSharding]]:
-  in_op_shardings: list[xc.OpSharding] = []
-  parameter_shardings_from_xla = executable.get_parameter_shardings()
-  if parameter_shardings_from_xla is not None:
-    in_op_shardings = parameter_shardings_from_xla
-
-  out_op_shardings: list[xc.OpSharding] = []
-  output_shardings_from_xla = executable.get_output_shardings()
-  if output_shardings_from_xla is not None:
-    out_op_shardings = output_shardings_from_xla
-
-  return in_op_shardings, out_op_shardings
-
-
-def _get_ppspec_from_executable(
-    executable, mesh
-  ) -> tuple[Sequence[PartitionSpec], Sequence[PartitionSpec]]:
-  input_op_shardings, output_op_sharding = get_op_sharding_from_executable(
-      executable
-  )
-  in_pspec: list[PartitionSpec] = []
-  for s in input_op_shardings:
-    in_pspec.extend(parse_flatten_op_sharding(s, mesh))
-
-  out_pspec: list[PartitionSpec] = []
-  for s in output_op_sharding:
-    out_pspec.extend(parse_flatten_op_sharding(s, mesh))
-  return in_pspec, out_pspec
-
-
-def get_pspec_from_executable(
-    executable, mesh: pxla.Mesh
-) -> tuple[tuple[PartitionSpec, ...], tuple[PartitionSpec, ...]]:
-  in_pspec, out_pspec = _get_ppspec_from_executable(executable, mesh)
-  return tuple(in_pspec), tuple(out_pspec)
