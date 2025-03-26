@@ -21,6 +21,7 @@ import argparse
 import functools
 import os
 import pathlib
+import stat
 import subprocess
 import tempfile
 
@@ -186,7 +187,14 @@ def prepare_wheel_rocm(
   # patchelf --force-rpath --set-rpath $RUNPATH $so
   for f in files:
     so_path = os.path.join(plugin_dir, f)
+    fix_perms = False
+    perms = os.stat(so_path).st_mode
+    if not perms & stat.S_IWUSR:
+        fix_perms = True
+        os.chmod(so_path, perms | stat.S_IWUSR)
     subprocess.check_call(["patchelf", "--force-rpath", "--set-rpath", runpath, so_path])
+    if fix_perms:
+        os.chmod(so_path, perms)
 
 # Build wheel for cuda kernels
 if args.enable_rocm:
