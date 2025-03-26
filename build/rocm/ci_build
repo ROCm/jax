@@ -28,7 +28,9 @@ import sys
 from typing import List
 
 
-DEFAULT_GPU_DEVICE_TARGETS = "gfx906,gfx908,gfx90a,gfx942,gfx1030,gfx1100,gfx1101,gfx1200,gfx1201"
+DEFAULT_GPU_DEVICE_TARGETS = (
+    "gfx906,gfx908,gfx90a,gfx942,gfx1030,gfx1100,gfx1101,gfx1200,gfx1201"
+)
 
 
 LOG = logging.getLogger("ci_build")
@@ -41,7 +43,9 @@ def image_by_name(name):
     return image_id
 
 
-def create_manylinux_build_image(rocm_version, rocm_build_job, rocm_build_num, gpu_device_targets: List[str]) -> str:
+def create_manylinux_build_image(
+    rocm_version, rocm_build_job, rocm_build_num, gpu_device_targets: List[str]
+) -> str:
     image_name = "jax-build-manylinux_2_28_x86_64_rocm%s" % rocm_version.replace(
         ".", ""
     )
@@ -71,7 +75,7 @@ def dist_wheels(
     rocm_build_job="",
     rocm_build_num="",
     compiler="gcc",
-    gpu_device_targets : List[str] = None,
+    gpu_device_targets: List[str] = None,
 ):
     if not gpu_device_targets:
         gpu_device_targets = DEFAULT_GPU_DEVICE_TARGETS.split(",")
@@ -183,7 +187,7 @@ def dist_docker(
     tag="rocm/jax-dev",
     dockerfile=None,
     keep_image=True,
-    gpu_device_targets : List[str] = None,
+    gpu_device_targets: List[str] = None,
 ):
     if not dockerfile:
         dockerfile = "build/rocm/Dockerfile.ms"
@@ -268,6 +272,24 @@ def test(image_name, test_cmd):
     )
 
     subprocess.check_call(cmd)
+
+
+def canonicalize_python_versions(versions: List[str]):
+    if isinstance(versions, str):
+        raise ValueError("'versions' must be a list of strings: versions=%r" % versions)
+
+    cleaned = []
+    for v in versions:
+        tup = v.split(".")
+        major = tup[0]
+        minor = tup[1]
+        rev = None
+        if len(tup) > 2 and tup[2]:
+            rev = tup[2]
+
+        cleaned.append("%s.%s" % (major, minor))
+
+    return cleaned
 
 
 def parse_gpu_targets(targets_string):
@@ -373,11 +395,12 @@ def main():
     logging.basicConfig(level=logging.INFO)
     args = parse_args()
     gpu_device_targets = parse_gpu_targets(args.gpu_device_targets)
+    python_versions = canonicalize_python_versions(args.python_versions)
 
     if args.action == "dist_wheels":
         dist_wheels(
             args.rocm_version,
-            args.python_versions,
+            python_versions,
             args.xla_source_dir,
             args.rocm_build_job,
             args.rocm_build_num,
@@ -391,7 +414,7 @@ def main():
     elif args.action == "dist_docker":
         dist_wheels(
             args.rocm_version,
-            args.python_versions,
+            python_versions,
             args.xla_source_dir,
             args.rocm_build_job,
             args.rocm_build_num,
@@ -401,7 +424,7 @@ def main():
         dist_docker(
             args.rocm_version,
             args.base_docker,
-            args.python_versions,
+            python_versions,
             args.xla_source_dir,
             rocm_build_job=args.rocm_build_job,
             rocm_build_num=args.rocm_build_num,
@@ -414,4 +437,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
