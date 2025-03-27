@@ -17,7 +17,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-jax-in-docker: # strategy and matrix come here
+  build-jax-in-docker:
     runs-on:  mi-250
     strategy:
       matrix:
