@@ -21,8 +21,8 @@ jobs:
     runs-on:  mi-250
     strategy:
       matrix:
-        python: [3.10]
-        rocm: [6.2.4, 6.3.3]
+        python: ["3.10.13"]
+        rocm: ["6.2.4", "6.3.3"]
     env:
       BASE_IMAGE: "ubuntu:22.04"
       TEST_IMAGE: ubuntu-jax-${{ github.run_id }}_${{ github.run_number }}_${{ github.run_attempt }}
