@@ -211,9 +211,11 @@ def test(image_name, test_cmd):
     cmd = [
         "docker",
         "run",
-        "-it",
         "--rm",
     ]
+
+    if os.isatty(sys.stdout.fileno()):
+        cmd.append("-it")
 
     # NOTE(mrodden): we need jax source dir for the unit test code only,
     # JAX and jaxlib are already installed from wheels
