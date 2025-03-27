@@ -22,7 +22,7 @@ jobs:
     strategy:
       matrix:
         python: ["3.10", "3.11", "3.12", "3.13"]
-        rocm: [ "6.3", "6.4"]
+        rocm: [ "6.3.3"]
     env:
       BASE_IMAGE: "ubuntu:22.04"
       TEST_IMAGE: ubuntu-jax-${{ github.run_id }}_${{ github.run_number }}_${{ github.run_attempt }}
