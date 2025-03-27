@@ -16,16 +16,19 @@ limitations under the License.
 #include <cstdint>
 #include <string>
 
-#include "nanobind/nanobind.h"
 #include "absl/log/log.h"
 #include "absl/strings/str_cat.h"
 #include "rocm/include/hip/hip_runtime.h"
+#include "nanobind/nanobind.h"
 #include "jaxlib/gpu/gpu_plugin_extension.h"
+#include "jaxlib/gpu/py_client_gpu.h"
+#include "jaxlib/kernel_nanobind_helpers.h"
 
 namespace nb = nanobind;
 
 namespace xla {
 namespace {
+
 std::string ToString(hipError_t result) {
 #define OSTREAM_ROCM_ERROR(__name) \
   case hipError##__name:           \
@@ -62,10 +65,24 @@ std::string ToString(hipError_t result) {
       return absl::StrCat("hipError_t(", static_cast<int>(result), ")");
   }
 }
+
+nb::dict FfiRegistrations() {
+  nb::dict dict;
+  nb::dict gpu_callback_dict;
+  gpu_callback_dict["instantiate"] =
+      jax::EncapsulateFfiHandler(jax::hip::kGpuTransposePlanCacheInstantiate);
+  gpu_callback_dict["execute"] =
+      jax::EncapsulateFfiHandler(jax::hip::kXlaFfiPythonGpuCallback);
+  dict["xla_ffi_python_gpu_callback"] = gpu_callback_dict;
+  return dict;
+}
+
 }  // namespace
 
 NB_MODULE(rocm_plugin_extension, m) {
   BuildGpuPluginExtension(m);
+  m.def("ffi_registrations", &FfiRegistrations);
+
   m.def(
       "get_device_ordinal",
       [](std::intptr_t data_value) {

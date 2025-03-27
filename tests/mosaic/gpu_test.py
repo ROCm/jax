@@ -912,15 +912,41 @@ class TCGen05Test(TestCase):
       lhs_transpose=(False, True),
       rhs_transpose=(False, True),
       in_jax_dtype=(jnp.float16, jnp.bfloat16),  # TODO(apaszke): f32
-      out_jax_dtype=(jnp.float32,),  # TODO(apaszke): f16 accumulation
+      out_jax_dtype=(jnp.float16, jnp.float32,),
       m=(128,),  # TODO(apaszke): 64, 192, 256
       n=(64, 128, 256, 512),  # TODO(apaszke): 192, other non-power-of-2
-      k_steps=(1, 2),
       swizzle=(32, 64, 128,),
-      rhs_transpose_tiles=(False, True),
-      lhs_transpose_tiles=(False, True),
   )
-  def test_mma_basic(
+  def test_mma_basic(self, *args, **kwargs):
+    self._basic_mma_test(
+        *args,
+        **kwargs,
+        k_steps=2,  # Reducing to 1 can be helpful while debugging.
+        lhs_transpose_tiles=False,
+        rhs_transpose_tiles=False,
+    )
+
+  @parameterized.product(
+      lhs_transpose=(False, True),
+      rhs_transpose=(False, True),
+      in_jax_dtype=(jnp.float16,),
+      out_jax_dtype=(jnp.float32,),
+      m=(128,),
+      n=(128, 512),
+      swizzle=(32, 64, 128,),
+      lhs_transpose_tiles=(False, True),
+      rhs_transpose_tiles=(False, True),
+  )
+  def test_mma_transposed_tiles(self, *args, **kwargs):
+    if not kwargs["lhs_transpose_tiles"] and not kwargs["rhs_transpose_tiles"]:
+      self.skipTest("This is already tested in test_mma_basic")
+    self._basic_mma_test(
+        *args,
+        **kwargs,
+        k_steps=2,  # Reducing to 1 can be helpful while debugging.
+    )
+
+  def _basic_mma_test(
       self,
       m,
       n,
@@ -981,16 +1007,10 @@ class TCGen05Test(TestCase):
       barriers[2].wait(for_tensor_core=True)
       acc[:].store_untiled(out)
 
-    in_finfo = jnp.finfo(in_jax_dtype)
-    exponent_bits, mantissa_bits = in_finfo.nexp, in_finfo.nmant
-    def quantize(x):
-      # Quantize the input to avoid rounding when feeding the TensorCore
-      return jax.lax.reduce_precision(x, exponent_bits, mantissa_bits)
-
     x_shape = (k, m) if lhs_transpose else (m, k)
-    x = quantize(self.prng.uniform(-1, 1, x_shape)).astype(in_jax_dtype)
+    x = self.prng.uniform(-1, 1, x_shape).astype(in_jax_dtype)
     y_shape = (n, k) if rhs_transpose else (k, n)
-    y = quantize(self.prng.uniform(-1, 1, y_shape)).astype(in_jax_dtype)
+    y = self.prng.uniform(-1, 1, y_shape).astype(in_jax_dtype)
     out_shape = jax.ShapeDtypeStruct((m, n), out_jax_dtype)
     if rhs_transpose_tiles:
       rhs_smem_shape = (
@@ -1015,14 +1035,15 @@ class TCGen05Test(TestCase):
     )(x, y)
     x32, y32 = x.astype(np.float32), y.astype(np.float32)
     ref = (x32.T if lhs_transpose else x32) @ (y32.T if rhs_transpose else y32)
-    atol = 2e-2 if out_jax_dtype == jnp.float16 else 5e-6
-    np.testing.assert_allclose(z, ref, atol=atol)
+    atol = 2e-2 if out_jax_dtype == jnp.float16 else 2e-5
+    rtol = 8e-4 if out_jax_dtype == jnp.float16 else 1e-7
+    np.testing.assert_allclose(z, ref, atol=atol, rtol=rtol)
 
   @parameterized.product(
       lhs_transpose=(False, True),
       rhs_transpose=(False, True),
-      in_jax_dtype=(jnp.float16,),  # TODO(apaszke): f32
-      out_jax_dtype=(jnp.float32,),  # TODO(apaszke): f16 accumulation
+      in_jax_dtype=(jnp.float16,),
+      out_jax_dtype=(jnp.float32,),
       m=(256,),  # TODO(apaszke): 64, 192, 256
       n=(128, 256, 512),  # TODO(apaszke): 192, other non-power-of-2
       k_steps=(1, 2),
@@ -1960,6 +1981,40 @@ class FragmentedArrayTest(TestCase):
         kernel, (1, 1, 1), (128, 1, 1), (inp,), out, [inp, out],
     )(inp)
     np.testing.assert_array_equal(inp, result)
+
+  @parameterized.product(
+      in_shape=((128,), (64,)), dtype=[jnp.float16, jnp.float32]
+  )
+  def test_wgmma_col_load_store_with_layout(self, in_shape, dtype):
+    def kernel(ctx, *args):
+      gmem_input, gmem_output, (smem_input, smem_output) = args
+      copy(gmem_input, smem_input)
+      t = mgpu.FragmentedArray.load_wgmma_col(smem_input)
+      t.store_untiled(smem_output)
+      copy(smem_output, gmem_output)
+
+    inp = out = self.prng.uniform(-1, 1, in_shape).astype(dtype)
+    result = mgpu.as_gpu_kernel(
+        kernel, (1, 1, 1), (128, 1, 1), (inp,), out, [inp, out],
+    )(inp)
+    np.testing.assert_array_equal(result, inp)
+
+  @parameterized.parameters((128, 128), (128, 64), (64, 128))
+  def test_broadcast_major(self, m, n):
+    def kernel(ctx, *args):
+      gmem_input, gmem_output, () = args
+      t = mgpu.FragmentedArray.load_wgmma_col(gmem_input)
+      t.broadcast_major(m).store_untiled(gmem_output)
+
+    inp = self.prng.uniform(-1, 1, (n,)).astype(jnp.float16)
+    out_shape = jax.ShapeDtypeStruct((m, n), jnp.float16)
+
+    result = mgpu.as_gpu_kernel(
+        kernel, (1, 1, 1), (128, 1, 1), (inp,), out_shape, ()
+    )(inp)
+
+    out_ref = jax.lax.broadcast_in_dim(inp, (m, n), (1,))
+    np.testing.assert_array_equal(result, out_ref)
 
   def test_warp_tree_reduce(self):
     def kernel(ctx, out, *_):

@@ -52,6 +52,8 @@ exports_files(srcs = [
     "prng_kernels.cc",
     "prng_kernels.cu.cc",
     "prng_kernels.h",
+    "py_client_gpu.cc",
+    "py_client_gpu.h",
     "rnn.cc",
     "rnn_kernels.cc",
     "rnn_kernels.h",
@@ -82,6 +84,7 @@ proto_library(
 
 cc_proto_library(
     name = "triton_cc_proto",
+    compatible_with = None,
     deps = [":triton_proto"],
 )
 
@@ -89,6 +92,21 @@ xla_py_proto_library(
     name = "triton_py_pb2",
     visibility = jax_visibility("triton_proto_py_users"),
     deps = [":triton_proto"],
+)
+
+cc_library(
+    name = "handle_pool",
+    hdrs = ["handle_pool.h"],
+    copts = [
+        "-fexceptions",
+        "-fno-strict-aliasing",
+    ],
+    features = ["-use_header_modules"],
+    deps = [
+        "@com_google_absl//absl/base:core_headers",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/synchronization",
+    ],
 )
 
 cc_library(
@@ -115,7 +133,6 @@ cc_library(
         "@xla//xla/pjrt/c:pjrt_c_api_hdrs",
         "@xla//xla/pjrt/c:pjrt_c_api_helpers",
         "@xla//xla/pjrt/c:pjrt_c_api_triton_extension_hdrs",
-        "@xla//xla/python:py_client_gpu",
         "@xla//xla/tsl/python/lib/core:numpy",
     ],
 )

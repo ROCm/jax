@@ -68,7 +68,7 @@ from jax._src.sharding_impls import (
     NamedSharding, GSPMDSharding,
     SingleDeviceSharding, PmapSharding, AUTO, UNSPECIFIED, UnspecifiedValue,
     prepare_axis_resources, parse_flatten_op_sharding, canonicalize_sharding,
-    flatten_spec)
+    flatten_spec, _internal_use_concrete_mesh)
 from jax._src.layout import Layout, DeviceLocalLayout, AutoLayout
 from jax._src.state import discharge as state_discharge, RefEffect, AbstractRef
 from jax._src.traceback_util import api_boundary
@@ -240,10 +240,10 @@ def _set_states(attrs_tracked, vals):
     jax_setattr(obj, attr, val)
 
 def _get_states(attrs_tracked):
-  from jax.experimental.attrs import jax_getattr
+  from jax.experimental.attrs import jax_getattr, dne_sentinel
   vals = []
   for treedef, _, (obj, attr) in attrs_tracked:
-    tree = jax_getattr(obj, attr)
+    tree = jax_getattr(obj, attr) if hasattr(obj, attr) else dne_sentinel
     leaves, treedef_ = tree_flatten(tree)
     assert treedef == treedef_
     vals.extend(leaves)
@@ -689,8 +689,10 @@ def _infer_params_cached(
 def _infer_params(
     fun: Callable, ji: PjitInfo, args: tuple[Any, ...], kwargs: dict[str, Any]
   ) -> tuple[PjitParams, list[Any]]:
-  if ji.use_resource_env:
-    with sharding_impls.use_mesh(mesh_lib.thread_resources.env.physical_mesh):
+  if ji.use_resource_env:  # pjit
+    phys_mesh = mesh_lib.thread_resources.env.physical_mesh
+    with (_internal_use_concrete_mesh(phys_mesh),
+          mesh_lib.use_abstract_mesh(phys_mesh.abstract_mesh)):
       return _infer_params_internal(fun, ji, args, kwargs)
   return _infer_params_internal(fun, ji, args, kwargs)
 
@@ -1352,11 +1354,11 @@ def _attr_token(
     fun: lu.WrappedFun,
     in_type: core.InputType | tuple[core.AbstractValue, ...]
 ) -> int:
-  from jax.experimental.attrs import jax_getattr
+  from jax.experimental.attrs import jax_getattr, dne_sentinel
   cases = seen_attrs_get(fun, in_type)
   for i, records in enumerate(cases):
     for obj, attr, treedef, avals in records:
-      val = jax_getattr(obj, attr)
+      val = jax_getattr(obj, attr) if hasattr(obj, attr) else dne_sentinel
       vals, treedef_ = tree_flatten(val)
       avals_ = map(core.shaped_abstractify, vals)
       if treedef != treedef_ or avals != avals_: break
@@ -1365,8 +1367,8 @@ def _attr_token(
   return len(cases)
 
 def _attr_update(fun, in_type, i, attrs_tracked):
-  from jax.experimental.attrs import jax_getattr
-  leaves = lambda obj, attr: tree_leaves(jax_getattr(obj, attr))
+  from jax.experimental.attrs import jax_getattr, dne_sentinel
+  leaves = lambda obj, attr: tree_leaves(jax_getattr(obj, attr) if hasattr(obj, attr) else dne_sentinel)
   records = [(obj, attr, init_tree, map(core.shaped_abstractify, leaves(obj, attr)))
              for init_tree, _, (obj, attr) in attrs_tracked]
   cases = seen_attrs_get(fun, in_type)
@@ -1571,14 +1573,12 @@ def _resolve_in_shardings(args, pjit_in_shardings: Sequence[PjitSharding]
             'Passing non-trivial shardings for numpy '
             'inputs is not allowed. To fix this error, either specify a '
             'replicated sharding explicitly or use '
-            '`jax.experimental.multihost_utils.host_local_array_to_global_array(...)` '
+            '`jax.make_array_from_process_local_data(...)` '
             'to convert your host local numpy inputs to a jax.Array which you '
-            'can pass to pjit. '
+            'can pass to jit. '
             'If the numpy input is the same on each process, then you can use '
             '`jax.make_array_from_callback(...) to create a `jax.Array` which '
-            'you can pass to pjit. '
-            'Please see the jax.Array migration guide for more information '
-            'https://jax.readthedocs.io/en/latest/jax_array_migration.html#handling-of-host-local-inputs-to-pjit-like-batch-etc. '
+            'you can pass to jit. '
             f'Got arg shape: {arg.shape}, arg value: {arg}')
       if not isinstance(arg_s, UnspecifiedValue) and arg_s._is_concrete:
         # jax.jit does not allow resharding across different memory kinds even
@@ -1777,11 +1777,12 @@ def pjit_staging_rule(trace, *args, **params):
       return pe.inline_jaxpr_into_trace(
           trace, jaxpr.jaxpr, jaxpr.consts, *args)
 
-  jaxpr, in_fwd, out_shardings, out_layouts = _pjit_forwarding(
-      params['jaxpr'], params['out_shardings'], params['out_layouts'])
-  params = dict(params, jaxpr=jaxpr, out_shardings=out_shardings,
-                out_layouts=out_layouts)
+  jaxpr = params['jaxpr']
   if config.dynamic_shapes.value:
+    jaxpr, in_fwd, out_shardings, out_layouts = _pjit_forwarding(
+        jaxpr, params['out_shardings'], params['out_layouts'])
+    params = dict(params, jaxpr=jaxpr, out_shardings=out_shardings,
+                  out_layouts=out_layouts)
     source_info = source_info_util.current()
     out_tracers = []
     for aval in _out_type(jaxpr):
@@ -1795,6 +1796,10 @@ def pjit_staging_rule(trace, *args, **params):
       map(trace.getvar, args), map(trace.makevar, out_tracers), pjit_p, params,
       jaxpr.effects, source_info)
     trace.frame.add_eqn(eqn)
+    out_tracers_ = iter(out_tracers)
+    out_tracers = [args[f] if type(f) is int else next(out_tracers_)
+                   for f in in_fwd]
+    assert next(out_tracers_, None) is None
   elif any(isinstance(c, core.MutableArray) for c in jaxpr.consts):
     jaxpr, consts = pxla._move_mutable_consts(jaxpr)
     consts = map(trace.new_const, consts)
@@ -1807,19 +1812,14 @@ def pjit_staging_rule(trace, *args, **params):
         pjit_p, (*args, *consts), new_params)
   else:
     out_tracers = trace.default_process_primitive(pjit_p, args, params)
-
-  out_tracers_ = iter(out_tracers)
-  out_tracers = [args[f] if type(f) is int else next(out_tracers_)
-                 for f in in_fwd]
-  assert next(out_tracers_, None) is None
   return out_tracers
 pe.custom_staging_rules[pjit_p] = pjit_staging_rule
 
 
 def _pjit_forwarding(jaxpr, out_shardings, out_layouts):
   in_fwd: list[int | None] = pe._jaxpr_forwarding(jaxpr.jaxpr)
-  in_fwd = [fwd if isinstance(os, UnspecifiedValue) and ol is None else None for fwd, os, ol
-            in zip(in_fwd, out_shardings, out_layouts)]
+  in_fwd = [fwd if isinstance(os, UnspecifiedValue) and ol is None else None
+            for fwd, os, ol in zip(in_fwd, out_shardings, out_layouts)]
   keep = [f is None for f in in_fwd]
   jaxpr = pe.prune_closed_jaxpr_outputs(jaxpr, keep)
   out_shardings = [o for o, k in zip(out_shardings, keep) if k]
@@ -1827,6 +1827,8 @@ def _pjit_forwarding(jaxpr, out_shardings, out_layouts):
   return jaxpr, in_fwd, out_shardings, out_layouts
 
 def pjit_forwarding_rule(eqn):
+  if not config.dynamic_shapes.value:
+    return [None] * len(eqn.outvars), eqn
   jaxpr, in_fwd, out_shardings, out_layouts = _pjit_forwarding(
       eqn.params['jaxpr'], eqn.params['out_shardings'], eqn.params['out_layouts'])
   new_outvars = [v for v, f in zip(eqn.outvars, in_fwd) if f is None]
@@ -1835,6 +1837,7 @@ def pjit_forwarding_rule(eqn):
   new_eqn = eqn.replace(params=new_params, outvars=new_outvars)
   fwd_vars = [eqn.invars[f] if f is not None else None for f in in_fwd]
   return fwd_vars, new_eqn
+# TODO(mattjj): Remove pjit_forwarding_rule and also in staging rule.
 pe.forwarding_rules[pjit_p] = pjit_forwarding_rule
 
 
@@ -2821,29 +2824,50 @@ batching.skippable_batchers[reshard_p] = lambda _: ()
 # -------------------- auto and user mode -------------------------
 
 def _get_new_mesh(axes: str | tuple[str, ...] | None,
-                  axis_type: mesh_lib.AxisType, name: str,
-                  error_on_manual_to_auto_explict=False):
+                  axis_type: mesh_lib.AxisType, name: str, shardings=None,
+                  error_on_manual_to_auto_explicit=False):
   cur_mesh = mesh_lib.get_abstract_mesh()
-  # TODO(yashkatariya): Maybe allow fetching mesh from the args to enable
-  # computation follows data?
-  if cur_mesh.empty:
+  flat_shardings, _ = tree_flatten(shardings)
+  sharding_mesh = mesh_lib.empty_abstract_mesh
+  for i in flat_shardings:
+    if isinstance(i, NamedSharding):
+      if not sharding_mesh.empty and sharding_mesh != i.mesh:
+        raise ValueError(
+            f'Shardings passed to {name} should have the same mesh. Got one'
+            f' mesh {sharding_mesh} and another {i.mesh}')
+      sharding_mesh = i.mesh.abstract_mesh
+
+  if sharding_mesh.empty and cur_mesh.empty:
     raise ValueError(
         f'Context mesh {cur_mesh} cannot be empty. Please use'
         ' `jax.sharding.use_mesh` API to enter into a mesh context when using'
         f' `{name}` API.')
+  if not sharding_mesh.empty and not cur_mesh.empty:
+    if sharding_mesh != cur_mesh:
+      raise ValueError(
+          f'Context mesh {cur_mesh} must match the mesh passed to shardings'
+          f' {sharding_mesh}. Recommended approach is to use'
+          ' `jax.sharding.use_mesh` context manager.')
+    mesh_to_use = cur_mesh
+  elif sharding_mesh.empty and not cur_mesh.empty:
+    mesh_to_use = cur_mesh
+  else:
+    assert not sharding_mesh.empty and cur_mesh.empty
+    mesh_to_use = sharding_mesh
+
   if axes is None:
-    axes = cur_mesh.axis_names
+    axes = mesh_to_use.axis_names
   if not isinstance(axes, tuple):
     axes = (axes,)
   for a in axes:
-    if (error_on_manual_to_auto_explict and
-        cur_mesh._name_to_type[a] == mesh_lib.AxisType.Manual and
+    if (error_on_manual_to_auto_explicit and
+        mesh_to_use._name_to_type[a] == mesh_lib.AxisType.Manual and
         axis_type in {mesh_lib.AxisType.Auto, mesh_lib.AxisType.Explicit}):
       raise NotImplementedError(
           'Going from `Manual` AxisType to `Auto` or `Explicit` AxisType is not'
           ' allowed. Please file a bug at https://github.com/jax-ml/jax/issues'
           ' with your use case')
-  return cur_mesh.update_axis_types({a: axis_type for a in axes})
+  return mesh_to_use.update_axis_types({a: axis_type for a in axes})
 
 def auto_axes(fun, *, axes: str | tuple[str, ...] | None = None,
               out_shardings=None):
@@ -2855,8 +2879,9 @@ def auto_axes(fun, *, axes: str | tuple[str, ...] | None = None,
         raise TypeError("Missing required keyword argument: 'out_shardings'")
     else:
       _out_shardings = out_shardings
-    new_mesh = _get_new_mesh(axes, mesh_lib.AxisType.Auto, 'auto_axes',
-                             error_on_manual_to_auto_explict=True)
+    new_mesh = _get_new_mesh(
+        axes, mesh_lib.AxisType.Auto, 'auto_axes', shardings=_out_shardings,
+        error_on_manual_to_auto_explicit=True)
     with mesh_lib.use_abstract_mesh(new_mesh):
       in_specs = tree_map(lambda a: core.modify_spec_for_auto_manual(
           core.get_aval(a).sharding.spec, new_mesh), args)
@@ -2883,7 +2908,7 @@ def explicit_axes(fun, *, axes: str | tuple[str, ...] | None = None,
     else:
       _in_shardings = in_shardings
     new_mesh = _get_new_mesh(axes, mesh_lib.AxisType.Explicit, 'explicit_axes',
-                             error_on_manual_to_auto_explict=True)
+                             error_on_manual_to_auto_explicit=True)
     with mesh_lib.use_abstract_mesh(new_mesh):
       args = mesh_cast(args, _in_shardings)
       out = fun(*args, **kwargs)
@@ -2905,41 +2930,3 @@ def get_unconstrained_dims(sharding: NamedSharding):
   assert sharding.spec is not None
   return {i for i, axes in enumerate(sharding.spec)
           if axes is PartitionSpec.UNCONSTRAINED}
-
-
-def get_op_sharding_from_executable(
-    executable) -> tuple[Sequence[xc.OpSharding], Sequence[xc.OpSharding]]:
-  in_op_shardings: list[xc.OpSharding] = []
-  parameter_shardings_from_xla = executable.get_parameter_shardings()
-  if parameter_shardings_from_xla is not None:
-    in_op_shardings = parameter_shardings_from_xla
-
-  out_op_shardings: list[xc.OpSharding] = []
-  output_shardings_from_xla = executable.get_output_shardings()
-  if output_shardings_from_xla is not None:
-    out_op_shardings = output_shardings_from_xla
-
-  return in_op_shardings, out_op_shardings
-
-
-def _get_ppspec_from_executable(
-    executable, mesh
-  ) -> tuple[Sequence[PartitionSpec], Sequence[PartitionSpec]]:
-  input_op_shardings, output_op_sharding = get_op_sharding_from_executable(
-      executable
-  )
-  in_pspec: list[PartitionSpec] = []
-  for s in input_op_shardings:
-    in_pspec.extend(parse_flatten_op_sharding(s, mesh))
-
-  out_pspec: list[PartitionSpec] = []
-  for s in output_op_sharding:
-    out_pspec.extend(parse_flatten_op_sharding(s, mesh))
-  return in_pspec, out_pspec
-
-
-def get_pspec_from_executable(
-    executable, mesh: pxla.Mesh
-) -> tuple[tuple[PartitionSpec, ...], tuple[PartitionSpec, ...]]:
-  in_pspec, out_pspec = _get_ppspec_from_executable(executable, mesh)
-  return tuple(in_pspec), tuple(out_pspec)

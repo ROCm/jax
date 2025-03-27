@@ -80,6 +80,15 @@ jax_py_test(
     ] + py_deps("absl/testing"),
 )
 
+jax_py_test(
+    name = "array_extensibility_test",
+    srcs = ["array_extensibility_test.py"],
+    deps = [
+        "//jax",
+        "//jax:test_util",
+    ] + py_deps("absl/testing"),
+)
+
 jax_multiplatform_test(
     name = "array_interoperability_test",
     srcs = ["array_interoperability_test.py"],
@@ -128,9 +137,20 @@ jax_multiplatform_test(
     srcs = ["debug_nans_test.py"],
 )
 
+jax_py_test(
+    name = "distributed_initialize_test",
+    srcs = ["distributed_initialize_test.py"],
+    deps = [
+        "//jax",
+        "//jax:test_util",
+    ] + py_deps("portpicker"),
+)
+
 jax_multiplatform_test(
     name = "distributed_test",
     srcs = ["distributed_test.py"],
+    enable_backends = ["gpu"],
+    deps = py_deps("portpicker"),
 )
 
 jax_py_test(
@@ -587,9 +607,9 @@ jax_multiplatform_test(
     name = "lax_scipy_spectral_dac_test",
     srcs = ["lax_scipy_spectral_dac_test.py"],
     shard_count = {
-        "cpu": 40,
-        "gpu": 40,
-        "tpu": 40,
+        "cpu": 20,
+        "gpu": 10,
+        "tpu": 10,
     },
     deps = [
         "//jax:internal_test_util",
@@ -1102,20 +1122,6 @@ jax_multiplatform_test(
 )
 
 jax_multiplatform_test(
-    name = "sparse_nm_test",
-    srcs = ["sparse_nm_test.py"],
-    enable_backends = [],
-    enable_configs = [
-        "gpu_a100",
-        "gpu_h100",
-    ],
-    deps = [
-        "//jax:experimental_sparse",
-        "//jax:pallas_gpu",
-    ],
-)
-
-jax_multiplatform_test(
     name = "sparsify_test",
     srcs = ["sparsify_test.py"],
     args = ["--jax_bcoo_cusparse_lowering=true"],
@@ -1157,6 +1163,11 @@ jax_multiplatform_test(
 jax_multiplatform_test(
     name = "error_check_test",
     srcs = ["error_check_test.py"],
+)
+
+jax_multiplatform_test(
+    name = "jax_numpy_error_test",
+    srcs = ["jax_numpy_error_test.py"],
 )
 
 jax_multiplatform_test(
@@ -1437,8 +1448,8 @@ jax_multiplatform_test(
         "gpu_p100x2_shardy",
     ],
     shard_count = {
-        "gpu": 10,
-        "tpu": 10,
+        "gpu": 5,
+        "tpu": 5,
     },
     tags = [
         "multiaccelerator",
