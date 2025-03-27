@@ -432,9 +432,7 @@ def make_async_remote_copy(axis_name: str, direction: str = 'right',
             pl.BlockSpec(memory_space=pltpu.SEMAPHORE),
         ),
         input_output_aliases={0: 0},
-        compiler_params=pltpu.TPUCompilerParams(
-            collective_id=0, has_side_effects=True
-        ),
+        compiler_params=pltpu.TPUCompilerParams(collective_id=0),
     )(x)
     return x, (out, send_sem, recv_sem)
 
@@ -535,9 +533,7 @@ def make_bidi_collective_permute(axis_name: str):
             (pl.BlockSpec(memory_space=pltpu.SEMAPHORE),) * 2,
         ),
         input_output_aliases={0: 0},
-        compiler_params=pltpu.TPUCompilerParams(
-            collective_id=0, has_side_effects=False
-        ),
+        compiler_params=pltpu.TPUCompilerParams(collective_id=0),
     )(x)
     return x, (out, left_sems, right_sems)
 

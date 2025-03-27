@@ -37,13 +37,17 @@ from .launch_context import (
     TransposeTransform as TransposeTransform,
 )
 
-from .dialect_lowering import (
-    lower_mgpu_dialect as lower_mgpu_dialect,
-)
+if dialect is not None:
+  from .dialect_lowering import (
+      lower_mgpu_dialect as lower_mgpu_dialect,
+  )
+  from .layout_inference import (
+      infer_layout as infer_layout,
+  )
+else:
+  lower_mgpu_dialect = None
+  infer_layout = None
 
-from .layout_inference import (
-    infer_layout as infer_layout,
-)
 
 from .fragmented_array import (
     FragmentedArray as FragmentedArray,

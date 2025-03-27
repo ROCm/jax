@@ -24,5 +24,4 @@ some of JAX's (extensible) internals.
    :caption: Design and internals
 
    autodidax
-   autodidax2_part1
    jep/index

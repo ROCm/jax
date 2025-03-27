@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from absl.testing import absltest, parameterized
+from absl.testing import absltest
 
 import jax
 import jax.numpy as jnp
@@ -25,7 +25,6 @@ jax.config.parse_flags_with_absl()
 
 
 def rms_norm_ref(x, eps=1e-5):
-  eps = jnp.float32(eps).astype(x.dtype)
   scale = jnp.sqrt(jnp.mean(jnp.square(x), axis=-1, keepdims=True) + eps)
   return x / scale
 
@@ -37,21 +36,18 @@ class RmsNormTests(jtu.JaxTestCase):
     if not jtu.test_device_matches(["cpu"]):
       self.skipTest("Unsupported platform")
 
-  @parameterized.parameters(jtu.dtypes.floating + jtu.dtypes.complex)
-  def test_basic(self, dtype):
-    x = jnp.linspace(-0.5, 0.5, 15, dtype=dtype)
+  def test_basic(self):
+    x = jnp.linspace(-0.5, 0.5, 15, dtype=jnp.float32)
     self.assertAllClose(rms_norm.rms_norm(x), rms_norm_ref(x))
 
-  @parameterized.parameters(jtu.dtypes.floating + jtu.dtypes.complex)
-  def test_batching(self, dtype):
-    x = jnp.linspace(-0.5, 0.5, 15, dtype=dtype).reshape((3, 5))
+  def test_batching(self):
+    x = jnp.linspace(-0.5, 0.5, 15, dtype=jnp.float32).reshape((3, 5))
     self.assertAllClose(
-        jax.vmap(rms_norm.rms_norm)(x),
-        jax.vmap(rms_norm_ref)(x))
+        jax.vmap(rms_norm.rms_norm)(x), jax.vmap(rms_norm_ref)(x)
+    )
 
-  @parameterized.parameters(jtu.dtypes.floating + jtu.dtypes.complex)
-  def test_grads(self, dtype):
-    x = jnp.linspace(-0.5, 0.5, 15, dtype=dtype).reshape((3, 5))
+  def test_grads(self):
+    x = jnp.linspace(-0.5, 0.5, 15, dtype=jnp.float32).reshape((3, 5))
     jtu.check_grads(rms_norm.rms_norm, (x,), order=1, modes=("rev",))
 
 

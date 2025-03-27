@@ -168,7 +168,6 @@ cc_library(
         "@llvm-project//mlir:Transforms",
         "@llvm-project//mlir:UBToLLVM",
         "@llvm-project//mlir:VectorDialect",
-        "@llvm-project//mlir:VectorToLLVM",
         "@xla//xla/service:custom_call_status",
         "@xla//xla/service:custom_call_target_registry",
     ],

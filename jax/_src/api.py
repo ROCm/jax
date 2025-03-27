@@ -146,8 +146,8 @@ float0 = dtypes.float0
 
 def jit(
   fun: Callable,
-  in_shardings: Any = sharding_impls.UNSPECIFIED,
-  out_shardings: Any = sharding_impls.UNSPECIFIED,
+  in_shardings=sharding_impls.UNSPECIFIED,
+  out_shardings=sharding_impls.UNSPECIFIED,
   static_argnums: int | Sequence[int] | None = None,
   static_argnames: str | Iterable[str] | None = None,
   donate_argnums: int | Sequence[int] | None = None,
@@ -1029,6 +1029,9 @@ def vmap(fun: F,
   return cast(F, vmap_f)
 
 def _mapped_axis_spec(args_flat, in_axes_flat):
+  if not config.sharding_in_types.value:
+    return None
+
   def _get_spec(arg, i):
     try:
       # Duck type arrays like BCOO arrays can be passed to vmap.
@@ -1040,7 +1043,7 @@ def _mapped_axis_spec(args_flat, in_axes_flat):
   for arg, i in zip(args_flat, in_axes_flat):
     if i is not None:
       spec = _get_spec(arg, i)
-      if temp_spec and temp_spec != spec:
+      if temp_spec is not None and temp_spec != spec:
         raise ValueError(
             "Mapped away dimension of inputs passed to vmap should be sharded"
             f" the same. Got inconsistent axis specs: {temp_spec} vs {spec}")
@@ -2354,7 +2357,7 @@ def device_put(
         assert not m and not d
         copy_semantics.append(dispatch.CopySemantics.COPY)
 
-    for xf, d in zip(x_flat, device_flat):
+    for xf, d in zip(x_flat, device_flat):  # type: ignore
       _check_sharding(shaped_abstractify(xf), d)
     out_flat = dispatch.device_put_p.bind(
         *x_flat, devices=device_flat, srcs=src_flat,

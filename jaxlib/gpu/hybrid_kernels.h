@@ -48,7 +48,6 @@ class MagmaLookup {
 
 XLA_FFI_DECLARE_HANDLER_SYMBOL(kEigReal);
 XLA_FFI_DECLARE_HANDLER_SYMBOL(kEigComp);
-XLA_FFI_DECLARE_HANDLER_SYMBOL(kGeqp3);
 
 }  // namespace JAX_GPU_NAMESPACE
 }  // namespace jax

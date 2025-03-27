@@ -38,9 +38,9 @@ from jax._src.interpreters import batching
 from jax._src.interpreters import mlir
 from jax._src.interpreters import partial_eval as pe
 from jax._src.pallas import core as pallas_core
+from jax._src.pallas import primitives
 from jax._src.pallas import helpers as pallas_helpers
 from jax._src.pallas import hlo_interpreter
-from jax._src.pallas import primitives
 from jax._src.state import discharge as state_discharge
 from jax._src.state import types as state_types
 from jax._src.util import (
@@ -566,7 +566,7 @@ def _pallas_call_batching_rule(
       ragged_axis_values.append(None)  # type: ignore[arg-type]
 
   all_dims = list(dims) + [0] * grid_mapping.num_outputs
-  ragged_axis_values = ragged_axis_values + [None] * grid_mapping.num_outputs
+  ragged_axis_values = ragged_axis_values + [None] * grid_mapping.num_outputs  # type: ignore[list-item]
 
   num_index_operands = grid_mapping.num_index_operands
   num_scratch_operands = grid_mapping.num_scratch_operands
@@ -729,7 +729,7 @@ def _pallas_call_batching_rule(
     for pos, invar in enumerate(jaxpr.invars):
       ragged_axis_values[pos] = var_to_raggedness[invar]
 
-    per_input_ragged_axis_dim: list[int | None] = []
+    per_input_ragged_axis_dim = []
     for rav in ragged_axis_values:
       if rav is not None:
         per_input_ragged_axis_dim.append(rav[1])
@@ -891,10 +891,11 @@ def _pallas_call_batching_rule(
 
   batched_out_avals = []
   for aval in out_avals:
-    sharding = aval.sharding.with_spec(tuple_insert(aval.sharding.spec, 0, None))
+    sharding = (aval.sharding.with_spec(tuple_insert(aval.sharding.spec, 0, None))
+                if config.sharding_in_types.value else None)
     shape = tuple_insert(aval.shape, 0, axis_size)
     batched_out_avals.append(aval.update(shape=shape, sharding=sharding))
-  batched_out_avals = tuple(batched_out_avals)
+  batched_out_avals = tuple(batched_out_avals)  # type: ignore
 
   out = pallas_call_p.bind(
       *dynamic_grid_args,
@@ -1036,7 +1037,7 @@ def pallas_call_checkify_rule(error: checkify.Error,
   #   returning them, since pallas kernels do not return outputs.
   # 4) Create block specs for the error state and call pallas_call with
   #   the new kernel.
-  dynamic_grid_bounds, scalars, args = split_list(
+  dynamic_grid_bounds, scalars, args = split_list(  # type: ignore
       args, [grid_mapping.num_dynamic_grid_bounds,
              grid_mapping.num_index_operands]
   )
@@ -1211,11 +1212,9 @@ _PALLAS_USE_MOSAIC_GPU = config.bool_flag(
     default=config.bool_env("JAX_PALLAS_USE_MOSAIC_GPU", False),
     help=(
         "If True, lower Pallas kernels to the experimental Mosaic GPU"
-        " dialect, instead of Triton IR."
+        " dialect, instead of Trition IR."
     ),
 )
-
-
 _PALLAS_VERBOSE_ERRORS = config.bool_flag(
     "jax_pallas_verbose_errors",
     default=config.bool_env("JAX_PALLAS_VERBOSE_ERRORS", True),
@@ -1336,10 +1335,6 @@ def _convert_out_shape_to_aval(out_shape: Any) -> jax_core.AbstractValue:
     case pallas_core.MemoryRef():
       return out_shape.get_array_aval()
     case _:
-      if type(out_shape) in pallas_core._out_shape_to_aval_mapping:
-        return pallas_core._out_shape_to_aval_mapping[type(out_shape)](
-            out_shape
-        )
       if not (hasattr(out_shape, "shape") and hasattr(out_shape, "dtype")):
         raise ValueError(f"Invalid out_shape type: {type(out_shape)}")
       return jax_core.ShapedArray(shape=out_shape.shape, dtype=out_shape.dtype)

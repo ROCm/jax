@@ -90,9 +90,6 @@ jax_multiplatform_test(
     enable_configs = [
         "gpu_p100x2",
     ],
-    env = {
-        "PYTHONWARNINGS": "default",  # TODO(b/394123878): protobuf, via TensorFlow, issues a Python warning under Python 3.12+ sometimes.
-    },
     tags = ["multiaccelerator"],
     deps = py_deps("tensorflow_core"),
 )
@@ -126,11 +123,6 @@ jax_multiplatform_test(
 jax_multiplatform_test(
     name = "debug_nans_test",
     srcs = ["debug_nans_test.py"],
-)
-
-jax_multiplatform_test(
-    name = "distributed_test",
-    srcs = ["distributed_test.py"],
 )
 
 jax_py_test(
@@ -573,7 +565,6 @@ jax_multiplatform_test(
     srcs = ["lax_scipy_special_functions_test.py"],
     backend_tags = {
         "gpu": ["noasan"],  # Times out.
-        "cpu": ["noasan"],  # Times out.
     },
     shard_count = {
         "cpu": 20,
@@ -1123,11 +1114,6 @@ jax_multiplatform_test(
         "gpu": 2,
         "tpu": 4,
     },
-)
-
-jax_multiplatform_test(
-    name = "error_check_test",
-    srcs = ["error_check_test.py"],
 )
 
 jax_multiplatform_test(

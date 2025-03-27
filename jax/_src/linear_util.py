@@ -19,8 +19,7 @@ For example,
 
    from jax._src import linear_util as lu
 
-   # Produce a WrappedFun for applying transformations on `f`
-   wf = lu.wrap_init(f, debug_info=api_util.debug_info("test", f, (), {}))
+   wf = lu.wrap_init(f)  # Produce a WrappedFun for applying transformations on `f`
 
 A `WrappedFun` object represents a function `f`, together with a sequence of
 nested transformations that are to be applied to the positional and keyword
@@ -67,8 +66,7 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from functools import partial
 import re
-from typing import Any, Hashable, NamedTuple
-import warnings
+from typing import Any, NamedTuple
 import weakref
 
 from jax._src import config
@@ -145,36 +143,22 @@ class WrappedFun:
 
   Args:
     f: the function to be transformed.
-    f_transformed: transformed function.
-    transforms: a tuple of `(gen, gen_static_args)` tuples representing
+    transforms: a list of `(gen, gen_static_args)` tuples representing
       transformations to apply to `f.` Here `gen` is a generator function and
       `gen_static_args` is a tuple of static arguments for the generator. See
       description at the start of this module for the expected behavior of the
       generator.
     stores: a list of out_store for the auxiliary output of the `transforms`.
-    params: a tuple of `(name, param)` tuples representing extra parameters to
-      pass as keyword arguments to `f`, along with the transformed keyword
-      arguments.
-    in_type: optional input type
-    debug_info: debugging info about the function being wrapped.
+    params: extra parameters to pass as keyword arguments to `f`, along with the
+      transformed keyword arguments.
   """
   __slots__ = ("f", "f_transformed", "transforms", "stores", "params", "in_type", "debug_info")
 
-  f: Callable
-  f_transformed: Callable
-  transforms: tuple[tuple[Callable, tuple[Hashable, ...]], ...]
-  stores: tuple[Store | EqualStore | None, ...]
-  params: tuple[tuple[str, Any], ...]
-  in_type: core.InputType | None
-  debug_info: DebugInfo
-
   def __init__(self, f: Callable,
                f_transformed: Callable,
-               transforms: tuple[tuple[Callable, tuple[Hashable, ...]], ...],
-               stores: tuple[Store | EqualStore | None, ...],
-               params: tuple[tuple[str, Hashable], ...],
-               in_type: core.InputType | None,
-               debug_info: DebugInfo):
+               transforms,
+               stores: tuple[Store | EqualStore | None, ...], params, in_type,
+               debug_info: DebugInfo | None):
     self.f = f
     self.f_transformed = f_transformed
     self.transforms = transforms
@@ -271,7 +255,6 @@ def fun_name(f):
   except:
     return str(f)
 
-
 class DebugInfo(NamedTuple):
   """Debugging info about a func, its arguments, and results."""
   traced_for: str             # e.g. 'jit', 'scan', etc
@@ -335,27 +318,19 @@ class DebugInfo(NamedTuple):
     return tuple(v for v, b in zip(self.safe_result_paths(len(keep)), keep) if b)
 
 
-def _missing_debug_info(for_what: str) -> DebugInfo:
-  warnings.warn(
-      f"{for_what} is missing a DebugInfo object. "
-      "This behavior is deprecated, use api_util.debug_info() to "
-      "construct a proper DebugInfo object and propagate it to this function. "
-      "See https://github.com/jax-ml/jax/issues/26480 for more details.",
-      DeprecationWarning, stacklevel=2)
-  return DebugInfo("missing_debug_info", "<missing_debug_info>", (), ())
-
 def wrap_init(f: Callable, params=None, *,
-              debug_info: DebugInfo) -> WrappedFun:
+              debug_info: DebugInfo | None = None) -> WrappedFun:
   """Wraps function `f` as a `WrappedFun`, suitable for transformation."""
   params_dict = {} if params is None else params
   params = () if params is None else tuple(sorted(params.items()))
   fun = WrappedFun(f, partial(f, **params_dict), (), (), params, None, debug_info)
-  if debug_info.result_paths is None:
-    fun, result_paths_thunk = _get_result_paths_thunk(fun)
-    debug_info = debug_info._replace(
-        result_paths=HashableFunction(result_paths_thunk, closure=()))
-  fun = WrappedFun(fun.f, fun.f_transformed, fun.transforms, fun.stores,
-                   fun.params, fun.in_type, debug_info)
+  if debug_info:
+    if debug_info.result_paths is None:
+      fun, result_paths_thunk = _get_result_paths_thunk(fun)
+      debug_info = debug_info._replace(
+          result_paths=HashableFunction(result_paths_thunk, closure=()))
+    fun = WrappedFun(fun.f, fun.f_transformed, fun.transforms, fun.stores,
+                     fun.params, fun.in_type, debug_info)
   return fun
 
 

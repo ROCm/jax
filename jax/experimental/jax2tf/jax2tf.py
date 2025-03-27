@@ -1542,7 +1542,7 @@ tf_not_yet_impl = [
     "consume",
     "ragged_dot",
     "cholesky_update",
-    "symmetric_product",
+    "symmetric_update",
     "from_edtype",
     "to_edtype",
     # Pallas TPU primitives
@@ -3604,7 +3604,7 @@ tf_impl_with_avals[pjit.pjit_p] = _pjit
 
 def _pjit_sharding_constraint(arg: TfVal, *,
                               sharding: sharding.Sharding,
-                              context_mesh: mesh.Mesh,
+                              resource_env: mesh.ResourceEnv,
                               _in_avals: Sequence[core.ShapedArray],
                               _out_aval: core.ShapedArray,
                               **kwargs) -> TfVal:

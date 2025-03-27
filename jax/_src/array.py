@@ -33,7 +33,6 @@ from jax._src import errors
 from jax._src import profiler
 from jax._src import util
 from jax._src import xla_bridge
-from jax._src.mesh import set_concrete_mesh
 from jax._src.interpreters import mlir
 from jax._src.interpreters import pxla
 from jax._src.interpreters import xla
@@ -210,7 +209,7 @@ class ArrayImpl(basearray.Array):
     # (like pjit, etc).
     if not _skip_checks or config.enable_checks.value:
       arrays = self._check_and_rearrange(arrays, self._sharding, self.aval)
-    self._arrays = arrays
+    self._arrays = arrays  # type: ignore
 
   if xla_extension_version >= 310:
     def _check_and_rearrange(self, arrays, sharding, aval):
@@ -384,7 +383,7 @@ class ArrayImpl(basearray.Array):
 
   def __getitem__(self, idx):
     from jax._src.lax import lax
-    from jax._src.numpy import indexing
+    from jax._src.numpy import lax_numpy
     self._check_if_deleted()
 
     if isinstance(self.sharding, PmapSharding):
@@ -419,7 +418,7 @@ class ArrayImpl(basearray.Array):
         return ArrayImpl(
             out.aval, sharding, [out], committed=False, _skip_checks=True)
 
-    return indexing.rewriting_take(self, idx)
+    return lax_numpy._rewriting_take(self, idx)
 
   def __iter__(self):
     if self.ndim == 0:
@@ -652,18 +651,9 @@ class ArrayImpl(basearray.Array):
       db.block_until_ready()
     return self
 
-  if xla_extension_version >= 314:
-    @use_cpp_method()
-    def _single_device_array_to_np_array_did_copy(self) -> tuple[np.ndarray, bool]:  # type: ignore
-      ...  # pytype: disable=bad-return-type
-
-  else:
-    @use_cpp_method()
-    def _single_device_array_to_np_array(self):
-      return np.asarray(self._arrays[0])
-
-    def _single_device_array_to_np_array_did_copy(self) -> tuple[np.ndarray, bool]:
-      return cast(np.ndarray, self._single_device_array_to_np_array()), True
+  @use_cpp_method()
+  def _single_device_array_to_np_array(self):
+    return np.asarray(self._arrays[0])
 
   @use_cpp_method()
   def _copy_single_device_array_to_host_async(self):
@@ -686,11 +676,9 @@ class ArrayImpl(basearray.Array):
 
     if self._npy_value is None:
       if self.is_fully_replicated:
-        npy_value, did_copy = self._single_device_array_to_np_array_did_copy()
-        npy_value.flags.writeable = False
-        if did_copy:
-          self._npy_value = npy_value
-        return npy_value
+        self._npy_value = self._single_device_array_to_np_array()
+        self._npy_value.flags.writeable = False
+        return cast(np.ndarray, self._npy_value)
 
       # TODO(yashkatariya): Merge `_process_has_full_value_in_mcjax` with
       # is_fully_addressable.
@@ -709,7 +697,7 @@ class ArrayImpl(basearray.Array):
 
       npy_value = np.empty(self.shape, self.dtype)
       for i, ind in _cached_index_calc(self.sharding, self.shape):
-        npy_value[ind], _ = self._arrays[i]._single_device_array_to_np_array_did_copy()
+        npy_value[ind] = self._arrays[i]._single_device_array_to_np_array()
       self._npy_value = npy_value
       self._npy_value.flags.writeable = False
     return self._npy_value
@@ -783,7 +771,7 @@ def make_array_from_callback(
     raise TypeError(
         "`DeviceLocalLayout.AUTO` cannot be used in place of a device-local"
         f" layout when calling `jax.make_array_from_callback`. Got {sharding}")
-  sharding = sharding.sharding if isinstance(sharding, Layout) else sharding
+  sharding = sharding.sharding if isinstance(sharding, Layout) else sharding  # type: ignore
   if not isinstance(sharding, Sharding):
     raise TypeError(
         f"sharding should be an instance of `jax.sharding`. Got {sharding} of"
@@ -1159,10 +1147,7 @@ def shard_device_array(x, devices, indices, sharding):
   if sharding.is_fully_replicated:
     shards = [x] * len(devices)
   else:
-    # TODO(yashkatariya): Maybe this should be set when we call the handler in
-    # InputsHandler.__call__?
-    with set_concrete_mesh(None):
-      shards = x._multi_slice(start_indices, limit_indices, removed_dims)
+    shards = x._multi_slice(start_indices, limit_indices, removed_dims)
   aval = core.shaped_abstractify(x)
   return pxla.batched_device_put(aval, sharding, shards, devices)
 

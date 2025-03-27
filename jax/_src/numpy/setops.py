@@ -28,10 +28,9 @@ from jax import lax
 from jax._src import core
 from jax._src import dtypes
 from jax._src.lax import lax as lax_internal
-from jax._src.numpy.array_creation import empty, full, full_like, ones, zeros
 from jax._src.numpy.lax_numpy import (
-    append, arange, concatenate, diff,
-    moveaxis, nonzero, ravel, sort, where)
+    append, arange, concatenate, diff, empty, full, full_like,
+    moveaxis, nonzero, ones, ravel, sort, where, zeros)
 from jax._src.numpy.reductions import any, cumsum
 from jax._src.numpy.sorting import lexsort
 from jax._src.numpy.ufuncs import isnan

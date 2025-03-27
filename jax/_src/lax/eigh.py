@@ -35,7 +35,6 @@ import numpy as np
 import jax
 import jax._src.numpy.lax_numpy as jnp
 import jax._src.numpy.linalg as jnp_linalg
-from jax._src.numpy import tensor_contractions
 from jax._src.numpy import reductions
 from jax._src.numpy import ufuncs
 from jax import lax
@@ -61,7 +60,7 @@ def _mask(x, dims, alternative=0):
   Replaces values outside those dimensions with `alternative`. `alternative` is
   broadcast with `x`.
   """
-  assert np.ndim(x) == len(dims)
+  assert jnp.ndim(x) == len(dims)
   mask = None
   for i, d in enumerate(dims):
     if d is not None:
@@ -145,7 +144,7 @@ def _projector_subspace(P, H, n, rank, maxiter=2, swap=False):
   N, _ = P.shape
   negative_column_norms = -jnp_linalg.norm(P, axis=1)
   # `jnp.argsort` ensures NaNs sort last, so set masked-out column norms to NaN.
-  negative_column_norms = _mask(negative_column_norms, (n,), np.nan)
+  negative_column_norms = _mask(negative_column_norms, (n,), jnp.nan)
   sort_idxs = jnp.argsort(negative_column_norms)
   X = P[:, sort_idxs]
   # X = X[:, :rank]
@@ -163,8 +162,8 @@ def _projector_subspace(P, H, n, rank, maxiter=2, swap=False):
     V2 = _slice(Q, (0, rank), (n, n - rank), (N, N))
 
     # TODO: might be able to get away with lower precision here
-    error_matrix = tensor_contractions.dot(V2.conj().T, H)
-    error_matrix = tensor_contractions.dot(error_matrix, V1)
+    error_matrix = jnp.dot(V2.conj().T, H)
+    error_matrix = jnp.dot(error_matrix, V1)
     error = jnp_linalg.norm(error_matrix)
     return V1, V2, error
 
@@ -176,7 +175,7 @@ def _projector_subspace(P, H, n, rank, maxiter=2, swap=False):
 
   def body_f(args):
     V1, _, j, _ = args
-    X = tensor_contractions.dot(P, V1)
+    X = jnp.dot(P, V1)
     V1, V2, error = body_f_after_matmul(X)
     return V1, V2, j + 1, error
 
@@ -235,8 +234,8 @@ def split_spectrum(H, n, split_point, V0=None):
   H_minus = (V_minus.conj().T @ H) @ V_minus
   H_plus = (V_plus.conj().T @ H) @ V_plus
   if V0 is not None:
-    V_minus = tensor_contractions.dot(V0, V_minus)
-    V_plus = tensor_contractions.dot(V0, V_plus)
+    V_minus = jnp.dot(V0, V_minus)
+    V_plus = jnp.dot(V0, V_plus)
   return H_minus, V_minus, H_plus, V_plus, rank_minus
 
 
@@ -371,7 +370,7 @@ def _eigh_work(H, n, termination_size, subset_by_index):
     eig_vecs, eig_vals = lax.linalg.eigh(H, sort_eigenvalues=False)
     eig_vecs = _mask(eig_vecs, (b, b))
     eig_vals = _mask(eig_vals, (b,))
-    eig_vecs = tensor_contractions.dot(V, eig_vecs)
+    eig_vecs = jnp.dot(V, eig_vecs)
 
     eig_vals = eig_vals.astype(eig_vecs.dtype)
     blocks = _update_slice(blocks, eig_vals[:, None], (offset, 0), (b, 1))
@@ -397,7 +396,7 @@ def _eigh_work(H, n, termination_size, subset_by_index):
     def default_case(agenda, blocks, eigenvectors):
       V = _slice(eigenvectors, (0, offset), (n, b), (N, B))
       # TODO: Improve this?
-      split_point = reductions.nanmedian(_mask(jnp.diag(ufuncs.real(H)), (b,), np.nan))
+      split_point = reductions.nanmedian(_mask(jnp.diag(ufuncs.real(H)), (b,), jnp.nan))
       H_minus, V_minus, H_plus, V_plus, rank = split_spectrum(
           H, b, split_point, V0=V)
 
@@ -564,7 +563,7 @@ def eigh(
     eig_vals, eig_vecs = _eigh_work(
         H, n, termination_size=termination_size, subset_by_index=subset_by_index
     )
-  eig_vals = _mask(ufuncs.real(eig_vals), (n,), np.nan)
+  eig_vals = _mask(ufuncs.real(eig_vals), (n,), jnp.nan)
   if sort_eigenvalues or compute_slice:
     sort_idxs = jnp.argsort(eig_vals)
     if compute_slice:

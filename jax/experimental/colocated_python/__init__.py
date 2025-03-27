@@ -20,5 +20,4 @@
 from jax.experimental.colocated_python.api import (
     colocated_cpu_devices as colocated_cpu_devices,
     colocated_python as colocated_python,
-    colocated_python_class as colocated_python_class,
 )

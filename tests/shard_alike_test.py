@@ -131,7 +131,7 @@ class ShardAlikeTest(jtu.JaxTestCase):
       return shard_alike(x, y)[1]
 
     out = f(inp)
-    self.assertTrue(out.sharding.is_equivalent_to(s, out.ndim))
+    self.assertEqual(out.sharding, s)
     self.assertArraysEqual(out, np_inp)
 
   def test_shard_map(self):
@@ -268,8 +268,7 @@ class ShardAlikeTest(jtu.JaxTestCase):
 
     x = jax.device_put(np.arange(8), s)
     _, y = shard_alike(x, jnp.arange(8))
-    self.assertTrue(y.sharding.is_equivalent_to(s, y.ndim))
-
+    self.assertEqual(y.sharding, s)
 
 if __name__ == '__main__':
   absltest.main(testLoader=jtu.JaxTestLoader())

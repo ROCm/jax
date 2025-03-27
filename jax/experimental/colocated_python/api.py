@@ -16,12 +16,11 @@
 from __future__ import annotations
 
 import collections
-from typing import Any, Callable, Sequence, Type
+from typing import Any, Callable, Sequence
 
 import jax
 from jax._src import api_util
 from jax.experimental.colocated_python.func import make_callable
-from jax.experimental.colocated_python.obj import wrap_class
 
 
 def colocated_cpu_devices(
@@ -49,13 +48,8 @@ def colocated_cpu_devices(
   return colocated_cpu_devices
 
 
-def colocated_python(fun: Callable[..., Any]) -> Callable[..., Any]:
-  """Executes the given Python function on the same devices as the arguments."""
+def colocated_python(fun: Callable[..., Any]) -> Any:
+  """Executes the given Python function on the same device as the arguments."""
   return make_callable(
       fun, api_util.fun_sourceinfo(fun), api_util.fun_signature(fun)
   )
-
-
-def colocated_python_class(cls: Type[object]) -> Type[object]:
-  """Executes the given Python class methods on the same devices as the arguments."""
-  return wrap_class(cls, api_util.fun_sourceinfo(cls))
