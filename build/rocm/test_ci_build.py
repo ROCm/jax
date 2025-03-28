@@ -33,12 +33,13 @@ ci_build = load_ci_build()
 
 
 class CIBuildTestCase(unittest.TestCase):
-    def test_parse_gpu_targets(self):
+    def test_parse_gpu_targets_spaces(self):
         targets = ["gfx908", "gfx940", "gfx1201"]
-
         r = ci_build.parse_gpu_targets(" ".join(targets))
         self.assertEqual(r, targets)
 
+    def test_parse_gpu_targets_commas(self):
+        targets = ["gfx908", "gfx940", "gfx1201"]
         r = ci_build.parse_gpu_targets(",".join(targets))
         self.assertEqual(r, targets)
 
@@ -47,6 +48,7 @@ class CIBuildTestCase(unittest.TestCase):
         r = ci_build.parse_gpu_targets("")
         self.assertEqual(r, expected)
 
+    def test_parse_gpu_targets_whitespace_only(self):
         self.assertRaises(ValueError, ci_build.parse_gpu_targets, " ")
 
     def test_parse_gpu_targets_invalid_arch(self):
