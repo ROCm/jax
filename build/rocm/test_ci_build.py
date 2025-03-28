@@ -33,12 +33,13 @@ ci_build = load_ci_build()
 
 
 class CIBuildTestCase(unittest.TestCase):
-    def test_parse_gpu_targets(self):
+    def test_parse_gpu_targets_spaces(self):
         targets = ["gfx908", "gfx940", "gfx1201"]
-
         r = ci_build.parse_gpu_targets(" ".join(targets))
         self.assertEqual(r, targets)
 
+    def test_parse_gpu_targets_commas(self):
+        targets = ["gfx908", "gfx940", "gfx1201"]
         r = ci_build.parse_gpu_targets(",".join(targets))
         self.assertEqual(r, targets)
 
@@ -47,11 +48,33 @@ class CIBuildTestCase(unittest.TestCase):
         r = ci_build.parse_gpu_targets("")
         self.assertEqual(r, expected)
 
+    def test_parse_gpu_targets_whitespace_only(self):
         self.assertRaises(ValueError, ci_build.parse_gpu_targets, " ")
 
     def test_parse_gpu_targets_invalid_arch(self):
         targets = ["gfx908", "gfx940", "--oops", "/jax"]
         self.assertRaises(ValueError, ci_build.parse_gpu_targets, " ".join(targets))
+
+    def test_canonicalize_python_versions(self):
+        versions = ["3.10.0", "3.11.0", "3.12.0"]
+        exp = ["3.10", "3.11", "3.12"]
+        res = ci_build.canonicalize_python_versions(versions)
+        self.assertEqual(res, exp)
+
+    def test_canonicalize_python_versions_scalar(self):
+        versions = ["3.10.0"]
+        exp = ["3.10"]
+        res = ci_build.canonicalize_python_versions(versions)
+        self.assertEqual(res, exp)
+
+    def test_canonicalize_python_versions_no_revision_part(self):
+        versions = ["3.10", "3.11"]
+        res = ci_build.canonicalize_python_versions(versions)
+        self.assertEqual(res, versions)
+
+    def test_canonicalize_python_versions_string(self):
+        versions = "3.10.0"
+        self.assertRaises(ValueError, ci_build.canonicalize_python_versions, versions)
 
 
 if __name__ == "__main__":
