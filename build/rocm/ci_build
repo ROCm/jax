@@ -27,7 +27,9 @@ import sys
 from typing import List
 
 
-DEFAULT_GPU_DEVICE_TARGETS = "gfx900,gfx906,gfx908,gfx90a,gfx940,gfx941,gfx942,gfx1030,gfx1100,gfx1101,gfx1200,gfx1201"
+DEFAULT_GPU_DEVICE_TARGETS = (
+    "gfx906,gfx908,gfx90a,gfx942,gfx1030,gfx1100,gfx1101,gfx1200,gfx1201"
+)
 
 
 def image_by_name(name):
@@ -41,11 +43,14 @@ def dist_wheels(
     rocm_version,
     python_versions,
     xla_path,
-    gpu_device_targets: List[str],
     rocm_build_job="",
     rocm_build_num="",
     compiler="gcc",
+    gpu_device_targets: List[str] = None,
 ):
+    if not gpu_device_targets:
+        gpu_device_targets = DEFAULT_GPU_DEVICE_TARGETS.split(",")
+
     if xla_path:
         xla_path = os.path.abspath(xla_path)
 
@@ -160,7 +165,6 @@ def _fetch_jax_metadata(xla_path):
 
 def dist_docker(
     rocm_version,
-    gpu_device_targets: List[str],
     base_docker,
     python_versions,
     xla_path,
@@ -169,7 +173,11 @@ def dist_docker(
     tag="rocm/jax-dev",
     dockerfile=None,
     keep_image=True,
+    gpu_device_targets: List[str] = None,
 ):
+    if not gpu_device_targets:
+        gpu_device_targets = DEFAULT_GPU_DEVICE_TARGETS.split(",")
+
     if not dockerfile:
         dockerfile = "build/rocm/Dockerfile.ms"
 
@@ -360,9 +368,9 @@ def main():
             args.rocm_version,
             args.python_versions,
             args.xla_source_dir,
-            gpu_device_targets,
             args.rocm_build_job,
             args.rocm_build_num,
+            gpu_device_targets=gpu_device_targets,
         )
 
     elif args.action == "test":
@@ -373,14 +381,13 @@ def main():
             args.rocm_version,
             args.python_versions,
             args.xla_source_dir,
-            gpu_device_targets,
             args.rocm_build_job,
             args.rocm_build_num,
             args.compiler,
+            gpu_device_targets=gpu_device_targets,
         )
         dist_docker(
             args.rocm_version,
-            gpu_device_targets,
             args.base_docker,
             args.python_versions,
             args.xla_source_dir,
@@ -389,6 +396,7 @@ def main():
             tag=args.image_tag,
             dockerfile=args.dockerfile,
             keep_image=args.keep_image,
+            gpu_device_targets=gpu_device_targets,
         )
 
 
