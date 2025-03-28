@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import abc
 import collections
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 import dataclasses
 import enum
 import itertools as it
@@ -29,10 +29,12 @@ from jax._src import core as jax_core
 from jax._src import dtypes
 from jax._src import effects
 from jax._src import tree_util
+from jax._src.lib.mlir.dialects import arith as arith_dialect
 from jax._src.pallas import core as pallas_core
+from jax._src.pallas import primitives as pallas_primitives
+from jax._src.state import discharge as state_discharge
 from jax._src.state import indexing
 from jax._src.state import types as state_types
-from jax._src.state import discharge as state_discharge
 import jax.experimental.mosaic.gpu as mgpu
 import jax.numpy as jnp
 from jaxlib.mlir import ir
@@ -100,6 +102,8 @@ class GPUMemorySpace(enum.Enum):
   GMEM = "gmem"
   #: Shared memory.
   SMEM = "smem"
+  #: Tensor memory.
+  TMEM = "tmem"
   #: Registers.
   REGS = "regs"
 
@@ -111,20 +115,29 @@ class GPUMemorySpace(enum.Enum):
       shape: tuple[int, ...],
       dtype: jnp.dtype,
       transforms: Sequence[MemoryRefTransform] = (),
-
   ) -> pallas_core.MemoryRef:
     # A convenience function for constructing MemoryRef types.
     return GPUMemoryRef(shape, dtype, memory_space=self, transforms=transforms)
 
 
-def kernel(body, out_shape, compiler_params=None, **mesh_kwargs):
+def kernel(
+    body: Callable[..., None],
+    out_shape: object,
+    *,
+    scratch_shapes: Sequence[pallas_core.ScratchShape] = (),
+    compiler_params: object | None = None,
+    **mesh_kwargs: object,
+):
   if unwrap_out := not isinstance(out_shape, (tuple, list)):
     out_shape = (out_shape,)
   def wrapper(*operands):
     def stateful(operand_and_out_refs):
       operand_refs, out_refs = operand_and_out_refs
       def cmap_body():
-        body(*operand_refs, *out_refs)
+        pallas_primitives.run_scoped(
+            lambda *scratch_refs: body(*operand_refs, *out_refs, *scratch_refs),
+            *scratch_shapes,
+        )
       pallas_core.core_map(
           GPUMesh(**mesh_kwargs), compiler_params=compiler_params
       )(cmap_body)
@@ -133,6 +146,24 @@ def kernel(body, out_shape, compiler_params=None, **mesh_kwargs):
     )
     return outs[0] if unwrap_out else outs
   return wrapper
+
+
+def _is_known_divisible(value, divisor, fuel=10) -> bool:
+  """Returns True if the value is statically known to be divisible by the divisor."""
+  if fuel < 0:
+    return False
+  if not isinstance(value.owner, ir.Operation):
+    return False
+  def_op = value.owner.opview
+  match def_op:
+    case arith_dialect.IndexCastOp():
+      return _is_known_divisible(value.owner.operands[0], divisor, fuel - 1)
+    case arith_dialect.ConstantOp():
+      return ir.IntegerAttr(def_op.value).value % divisor == 0
+    case arith_dialect.MulIOp():
+      return (_is_known_divisible(value.owner.operands[0], divisor, fuel // 2) or
+              _is_known_divisible(value.owner.operands[1], divisor, (fuel + 1)// 2))
+  return False
 
 
 @dataclasses.dataclass(frozen=True)
@@ -171,7 +202,7 @@ class MemoryRefTransform(pallas_core.MemoryRefTransform, abc.ABC):
         shape=self.to_gpu_transform().transform_shape(aval.shape)
     )
 
-Index = slice | int | ir.Value
+Index = mgpu.DynamicSlice | slice | int | ir.Value
 
 @dataclasses.dataclass(frozen=True)
 class TilingTransform(MemoryRefTransform):
@@ -218,16 +249,37 @@ class UntileRef(state_types.Transform):
   ) -> tuple[tuple[Index, ...], state_types.Transform]:
     untiled_idxs = idxs[: -len(self.tiling)]
     tiled_idxs = idxs[-len(self.tiling) :]
-    idxs_after_tiling = []
+    idxs_after_tiling: list[Index] = []
     for idx, tile in zip(tiled_idxs, self.tiling):
-      if not isinstance(idx, slice):
-        raise NotImplementedError("Non-slice indices are not supported")
-      assert isinstance(idx, slice)
-      if idx.step is not None and idx.step != 1:
-        raise NotImplementedError("Strided slices unsupported")
-      if (idx.start is not None and idx.start % tile) or (idx.stop is not None and idx.stop % tile):
-        raise ValueError("Non-empty slices must be tile aligned")
-      idxs_after_tiling.append(slice(idx.start // tile, idx.stop // tile))
+      if isinstance(idx, slice):
+        if idx.step is not None and idx.step != 1:
+          raise NotImplementedError("Strided slices unsupported")
+        if (idx.start is not None and idx.start % tile) or (idx.stop is not None and idx.stop % tile):
+          raise ValueError("Non-empty slices must be tile aligned")
+        idxs_after_tiling.append(slice(idx.start // tile, idx.stop // tile))
+      elif isinstance(idx, mgpu.DynamicSlice):
+        if idx.length % tile:
+          raise ValueError(
+              f"Dynamic slice length ({idx.length}) is not divisible by the"
+              f" tiling ({tile})"
+          )
+        if isinstance(idx.base, ir.Value):
+          if not _is_known_divisible(idx.base, tile):
+            raise ValueError(
+                "Dynamic slice base index (which is a dynamic value) cannot be"
+                f" statically proven to be divisible by the tiling ({tile})"
+            )
+          new_base = arith_dialect.divui(idx.base, mgpu.c(tile, idx.base.type))
+        else:
+          if idx.base % tile:
+            raise ValueError(
+                f"Dynamic slice base ({idx.base}) is not divisible by the"
+                f" tiling ({tile})"
+            )
+          new_base = idx.base // tile
+        idxs_after_tiling.append(mgpu.DynamicSlice(new_base, idx.length // tile))
+      else:
+        raise TypeError(f"Unsupported index type: {type(idx)}")
     return (*untiled_idxs, *idxs_after_tiling, *(slice(None) for _ in self.tiling)), self
 
   def undo_to_gpu_transform(self) -> mgpu.MemRefTransform:
@@ -285,7 +337,7 @@ class TransposeRef(state_types.Transform):
       self, idxs: tuple[Index, ...]
   ) -> tuple[tuple[Index, ...], state_types.Transform]:
     removed_dims = [
-        i for i, idx in enumerate(idxs) if not isinstance(idx, slice)
+        i for i, idx in enumerate(idxs) if not isinstance(idx, (slice, mgpu.ds))
     ]
     new_perm = tuple(
         p - sum(d < p for d in removed_dims)
@@ -358,18 +410,22 @@ class UnswizzleRef(state_types.Transform):
   ) -> tuple[tuple[Index, ...], state_types.Transform]:
     if not idxs:
       return idxs, self
-    if not all(isinstance(idx, slice) for idx in idxs[-2:]):
+    if not all(isinstance(idx, (slice, mgpu.ds)) for idx in idxs[-2:]):
       raise NotImplementedError(
           "Non-slice indices are not supported in 2 minormost dims"
       )
     last_idx = idxs[-1]
-    assert isinstance(last_idx, slice)
-    if last_idx.step is not None and last_idx.step != 1:
-      raise NotImplementedError("Swizzled dims cannot be sliced")
-    if (last_idx.start is not None and last_idx.start != 0) or (
-        last_idx.stop is not None and last_idx.stop != self.swizzle
-    ):
-      raise ValueError("Swizzled dims cannot be sliced")
+    if isinstance(last_idx, mgpu.DynamicSlice):
+      if last_idx.base != 0 or last_idx.length != self.swizzle:
+        raise ValueError("Swizzled dims cannot be sliced")
+    else:
+      assert isinstance(last_idx, slice)
+      if (
+          (last_idx.step is not None and last_idx.step != 1)
+          or (last_idx.start is not None and last_idx.start != 0)
+          or (last_idx.stop is not None and last_idx.stop != self.swizzle)
+      ):
+        raise ValueError("Swizzled dims cannot be sliced")
     return idxs, self
 
 
@@ -408,6 +464,7 @@ class GPUBlockSpec(pallas_core.BlockSpec):
 
 GMEM = GPUMemorySpace.GMEM
 SMEM = GPUMemorySpace.SMEM
+TMEM = GPUMemorySpace.TMEM
 REGS = GPUMemorySpace.REGS
 
 
@@ -506,16 +563,20 @@ class GPUMesh:
   axis_names: tuple[str, ...] = ()
 
   def __post_init__(self):
-    if len(self.axis_names) != len(self.grid) + (self.num_threads is not None):
-      raise ValueError("Need as many axis names as grid dimensions + warp groups")
+    if len(self.cluster) > 3:
+      raise ValueError(f"cluster= must be at most 3D, got {self}.")
+    num_axis_names = (
+        len(self.grid) + len(self.cluster) + (self.num_threads is not None)
+    )
+    if len(self.axis_names) != num_axis_names:
+      raise ValueError(
+          "Need an axis name for each grid and cluster dimension plus "
+          f" an additional axis name when num_threads= is given, got {self}."
+      )
     if self.num_threads is not None and self.num_threads > 2048 // 128:
       raise ValueError(
           "Requested too many CUDA threads per block. Each Mosaic thread"
           " corresponds to 128 CUDA threads."
-      )
-    if self.cluster:
-      raise NotImplementedError(
-          "Pallas/MosaicGPU does not support clusters yet."
       )
 
   @property
@@ -556,8 +617,6 @@ def _gpu_mesh_discharge_rule(
 ):
   if not isinstance(mesh, GPUMesh):
     raise TypeError(f"Mesh must be a GPUMesh, got {type(mesh)}")
-  if mesh.cluster:
-    raise NotImplementedError
   if compiler_params and not isinstance(compiler_params, GPUCompilerParams):
     raise TypeError(
         "Compiler params must be a GPUCompilerParams, got"

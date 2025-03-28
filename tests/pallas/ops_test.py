@@ -30,6 +30,7 @@ from jax._src import dtypes
 from jax._src import linear_util as lu
 from jax._src import state
 from jax._src import test_util as jtu
+from jax._src.pallas import pallas_call
 from jax.experimental import pallas as pl
 from jax.interpreters import partial_eval as pe
 import jax.numpy as jnp
@@ -61,7 +62,7 @@ import hypothesis.strategies as hps
 jax.config.parse_flags_with_absl()
 jtu.setup_hypothesis(max_examples=50)
 
-use_mosaic_gpu = jax.config.read("jax_pallas_use_mosaic_gpu")
+use_mosaic_gpu = pallas_call._PALLAS_USE_MOSAIC_GPU.value
 
 intx = dtypes.canonicalize_dtype(jnp.int64)
 floatx = dtypes.canonicalize_dtype(jnp.float64)
@@ -203,7 +204,7 @@ UNARY_PRIMITIVES = [
     # TODO(sharadmv,apaszke): enable zero dim sizes
     # TODO(sharadmv,apaszke): enable one dim sizes
     (
-        lax.neg_p,
+        lax.neg_p, {},
         make_shape_dtype_strategy(
             min_rank=2,
             max_rank=3,
@@ -213,7 +214,7 @@ UNARY_PRIMITIVES = [
         ),
     ),
     (
-        lax.not_p,
+        lax.not_p, {},
         make_shape_dtype_strategy(
             min_rank=2,
             max_rank=3,
@@ -225,6 +226,7 @@ UNARY_PRIMITIVES = [
     *[
         (
             prim,
+            params,
             make_shape_dtype_strategy(
                 min_rank=2,
                 max_rank=3,
@@ -233,23 +235,23 @@ UNARY_PRIMITIVES = [
                 valid_dtypes=[jnp.dtype("float32")],
             ),
         )
-        for prim in [
-            lax.exp_p,
-            lax.tanh_p,
-            lax.logistic_p,
-            lax.rsqrt_p,
-            lax.log_p,
-            lax.exp2_p,
-            lax.abs_p,
-            lax.log1p_p,
-            lax.sin_p,
-            lax.sqrt_p,
+        for prim, params in [
+            (lax.abs_p, {}),
+            (lax.exp_p, {"accuracy": None}),
+            (lax.tanh_p, {"accuracy": None}),
+            (lax.logistic_p, {"accuracy": None}),
+            (lax.rsqrt_p, {"accuracy": None}),
+            (lax.log_p, {"accuracy": None}),
+            (lax.exp2_p, {"accuracy": None}),
+            (lax.log1p_p, {"accuracy": None}),
+            (lax.sin_p, {"accuracy": None}),
+            (lax.sqrt_p, {"accuracy": None}),
         ]
     ],
 ]
 
 UNARY_FUNCTIONS = [
-    (prim.name, prim.bind, strategy) for prim, strategy in UNARY_PRIMITIVES
+    (prim.name, functools.partial(prim.bind, **params), strategy) for prim, params, strategy in UNARY_PRIMITIVES
 ] + [
     (
         name,
@@ -1936,7 +1938,7 @@ class OpsTest(PallasBaseTest):
     def masked_oob_load_store_slice(x_ref, mask_ref, start_idx_ref, o_ref):
       x = pl.load(x_ref, (pl.dslice(start_idx_ref[()], n)),
                   mask=mask_ref[:], other=-1.)
-      pl.store(o_ref, (pl.dslice(None),), x)
+      o_ref[...] = x
 
     x = random.normal(random.key(0), (n,))
     slice_start = random.randint(random.key(2), (), 1, n)

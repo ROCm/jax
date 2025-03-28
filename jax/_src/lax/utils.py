@@ -19,6 +19,7 @@
 from functools import partial
 
 from jax._src import core
+from jax._src import config
 from jax._src import dispatch
 from jax._src import dtypes
 from jax._src import mesh as mesh_lib
@@ -37,13 +38,13 @@ def _argnum_weak_type(*argnums):
   return lambda *args, **_: all(args[i].weak_type for i in argnums)
 
 def standard_primitive(shape_rule, dtype_rule, name,
-                       weak_type_rule=None, sharding_rule=None):
+                       weak_type_rule=None, sharding_rule=None, vma_rule=None):
   weak_type_rule = weak_type_rule or _standard_weak_type_rule
   prim = core.Primitive(name)
   prim.def_impl(partial(dispatch.apply_primitive, prim))
   prim.def_abstract_eval(
       partial(standard_abstract_eval, prim, shape_rule, dtype_rule,
-              weak_type_rule, sharding_rule))
+              weak_type_rule, sharding_rule, vma_rule))
   return prim
 
 def _get_array_abstraction_level(a): return a.array_abstraction_level
@@ -74,7 +75,7 @@ def call_sharding_rule(prim, rule, num_out, *avals, **kwargs):
     s = NamedSharding(aval_mesh, P())
     return s if num_out is None else [s] * num_out
   if rule is None:
-    raise ValueError(
+    raise core.ShardingTypeError(
         f'sharding rule for {prim.name} is not implemented. Please file a'
         ' bug at https://github.com/jax-ml/jax/issues. You can work around'
         ' this error by dropping that operation into full auto sharding'
@@ -95,14 +96,14 @@ def call_shape_dtype_sharding_rule(prim, shape_rule, dtype_rule, sharding_rule,
     avals_str = ', '.join(i.str_short(short_dtypes=True) for i in avals)
     mesh = mesh_lib.empty_abstract_mesh if e.mesh is None else e.mesh
     out_aval_str = core.str_short_aval(out_shapes, out_dtypes, mesh, e.pspec,
-                                       short_dtypes=True)
-    raise TypeError(
+                                       frozenset(), short_dtypes=True)
+    raise core.ShardingTypeError(
         f'{prim} operation with inputs: {avals_str} produces an illegally'
         f' sharded result: {out_aval_str}') from e
   return out_shapes, out_dtypes, out_shardings
 
 def standard_abstract_eval(prim, shape_rule, dtype_rule, weak_type_rule,
-                           sharding_rule, *avals, **kwargs):
+                           sharding_rule, vma_rule, *avals, **kwargs):
   assert all(isinstance(aval, core.UnshapedArray) for aval in avals), avals
   assert not prim.multiple_results
   weak_type = weak_type_rule(*avals, **kwargs)
@@ -112,8 +113,11 @@ def standard_abstract_eval(prim, shape_rule, dtype_rule, weak_type_rule,
     out_shape, out_dtype, out_sharding = call_shape_dtype_sharding_rule(
         prim, shape_rule, dtype_rule, sharding_rule, False,
         *avals, **kwargs)
+    out_vma = (vma_rule(*avals, **kwargs) if config.varying_axes_in_types.value
+               else frozenset())
     out_aval = core.ShapedArray(
-        out_shape, out_dtype, weak_type=weak_type, sharding=out_sharding)
+        out_shape, out_dtype, weak_type=weak_type, sharding=out_sharding,
+        vma=out_vma)
     core.check_avals_context_mesh([out_aval], prim.name)
     return out_aval
   elif least_specialized is core.DShapedArray:
@@ -127,7 +131,7 @@ def standard_abstract_eval(prim, shape_rule, dtype_rule, weak_type_rule,
     raise TypeError(avals, least_specialized)
 
 def standard_multi_result_abstract_eval(
-    prim, shape_rule, dtype_rule, weak_type_rule, sharding_rule,
+    prim, shape_rule, dtype_rule, weak_type_rule, sharding_rule, vma_rule,
     *avals, **kwargs):
   assert prim.multiple_results
   assert all(isinstance(aval, core.UnshapedArray) for aval in avals), avals
@@ -137,11 +141,13 @@ def standard_multi_result_abstract_eval(
     core.check_avals_context_mesh(avals, prim.name)
     out_shapes, out_dtypes, out_shardings = call_shape_dtype_sharding_rule(
         prim, shape_rule, dtype_rule, sharding_rule, True, *avals, **kwargs)
+    out_vmas = (vma_rule(*avals, **kwargs) if config.varying_axes_in_types.value
+                else [frozenset()] * len(out_shapes))
     if isinstance(weak_types, bool):
       weak_types = (weak_types,) * len(out_shapes)
-    out_avals = [core.ShapedArray(s, d, weak_type=weak_type, sharding=sh)
-                 for s, d, weak_type, sh in zip(out_shapes, out_dtypes,
-                                                weak_types, out_shardings)]
+    out_avals = [core.ShapedArray(s, d, weak_type=weak_type, sharding=sh, vma=vma)
+                 for s, d, weak_type, sh, vma in zip(
+                     out_shapes, out_dtypes, weak_types, out_shardings, out_vmas)]
     core.check_avals_context_mesh(out_avals, prim.name)
     return out_avals
   elif least_specialized is core.UnshapedArray:

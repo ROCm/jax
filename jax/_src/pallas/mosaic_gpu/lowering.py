@@ -17,11 +17,13 @@
 from __future__ import annotations
 
 import collections
-from collections.abc import Callable, Hashable, MutableMapping, MutableSequence, Sequence
+from collections.abc import Callable, Hashable, Iterable, MutableMapping, MutableSequence, Sequence
 import contextlib
 import dataclasses
 import functools
+import itertools
 import math
+import operator
 from typing import Any, Protocol, cast
 
 import jax
@@ -57,6 +59,7 @@ import jax.experimental.mosaic.gpu as mgpu
 from jax.experimental.mosaic.gpu import core as mgpu_core
 from jax.experimental.mosaic.gpu import profiler as mgpu_profiler
 from jax.experimental.mosaic.gpu import utils as mgpu_utils
+from jax.experimental.mosaic.gpu import tcgen05
 import jax.numpy as jnp
 import numpy as np
 
@@ -98,6 +101,7 @@ class ResourceEstimatorContext:
 @dataclasses.dataclass(kw_only=True, frozen=True)
 class Resources:
   smem_scratch_bytes: int = 0
+  tmem_scratch_cols: int = 0
   barrier_counts: collections.Counter[mgpu.Barrier] = dataclasses.field(
       default_factory=collections.Counter
   )
@@ -107,6 +111,12 @@ class Resources:
         self,
         "smem_scratch_bytes",
         _align_to(self.smem_scratch_bytes, _SMEM_ALIGNMENT),
+    )
+    object.__setattr__(
+        self,
+        "tmem_scratch_cols",
+        # TMEM must be allocated in 128x8 chunks.
+        _align_to(self.tmem_scratch_cols, 8),
     )
 
   @property
@@ -120,6 +130,7 @@ class Resources:
     # we will allocate two barriers, even though one would be enough.
     return Resources(
         smem_scratch_bytes=self.smem_scratch_bytes + other.smem_scratch_bytes,
+        tmem_scratch_cols=self.tmem_scratch_cols + other.tmem_scratch_cols,
         barrier_counts=self.barrier_counts + other.barrier_counts,
     )
 
@@ -127,6 +138,9 @@ class Resources:
     return Resources(
         smem_scratch_bytes=max(
             self.smem_scratch_bytes, other.smem_scratch_bytes
+        ),
+        tmem_scratch_cols=max(
+            self.tmem_scratch_cols, other.tmem_scratch_cols
         ),
         barrier_counts=self.barrier_counts | other.barrier_counts,
     )
@@ -216,10 +230,26 @@ def _run_scoped_resource_estimator(
               )
           ])
       )
-    else:
+    elif aval.memory_space == gpu_core.TMEM:
+      if aval.dtype.itemsize != 4:
+        raise ValueError("TMEM only supports 32-bit types.")
+      if len(aval.shape) != 2:
+        raise ValueError("TMEM allocations must be 2D.")
+      if aval.shape[0] % tcgen05.TMEM_ROWS != 0:
+        raise ValueError("TMEM shape[0] must be a multiple of 128.")
+      if aval.shape[1] % 8 != 0:
+        raise ValueError("TMEM shape[1] must be a multiple of 8.")
+      rs += Resources(tmem_scratch_cols=aval.shape[1])
+    elif aval.memory_space == gpu_core.SMEM:
       rs += Resources(
           smem_scratch_bytes=math.prod(aval.shape) * aval.dtype.itemsize
       )
+    elif aval.memory_space == gpu_core.REGS:
+      # Don't need to allocate anything.
+      pass
+    else:
+      raise NotImplementedError(
+          f"Unsupported memory space: {aval.memory_space}")
   return rs + _estimate_resources(ctx, jaxpr)
 
 
@@ -233,15 +263,41 @@ def _reduce_sum_resource_estimator(
   return Resources(smem_scratch_bytes=4 * x_aval.dtype.itemsize)
 
 
+@dataclasses.dataclass(frozen=True)
+class _AxisNames:
+  grid: Sequence[Hashable]
+  cluster: Sequence[Hashable] = ()
+  wg: Hashable | None = None
+
+  def __iter__(self) -> Iterable[Hashable]:
+    return itertools.chain(
+        self.grid, self.cluster, [self.wg] if self.wg is not None else []
+    )
+
+  @classmethod
+  def from_mesh(
+      cls, mesh: gpu_core.GPUMesh, axis_names: Sequence[str]
+  ) -> "_AxisNames":
+    wg_name = None
+    if mesh.num_threads is not None:
+      wg_name = axis_names[-1]
+      axis_names = axis_names[:-1]
+    grid_names, cluster_names = util.split_list(axis_names, [len(mesh.grid)])
+    return cls(grid_names, cluster_names, wg_name)
+
+
 @dataclasses.dataclass
 class ModuleContext:
   name: str
-  grid_names: Sequence[Hashable] | None
+  axis_names: _AxisNames | None
   program_ids: Sequence[ir.Value] | None
   approx_math: bool
-  single_wg_lane_predicate: ir.Value
+  single_wg_lane_predicate: ir.Value | None
   smem_requested_bytes: int
   smem_used_bytes: int
+  tmem_requested_cols: int
+  tmem_used_cols: int
+  tmem_base_ptr: ir.Value
   runtime_barriers: MutableMapping[
       mgpu.Barrier, MutableSequence[mgpu.BarrierRef]
   ]
@@ -260,6 +316,27 @@ class ModuleContext:
     if not available:
       raise RuntimeError(f"Barrier {barrier} is already reserved")
     return available.pop()
+
+  @contextlib.contextmanager
+  def alloc_tmem(
+      self,
+      struct: jax.ShapeDtypeStruct,
+      layout: tcgen05.TMEMLayout | None = None
+  ) -> ir.Value:
+    if self.tmem_used_cols > 0:
+      raise NotImplementedError(
+          "Multiple TMEM allocations are not implemented.")
+    if layout is None:
+      layout = tcgen05._infer_tmem_layout(struct.shape, collective=False)
+    cols_used = np.prod(struct.shape) // tcgen05.TMEM_ROWS
+    self.tmem_used_cols += cols_used
+    off = self.tmem_base_ptr
+    tmem_ref = tcgen05.TMEMRef(address=off,
+                               shape=struct.shape,
+                               dtype=mgpu_utils.dtype_to_ir_type(struct.dtype),
+                               layout=layout)
+    yield tmem_ref
+    self.tmem_used_cols -= cols_used
 
   # TODO(cperivol): Only return the shapes and figure out the sizes when freeing.
   @contextlib.contextmanager
@@ -565,10 +642,15 @@ def lower_pipelined_jaxpr_to_module(
     )
     assert not new_consts
 
+  axis_names = (
+      _AxisNames.from_mesh(mesh, grid_mapping.grid_names)
+      if mesh is not None
+      else _AxisNames(grid_mapping.grid_names)
+  )
   with grid_mapping.trace_env():
     return lower_jaxpr_to_module(
         parallel_grid,
-        grid_mapping.grid_names,
+        axis_names,
         block,
         mesh.cluster if mesh is not None else (),
         [bm.array_shape_dtype for bm in in_block_mappings],
@@ -581,7 +663,7 @@ def lower_pipelined_jaxpr_to_module(
 
 def lower_jaxpr_to_module(
     grid: Sequence[int],
-    grid_names: Sequence[str],
+    axis_names: _AxisNames,
     block: Sequence[int],
     cluster: Sequence[int],
     in_shapes: Sequence[jax.ShapeDtypeStruct],
@@ -597,6 +679,11 @@ def lower_jaxpr_to_module(
       "thread_semantics", mgpu_core.ThreadSemantics.Lane
   )
 
+  if len(cluster) < 3:
+    cluster = cluster + (1,) * (3 - len(cluster))
+  else:
+    assert len(cluster) == 3
+
   if len(grid) <= 3:
     squashed_dims = ()
     parallel_grid = grid + (1,) * (3 - len(grid))
@@ -607,19 +694,32 @@ def lower_jaxpr_to_module(
     parallel_grid = (math.prod(grid[:-2]), *grid[-2:])
 
   def body(launch_ctx: mgpu.LaunchContext, *buffers: ir.Value):
-    *buffers_gmem, (runtime_smem, runtime_barriers) = buffers
+    *buffers_gmem, (runtime_smem, runtime_barriers, runtime_tmem) = buffers
 
     grouped_barriers = collections.defaultdict(list)
     for barrier, barrier_ref in zip(rs.barriers, runtime_barriers):
       grouped_barriers[barrier].append(barrier_ref)
+    if runtime_tmem is not None:
+      tmem_cols = math.prod(runtime_tmem.shape) // tcgen05.TMEM_ROWS
+    else:
+      tmem_cols = 0
+
+    if thread_semantics == mgpu.ThreadSemantics.Lane:
+      single_lane_predicate = mgpu.single_thread_predicate(per_block=False)
+    else:  # Warpgroup semantics do not have a single lane predicate.
+      single_lane_predicate = None
+
     module_ctx = ModuleContext(
         mlir.sanitize_name(debug_info.func_name),
-        grid_names,
+        axis_names,
         [_program_id(axis, squashed_dims) for axis in range(len(grid))],
         approx_math,
-        mgpu.single_thread_predicate(per_block=False),
+        single_lane_predicate,
         smem_requested_bytes=math.prod(ir.MemRefType(runtime_smem.type).shape),
         smem_used_bytes=0,
+        tmem_requested_cols=tmem_cols,
+        tmem_used_cols=0,
+        tmem_base_ptr=runtime_tmem.address if runtime_tmem else None,
         runtime_barriers=grouped_barriers,
         name_stack=source_info_util.NameStack(),
         traceback_caches=mlir.TracebackCaches(),
@@ -636,6 +736,18 @@ def lower_jaxpr_to_module(
   smem_scratch_bytes = params.get("smem_scratch_bytes")
   if smem_scratch_bytes is None:
     smem_scratch_bytes = rs.smem_scratch_bytes
+  tmem_scratch_cols = rs.tmem_scratch_cols
+
+  scratch_buffers = [
+    jax.ShapeDtypeStruct(shape=[smem_scratch_bytes], dtype=np.int8),
+    rs.barriers,
+  ]
+  if tmem_scratch_cols > 0:
+    scratch_buffers.append(
+      mgpu.TMEM(shape=[tcgen05.TMEM_ROWS, tmem_scratch_cols], dtype=np.int32),
+    )
+  else:
+    scratch_buffers.append(None)
 
   prof_ctx = prof_spec = None
   if prof_space := params.get("profile_space", 0):
@@ -645,15 +757,12 @@ def lower_jaxpr_to_module(
   module, out_structs_gmem, _, launch_ctx, scratch_arr = (
       mgpu_core._lower_as_gpu_kernel(
           body,
-          grid=parallel_grid,
+          grid=tuple(map(operator.mul, parallel_grid, cluster)),
           cluster=cluster,
           block=block,
           in_shapes=in_shapes,
           out_shape=out_shapes,
-          smem_scratch_shape=(
-              jax.ShapeDtypeStruct(shape=[smem_scratch_bytes], dtype=np.int8),
-              rs.barriers,
-          ),
+          smem_scratch_shape=scratch_buffers,
           module_name=mlir.sanitize_name(debug_info.func_name),
           prof_spec=prof_spec,
       )
@@ -663,6 +772,7 @@ def lower_jaxpr_to_module(
     # Run Python lowering passes. The remaining passes will be run in C++ in
     # jax/jaxlib/mosaic/gpu/custom_call.cc
     mgpu.infer_layout(module)  # pytype: disable=attribute-error
+    mgpu.infer_transforms(module)  # pytype: disable=attribute-error
     mgpu.lower_mgpu_dialect(module, launch_ctx)  # pytype: disable=attribute-error
 
   mgpu_core._initialize_scratch(launch_ctx, scratch_arr)
@@ -955,14 +1065,26 @@ def _ndindexer_indices(indexer: indexing.NDIndexer) -> tuple[gpu_core.Index, ...
 
 
 @register_lowering_rule(sp.get_p, mgpu.ThreadSemantics.Lane)
-def _get_lowering_rule(ctx: LoweringRuleContext, x_smem, *leaves, tree):
-  if not isinstance(x_smem, ir.Value) and ir.MemRefType.isinstance(x_smem):
-    raise TypeError(f"Can only load from references (got {x_smem}).")
+def _get_lowering_rule(ctx: LoweringRuleContext, x_ref, *leaves, tree):
+  if isinstance(x_ref, tcgen05.TMEMRef):
+    transforms = jax.tree.unflatten(tree, leaves)
+    if len(transforms) != 1 or not isinstance(
+        transforms[0], indexing.NDIndexer):
+      raise NotImplementedError(
+          "Only a single indexing transform is supported for TMEM refs.")
+    indexer = cast(indexing.NDIndexer, transforms[0])
+    if not gpu_core.is_trivial_index(indexer.indices, x_ref.shape):
+      raise NotImplementedError(
+          "Only trivial indexing is supported for TMEM refs.")
+    return x_ref[:]
+
+  if not isinstance(x_ref, ir.Value) and ir.MemRefType.isinstance(x_ref):
+    raise TypeError(f"Can only load from references (got {x_ref}).")
 
   x_aval = ctx.avals_in[0]
 
   transforms = jax.tree.unflatten(tree, leaves)
-  x_smem, transforms = _handle_reshaping(x_smem, transforms)
+  x_smem, transforms = _handle_reshaping(x_ref, transforms)
   x_smem, transforms = _handle_indexing(x_smem, transforms)
 
   match transforms:
@@ -1034,11 +1156,25 @@ def _swap_lowering_rule(
       value.store_tiled(x_smem, swizzle=swizzle)
       return old_value
     case ():
-      old_value = mgpu.FragmentedArray.load_strided(
-          x_smem, is_signed=mgpu_utils.is_signed(x_aval.dtype)
-      )
-      value.store_untiled(x_smem)
-      return old_value
+      match value.layout:
+        case mgpu.WGMMARowFragLayout():
+          old_value = mgpu.FragmentedArray.load_wgmma_row(
+              x_smem, is_signed=mgpu_utils.is_signed(x_aval.dtype)
+          )
+          value.store_untiled(x_smem)
+          return old_value
+        case mgpu.WGMMAColFragLayout():
+          old_value = mgpu.FragmentedArray.load_wgmma_col(
+              x_smem, is_signed=mgpu_utils.is_signed(x_aval.dtype)
+          )
+          value.store_untiled(x_smem)
+          return old_value
+        case _:
+          old_value = mgpu.FragmentedArray.load_strided(
+              x_smem, is_signed=mgpu_utils.is_signed(x_aval.dtype)
+          )
+          value.store_untiled(x_smem)
+          return old_value
     case _:
       raise NotImplementedError(f"Unsupported transforms: {transforms}")
 
@@ -1085,9 +1221,6 @@ def _pjit_lowering_rule(ctx: LoweringRuleContext, *args, jaxpr, **kwargs):
       ctx.module_ctx, ctx.launch_ctx, jaxpr.jaxpr, args,
   )
 
-@register_lowering_rule(pjit.mesh_cast_p, mgpu.ThreadSemantics.Lane)
-def _mesh_cast_lowering_rule(ctx, x, dst_sharding):
-  return x
 
 @register_lowering_rule(lax.slice_p, mgpu.ThreadSemantics.Lane)
 def _slice_lowering_rule(
@@ -1146,6 +1279,12 @@ def _broadcast_in_dim_lowering_rule(
       and x.layout == mgpu.WGMMA_ROW_LAYOUT
   ):
     return x.broadcast_minor(y_aval.shape[-1])
+  if (
+        broadcast_dimensions == (1,)
+        and y_aval.ndim == x_aval.ndim + 1
+        and x.layout == mgpu.WGMMA_COL_LAYOUT
+  ):
+    return x.broadcast_major(y_aval.shape[-2])
   if broadcast_dimensions:
     raise NotImplementedError
   return x.broadcast(shape)
@@ -1282,7 +1421,7 @@ mosaic_lowering_rules[mgpu.ThreadSemantics.Lane].update({
 mosaic_lowering_rules[mgpu.ThreadSemantics.Warpgroup].update({
     lax.neg_p: _lower_fun(lambda x: jnp.subtract(0, x), multiple_results=False),
     lax.not_p: _lower_fun(
-        lambda x: jnp.bitwise_xor(x, -1), multiple_results=False
+        lambda x: jnp.astype(jnp.bitwise_xor(jnp.astype(x, int), -1), jnp.dtype(x)), multiple_results=False,
     ),
 })
 
@@ -1445,7 +1584,9 @@ def _square_lowering_rule(ctx: LoweringRuleContext, x):
 
 @register_lowering_rule(lax.rsqrt_p, mgpu.ThreadSemantics.Lane)
 @register_lowering_rule(lax.rsqrt_p, mgpu.ThreadSemantics.Warpgroup)
-def _rsqrt_lowering_rule(ctx: LoweringRuleContext, x):
+def _rsqrt_lowering_rule(ctx: LoweringRuleContext, x, accuracy):
+  if accuracy is not None:
+    raise NotImplementedError("Not implemented: accuracy")
   [x_aval] = ctx.avals_in
   if ctx.module_ctx.thread_semantics == mgpu.ThreadSemantics.Lane:
     return _ensure_fa(x, x_aval.dtype).rsqrt(approx=ctx.module_ctx.approx_math)
@@ -1459,7 +1600,9 @@ def _rsqrt_lowering_rule(ctx: LoweringRuleContext, x):
 
 @register_lowering_rule(lax.tanh_p, mgpu.ThreadSemantics.Lane)
 @register_lowering_rule(lax.tanh_p, mgpu.ThreadSemantics.Warpgroup)
-def _tanh_lowering_rule(ctx: LoweringRuleContext, x):
+def _tanh_lowering_rule(ctx: LoweringRuleContext, x, accuracy):
+  if accuracy is not None:
+    raise NotImplementedError("Not implemented: accuracy")
   [x_aval] = ctx.avals_in
   if ctx.module_ctx.thread_semantics == mgpu.ThreadSemantics.Lane:
     return _ensure_fa(x, x_aval.dtype).tanh(approx=ctx.module_ctx.approx_math)
@@ -1469,7 +1612,9 @@ def _tanh_lowering_rule(ctx: LoweringRuleContext, x):
   return math_dialect.tanh(_ensure_ir_value(x, x_aval.dtype), fastmath=fastmath)
 
 
-def _logistic(x):
+def _logistic(x, accuracy):
+  if accuracy is not None:
+    raise NotImplementedError("Not implemented: accuracy")
   return 1.0 / (1 + lax.exp(-x))
 
 
@@ -1483,7 +1628,9 @@ mosaic_lowering_rules[mgpu.ThreadSemantics.Warpgroup][lax.logistic_p] = (
 
 @register_lowering_rule(lax.exp_p, mgpu.ThreadSemantics.Lane)
 @register_lowering_rule(lax.exp_p, mgpu.ThreadSemantics.Warpgroup)
-def _exp_lowering_rule(ctx: LoweringRuleContext, x):
+def _exp_lowering_rule(ctx: LoweringRuleContext, x, accuracy):
+  if accuracy is not None:
+    raise NotImplementedError("Not implemented: accuracy")
   [x_aval] = ctx.avals_in
   if ctx.module_ctx.thread_semantics == mgpu.ThreadSemantics.Lane:
     return _ensure_fa(x, x_aval.dtype).exp(approx=ctx.module_ctx.approx_math)
@@ -1494,7 +1641,9 @@ def _exp_lowering_rule(ctx: LoweringRuleContext, x):
 
 
 @register_lowering_rule(lax.exp2_p, mgpu.ThreadSemantics.Lane)
-def _exp2_lowering_rule(ctx: LoweringRuleContext, x):
+def _exp2_lowering_rule(ctx: LoweringRuleContext, x, accuracy):
+  if accuracy is not None:
+    raise NotImplementedError("Not implemented: accuracy")
   [x_aval] = ctx.avals_in
   if ctx.module_ctx.thread_semantics == mgpu.ThreadSemantics.Lane:
     return _ensure_fa(x, x_aval.dtype).exp2(approx=ctx.module_ctx.approx_math)
@@ -1506,7 +1655,9 @@ def _exp2_lowering_rule(ctx: LoweringRuleContext, x):
 
 @register_lowering_rule(lax.log_p, mgpu.ThreadSemantics.Lane)
 @register_lowering_rule(lax.log_p, mgpu.ThreadSemantics.Warpgroup)
-def _log_lowering_rule(ctx: LoweringRuleContext, x):
+def _log_lowering_rule(ctx: LoweringRuleContext, x, accuracy):
+  if accuracy is not None:
+    raise NotImplementedError("Not implemented: accuracy")
   [x_aval] = ctx.avals_in
   if ctx.module_ctx.thread_semantics == mgpu.ThreadSemantics.Lane:
     return _ensure_fa(x, x_aval.dtype).log(approx=ctx.module_ctx.approx_math)
@@ -1605,49 +1756,69 @@ def _reduce_max_lowering_rule_wg(ctx: LoweringRuleContext, x, *, axes):
   return _reduce_lowering_rule_wg(kind, acc, ctx, x, axes=axes).result
 
 
+def _block_id(ctx: LoweringRuleContext, dim: gpu_dialect.Dimension) -> ir.Value:
+  result = gpu_dialect.block_id(dim)
+  cluster_size = ctx.launch_ctx.cluster_size
+  if math.prod(cluster_size) == 1 or cluster_size[dim.value] == 1:
+    return result
+  # We scale the grid in the presence of clusters, so we need to scale the
+  # block ID back here.
+  return arith_dialect.divui(result, _as_index(cluster_size[dim.value]))
+
+
 @register_lowering_rule(lax.axis_index_p, mgpu.ThreadSemantics.Lane)
+@register_lowering_rule(lax.axis_index_p, mgpu.ThreadSemantics.Warpgroup)
 def _axis_index_rule(ctx: LoweringRuleContext, *, axis_name: Hashable):
-  i32 = ir.IntegerType.get_signless(32)
-  grid_names = ctx.module_ctx.grid_names
+  axis_names = ctx.module_ctx.axis_names
+  if not axis_names or axis_name not in axis_names:
+    raise ValueError(
+        "Named axes can only refer to GPUMesh axes in Mosaic GPU kernels"
+    )
+
+  if axis_names.wg is not None and axis_name == axis_names.wg:
+    return mgpu.warpgroup_idx(sync=True)
+
+  if axis_name in axis_names.cluster:
+    idx = axis_names.cluster.index(axis_name)
+    return arith_dialect.index_cast(
+        ir.IntegerType.get_signless(32),
+        gpu_dialect.cluster_block_id(gpu_dialect.Dimension(idx)),
+    )
+
   squashed_dims = ctx.module_ctx.squashed_dims
   if squashed_dims:
-    unsquashed_names = grid_names[-3:]
-    squashed_names = grid_names[:-3]
+    unsquashed_names = axis_names.grid[-2:]
+    squashed_names = axis_names.grid[:-2]
   else:
     # These are unused but initialized for type checkers.
-    unsquashed_names = ()
-    squashed_names = ()
-  if grid_names and axis_name in grid_names:
-    if axis_name == grid_names[-1]:
-      return mgpu.warpgroup_idx(sync=True)
+    unsquashed_names = squashed_names = ()
+
+  if squashed_dims:
+    if axis_name in unsquashed_names:
+      # We add 1 to the index because the first dimension is the
+      # squashed dimension.
+      # e.g. for the grid (a, b, c, d, wg)
+      # squashed = (a, b)  Mapped to Dimension.x (0)
+      # unsquashed = (c, d)  Mapped to Dimension.y (1) and Dimension.z (2)
+      idx = unsquashed_names.index(axis_name) + 1
+      return arith_dialect.index_cast(
+          ir.IntegerType.get_signless(32),
+          _block_id(ctx, gpu_dialect.Dimension(idx)),
+      )
     else:
-      if squashed_dims:
-        if axis_name in unsquashed_names:
-          # We add 1 to the index because the first dimension is the
-          # squashed dimension.
-          # e.g. for the grid (a, b, c, d, wg)
-          # squashed = (a, b)  Mapped to Dimension.x (0)
-          # unsquashed = (c, d)  Mapped to Dimension.y (1) and Dimension.z (2)
-          idx = unsquashed_names.index(axis_name) + 1
-          return arith_dialect.index_cast(
-            i32,
-            gpu_dialect.block_id(gpu_dialect.Dimension(idx)),
-          )
-        elif axis_name in squashed_names:
-          # All squashed dimensions are mapped to Dimension.x.
-          block_id = gpu_dialect.block_id(gpu_dialect.Dimension.x)
-          axis = squashed_names.index(axis_name)
-          return _unravel_program_id(block_id, axis, squashed_dims)
-      else:
-        if axis_name in grid_names:
-          idx = grid_names.index(axis_name)
-          return arith_dialect.index_cast(
-            i32,
-            gpu_dialect.block_id(gpu_dialect.Dimension(idx)),
-          )
-  raise ValueError(
-      "Named axes can only refer to GPUMesh axes in Mosaic GPU kernels"
-  )
+      assert axis_name in squashed_names
+      # All squashed dimensions are mapped to Dimension.x.
+      axis = squashed_names.index(axis_name)
+      return _unravel_program_id(
+          _block_id(ctx, gpu_dialect.Dimension.x), axis, squashed_dims
+      )
+  else:
+    assert axis_name in axis_names.grid
+    idx = axis_names.grid.index(axis_name)
+    return arith_dialect.index_cast(
+        ir.IntegerType.get_signless(32),
+        _block_id(ctx, gpu_dialect.Dimension(idx)),
+    )
 
 
 @register_lowering_rule(primitives.debug_print_p, mgpu.ThreadSemantics.Lane)
@@ -1679,7 +1850,7 @@ def _debug_print_lowering_rule(
   return ()
 
 @register_lowering_rule(primitives.debug_print_p, mgpu.ThreadSemantics.Warpgroup)
-def _debug_print_lowering_rule(
+def _debug_print_lowering_rule_wg(
     ctx: LoweringRuleContext,
     *args,
     fmt,
@@ -1699,66 +1870,76 @@ def _run_scoped_lowering_rule(
 ):
   input_refs = []
   should_discharge = []
-  alloc_stack = contextlib.ExitStack()
-  for v in jaxpr.invars:
-    aval = v.aval
-    if isinstance(aval, gpu_core.WGMMAAbstractAccumulatorRef):
-      if ctx.module_ctx.thread_semantics == mgpu.ThreadSemantics.Warpgroup:
-        # TODO(bchetioui): Fix this and remove the NotImplementedError.
-        raise NotImplementedError(
-            "WGMMA accumulators are not supported with Warpgroup semantics."
+  with contextlib.ExitStack() as alloc_stack:
+    for v in jaxpr.invars:
+      aval = v.aval
+      if isinstance(aval, gpu_core.WGMMAAbstractAccumulatorRef):
+        dtype = mlir.dtype_to_ir_type(aval.dtype)
+        if ctx.module_ctx.thread_semantics == mgpu.ThreadSemantics.Lane:
+          input_refs.append(mgpu.WGMMAAccumulator.zero(*aval.shape, dtype))
+        else:
+          zero = arith_dialect.constant(dtype, ir.FloatAttr.get(dtype, 0.0))
+          acc = vector_dialect.splat(ir.VectorType.get(aval.shape, dtype), zero)
+          acc = mgpu.dialect.optimization_barrier([acc])
+          nvvm_dialect.wgmma_fence_aligned()
+          input_refs.append(acc)
+        should_discharge.append(True)
+      elif isinstance(aval.dtype, gpu_core.BarrierType):
+        input_refs.append(
+            ctx.module_ctx.reserve_barrier(
+                mgpu.Barrier(
+                    aval.dtype.num_arrivals
+                    * ctx.estimator_ctx.arrival_multiplier,
+                    *aval.shape,
+                )
+            )
         )
-      mlir_dtype = mlir.dtype_to_ir_type(aval.dtype)
-      input_refs.append(mgpu.WGMMAAccumulator.zero(*aval.shape, mlir_dtype))
-      should_discharge.append(True)
-    elif isinstance(aval.dtype, gpu_core.BarrierType):
-      input_refs.append(
-          ctx.module_ctx.reserve_barrier(
-              mgpu.Barrier(
-                  aval.dtype.num_arrivals
-                  * ctx.estimator_ctx.arrival_multiplier,
-                  *aval.shape,
-              )
-          )
-      )
-      should_discharge.append(False)
-    elif aval.memory_space == gpu_core.SMEM:
-      [input_ref] = alloc_stack.enter_context(
-          ctx.module_ctx.scratch_view(
-              [jax.ShapeDtypeStruct(shape=aval.shape, dtype=aval.dtype)]
-          )
-      )
-      input_refs.append(input_ref)
-      should_discharge.append(False)
-    else:
-      raise ValueError(f"Can't convert to ref: {aval}")
+        should_discharge.append(False)
+      elif aval.memory_space == gpu_core.SMEM:
+        [input_ref] = alloc_stack.enter_context(
+            ctx.module_ctx.scratch_view(
+                [jax.ShapeDtypeStruct(shape=aval.shape, dtype=aval.dtype)]
+            )
+        )
+        input_refs.append(input_ref)
+        should_discharge.append(False)
+      elif aval.memory_space == gpu_core.TMEM:
+        input_ref = alloc_stack.enter_context(
+            ctx.module_ctx.alloc_tmem(
+                jax.ShapeDtypeStruct(shape=aval.shape, dtype=aval.dtype),
+            )
+        )
+        input_refs.append(input_ref)
+        should_discharge.append(False)
+      else:
+        raise ValueError(f"Can't convert to ref: {aval}")
 
-  if any(should_discharge):
-    # We convert consts to args, because we only have ir.Values and
-    # not JAX values during lowering. discharge_state() produces JAX
-    # valiues for the aguments but expects them to be provided for the
-    # consts. We also don't want to wrap the values in refs.
-    no_const_jaxpr = pe.convert_constvars_jaxpr(jaxpr)
-    should_discharge = [False] * len(consts) + should_discharge
-    discharged_jaxpr, _ = discharge.discharge_state(no_const_jaxpr, (), should_discharge=should_discharge)
-    new_input_vals = consts + tuple(input_refs)
-    outs = lower_jaxpr_to_mosaic_gpu(
-        ctx.module_ctx,
-        ctx.launch_ctx,
-        discharged_jaxpr,
-        new_input_vals,
-        (),
-    )
-    # Discharge appends to the output the refs that got discharged.
-    outs = outs[:-sum(should_discharge)]
-  else:
-    outs = lower_jaxpr_to_mosaic_gpu(
-        ctx.module_ctx,
-        ctx.launch_ctx,
-        jaxpr,
-        input_refs,
-        consts,
-    )
+    if any(should_discharge):
+      # We convert consts to args, because we only have ir.Values and
+      # not JAX values during lowering. discharge_state() produces JAX
+      # valiues for the aguments but expects them to be provided for the
+      # consts. We also don't want to wrap the values in refs.
+      no_const_jaxpr = pe.convert_constvars_jaxpr(jaxpr)
+      should_discharge = [False] * len(consts) + should_discharge
+      discharged_jaxpr, _ = discharge.discharge_state(no_const_jaxpr, (), should_discharge=should_discharge)
+      new_input_vals = consts + tuple(input_refs)
+      outs = lower_jaxpr_to_mosaic_gpu(
+          ctx.module_ctx,
+          ctx.launch_ctx,
+          discharged_jaxpr,
+          new_input_vals,
+          (),
+      )
+      # Discharge appends to the output the refs that got discharged.
+      outs = outs[:-sum(should_discharge)]
+    else:
+      outs = lower_jaxpr_to_mosaic_gpu(
+          ctx.module_ctx,
+          ctx.launch_ctx,
+          jaxpr,
+          input_refs,
+          consts,
+      )
 
   assert len(outs) == len(jaxpr.outvars), (jaxpr, outs)
   return outs
@@ -2036,16 +2217,16 @@ def _cond_lowering_rule(ctx: LoweringRuleContext, index, *args, branches):
         ret.append(_ensure_ir_value(out, aval.dtype))
     return ret
 
-  # We need the branch return mlir types in order to construct the
-  # switch operation. To avoid leaking information about what kind of
-  # mlir types are internal to FragmentedArrays and other mgpu types,
-  # we run one of the branches in a dummy module that we throw away to
-  # extract the return types
+  # We need to know the result types ahead of time to construct the switch
+  # operation. Below we lower the first branch in a throw-away module to
+  # extract them.
   with ir.InsertionPoint(ir.Module.create().body):
     outs = lower_jaxpr_to_mosaic_gpu(
         ctx.module_ctx, ctx.launch_ctx, branches[0].jaxpr, args
     )
-    yielded_types = [v.type for v in jax.tree.leaves(_yielded_values(outs, ctx.avals_out))]
+    yielded_types = [
+        v.type for v in jax.tree.leaves(_yielded_values(outs, ctx.avals_out))
+    ]
     del outs
 
   switch_op = scf_dialect.IndexSwitchOp(
@@ -2118,6 +2299,18 @@ def _bitcast_convert_type_lowering_rule(
 def _optimization_barrier_lowering(ctx: LoweringRuleContext, *args):
   args = (_ensure_fa(arg, aval.dtype) for arg, aval in zip(args, ctx.avals_in))
   return mgpu.optimization_barrier(*args)
+
+
+@register_lowering_rule(
+    lax.optimization_barrier_p, mgpu.ThreadSemantics.Warpgroup
+)
+def _optimization_barrier_lowering_wg(ctx: LoweringRuleContext, *args):
+  args = [
+      _ensure_ir_value(arg, aval.dtype) for arg, aval in zip(args, ctx.avals_in)
+  ]
+  result = mgpu.dialect.optimization_barrier(args)
+
+  return (result,) if len(args) == 1 else result
 
 
 def _bcast(
