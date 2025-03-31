@@ -36,7 +36,7 @@ from typing import List
 LOG = logging.getLogger(__name__)
 
 
-DEFAULT_GPU_DEVICE_TARGETS = "gfx900,gfx906,gfx908,gfx90a,gfx940,gfx941,gfx942,gfx1030,gfx1100,gfx1101,gfx1200,gfx1201"
+DEFAULT_GPU_DEVICE_TARGETS = "gfx908,gfx90a,gfx942,gfx1030,gfx1100,gfx1101,gfx1200,gfx1201"
 
 
 def build_rocm_path(rocm_version_str):
