@@ -1528,7 +1528,7 @@ def check_valid_jaxtype(x):
 
 def update_aval_with_sharding(aval, sharding):
   if isinstance(sharding, NamedSharding):
-    aval = aval.update(sharding=NamedSharding(
+    return aval.update(sharding=NamedSharding(
         sharding.mesh.abstract_mesh,
         sharding.spec._normalized_spec_for_aval(aval.ndim)))
   return aval
@@ -1660,7 +1660,8 @@ def physical_aval(aval):
     if isinstance(aval, ShapedArray):
       from jax._src.sharding_impls import physical_sharding  # type: ignore
       return ShapedArray((*aval.shape, *elt_aval.shape), elt_aval.dtype,
-                         sharding=physical_sharding(aval, aval.sharding))
+                         sharding=physical_sharding(aval, aval.sharding),
+                         vma=aval.vma)
     return DShapedArray((*aval.shape, *elt_aval.shape), elt_aval.dtype)
   return aval
 
@@ -1786,6 +1787,10 @@ def _invalid_shape_error(shape: Shape, context: str=""):
   return TypeError(msg)
 
 
+class ShardingTypeError(Exception):
+  pass
+
+
 # TODO(dougalm): Cast scalar, numpy arrays, etc to jax arrays so that values
 # passed to primitives are always have avals, etc i.e. they are canonical.
 def canonicalize_value(val):
@@ -1896,26 +1901,35 @@ def get_sharding(sharding, shape):
   _check_divisibility(out_s, shape)
   return out_s
 
-def str_short_aval(shape, dtype, mesh, spec, short_dtypes=False,
-                   mesh_axis_types=False) -> str:
+def str_short_aval(shape, dtype, mesh, spec, vma,
+                   short_dtypes=False, mesh_axis_types=False) -> str:
   dt_str = dtypes.short_dtype_name(dtype) if short_dtypes else dtype.name
   dt_str = dt_str.replace('void', 'float0')
   shapestr = _get_shape_sharding_str(shape, spec)
   mesh_axes = f'({mesh._axis_types_dict})' if mesh_axis_types else ''
-  return f'{dt_str}[{shapestr}]{mesh_axes}'
+  vma = f"{{{','.join(i for i in vma)}}}" if vma else ''
+  return f'{dt_str}[{shapestr}]{vma}{mesh_axes}'
+
+def get_vma(vma, mesh):
+  for i in vma:
+    if mesh._name_to_type[i] != AxisType.Manual:
+      raise ValueError(
+          "Axes mentioned in `vma` field of ShapedArray should"
+          f" be of type `Manual`. Got axis: {i} of type {mesh._name_to_type[i]}")
+  assert isinstance(vma, frozenset)
+  return vma
 
 class ShapedArray(UnshapedArray):
-  __slots__ = ['shape', 'sharding', 'varying_manual_axes']  # inherits slots from parent
+  __slots__ = ['shape', 'sharding', 'vma']  # inherits slots from parent
   array_abstraction_level = 2
 
   def __init__(self, shape, dtype, weak_type=False, *, sharding=None,
-               varying_manual_axes: frozenset[AxisName] = frozenset()):
+               vma: frozenset[AxisName] = frozenset()):
     self.shape = canonicalize_shape(shape)
     self.dtype = _dtype_object(dtype)
     self.weak_type = weak_type
     self.sharding = get_sharding(sharding, self.shape)
-    if config.varying_axes_in_types.value:
-      self.varying_manual_axes = varying_manual_axes
+    self.vma = get_vma(vma, self.sharding.mesh)
 
   def update(self, shape=None, dtype=None, weak_type=None, **kwargs):
     if shape is None:
@@ -1926,9 +1940,8 @@ class ShapedArray(UnshapedArray):
       weak_type = self.weak_type
     if 'sharding' not in kwargs:
       kwargs['sharding'] = self.sharding
-    if 'varying_manual_axes' not in kwargs:
-      kwargs['varying_manual_axes'] = getattr(self, 'varying_manual_axes',
-                                              frozenset())
+    if 'vma' not in kwargs:
+      kwargs['vma'] = self.vma
     return ShapedArray(shape, dtype, weak_type, **kwargs)
 
   ndim = property(lambda self: len(self.shape))
@@ -1946,26 +1959,24 @@ class ShapedArray(UnshapedArray):
             and self.dtype == other.dtype and self.shape == other.shape
             and self.weak_type == other.weak_type
             and self.sharding == other.sharding
-            and (getattr(self, 'varying_manual_axes', frozenset()) ==
-                 getattr(other, 'varying_manual_axes', frozenset())))
+            and self.vma == other.vma)
 
   def __hash__(self):
     # can use hash(self.dtype) and rely on the fact that numpy reuses base dtype
     # objects, e.g. `np.zeros(3).dtype is np.zeros(4).dtype`, or we can use
     # the unique character code via hash(self.dtype.char)
     return hash((self.shape, self.dtype, self.weak_type, self.sharding,
-                 getattr(self, 'varying_manual_axes', frozenset())))
+                 self.vma))
 
   def to_tangent_aval(self):
     return ShapedArray(
         self.shape, primal_dtype_to_tangent_dtype(self.dtype),
-        self.weak_type, sharding=self.sharding,
-        varying_manual_axes=getattr(self, 'varying_manual_axes', frozenset()))
+        self.weak_type, sharding=self.sharding, vma=self.vma)
 
   def str_short(self, short_dtypes=False, mesh_axis_types=False):
     return str_short_aval(
         self.shape, self.dtype, self.sharding.mesh, self.sharding.spec,
-        short_dtypes, mesh_axis_types)
+        self.vma, short_dtypes, mesh_axis_types)
 
   def _len(self, ignored_tracer):
     try:
@@ -1995,6 +2006,32 @@ def primal_dtype_to_tangent_dtype(primal_dtype):
   else:
     return primal_dtype
 
+
+def standard_insert_pbroadcast(*args):
+  if not config.varying_axes_in_types.value:
+    return args
+  if not args:
+    return args
+  # TODO(yashkatariya): Move pbroadcast out of shard_map
+  from jax.experimental.shard_map import pbroadcast  # type: ignore
+  in_vma = [frozenset() if (aval := get_aval(a)) is abstract_token
+            else aval.vma for a in args]
+  out_vma = frozenset.union(*in_vma)
+  return [pbroadcast(arg, tuple(n for n in out_vma if n not in src))
+          if out_vma - src else arg for arg, src in zip(args, in_vma)]
+
+def standard_vma_rule(prim_name, *avals, **kwargs) -> frozenset[AxisName]:
+  avals = tuple(a for a in avals if a is not abstract_token)
+  if not avals:
+    return frozenset()
+  vma, *vmas = [a.vma for a in avals]
+  if not all(vma == vma_ for vma_ in vmas):
+    raise ValueError(
+        f'Primitive {prim_name} requires varying manual axes '
+        f'to match, but got {[vma, *vmas]}. Please open an issue at '
+        'https://github.com/jax-ml/jax/issues and as a temporary '
+        'workaround pass the check_rep=False argument to shard_map')
+  return vma
 
 # Dynamic shape stuff below here! We keep the abstract values distinct just so
 # as not to interfere with any static shape machinery.
@@ -2041,6 +2078,10 @@ class DShapedArray(UnshapedArray):
   @property
   def sharding(self):
     return NamedSharding(mesh_lib.empty_abstract_mesh, P())
+
+  @property
+  def vma(self):
+    return frozenset()
 
   def _len(self, tracer):
     return self.shape[0]
@@ -2146,6 +2187,7 @@ class MutableArray:
   def __getitem__(self, idx): return self._aval._getitem(self, idx)
   def __setitem__(self, idx, x): return self._aval._setitem(self, idx, x)
   def __repr__(self) -> str: return 'Mutable' + repr(self[...])
+  def __len__(self) -> int: return self._aval._len(self)
 pytype_aval_mappings[MutableArray] = lambda x: x._aval
 
 def mutable_array(init_val):
@@ -2674,7 +2716,8 @@ def typematch(t1: AbstractValue, t2: AbstractValue) -> bool:
     # could try normalizing first and then doing simple equality.
     # TODO(yashkatariya): Also check `sharding` here.
     # See https://github.com/jax-ml/jax/issues/26474
-    return t1.dtype == t2.dtype and definitely_equal_shape(t1.shape, t2.shape)
+    return (t1.dtype == t2.dtype and definitely_equal_shape(t1.shape, t2.shape)
+            and t1.vma == t2.vma)  # type: ignore
   else:
     return False
 
