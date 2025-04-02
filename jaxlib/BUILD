@@ -29,13 +29,6 @@ package(
     default_visibility = ["//jax:internal"],
 )
 
-# This makes xla_extension module accessible from jax._src.lib.
-genrule(
-    name = "xla_extension_py",
-    outs = ["xla_extension.py"],
-    cmd = "echo 'from xla.xla.python.xla_extension import *\n' > $@",
-)
-
 py_library_providing_imports_info(
     name = "jaxlib",
     srcs = [
@@ -50,9 +43,9 @@ py_library_providing_imports_info(
         "init.py",
         "lapack.py",
         "plugin_support.py",
+        "xla_client.py",
+        "xla_extension.py",
         ":version",
-        ":xla_client",
-        ":xla_extension_py",
     ],
     data = [":ffi_headers"],
     lib_rule = pytype_library,
@@ -81,20 +74,14 @@ py_library_providing_imports_info(
         "//jaxlib/mlir:vector_dialect",
         "//jaxlib/mosaic",
         "//jaxlib/triton",
-        "@xla//xla/python:xla_extension",
+        "//jaxlib/xla:xla_client",
+        "//jaxlib/xla:xla_extension",
     ],
 )
 
 symlink_files(
     name = "version",
     srcs = ["//jax:version.py"],
-    dst = ".",
-    flatten = True,
-)
-
-symlink_files(
-    name = "xla_client",
-    srcs = ["@xla//xla/python:xla_client"],
     dst = ".",
     flatten = True,
 )
@@ -167,33 +154,8 @@ cc_library(
     features = ["-use_header_modules"],
     deps = [
         "@com_google_absl//absl/base",
+        "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
-    ],
-)
-
-cc_library(
-    name = "pass_boilerplate",
-    hdrs = ["pass_boilerplate.h"],
-    # compatible with libtpu
-    deps = [
-        "@llvm-project//mlir:IR",
-        "@llvm-project//mlir:Pass",
-        "@llvm-project//mlir:Support",
-    ],
-)
-
-cc_library(
-    name = "handle_pool",
-    hdrs = ["handle_pool.h"],
-    copts = [
-        "-fexceptions",
-        "-fno-strict-aliasing",
-    ],
-    features = ["-use_header_modules"],
-    deps = [
-        "@com_google_absl//absl/base:core_headers",
-        "@com_google_absl//absl/status:statusor",
-        "@com_google_absl//absl/synchronization",
     ],
 )
 

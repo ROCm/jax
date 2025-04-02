@@ -266,6 +266,9 @@ class TransformedRef:
     assert dtype is not None
     return dtype
 
+  ndim = property(lambda self: len(self.shape))
+  size = property(lambda self: math.prod(self.shape))
+
   @property
   def at(self) -> RefIndexer:
     return RefIndexer(self)
@@ -330,6 +333,12 @@ class AbstractRef(core.AbstractValue):
   ndim = property(lambda self: len(self.shape))
   size = property(lambda self: math.prod(self.shape))
 
+  def _len(self, ignored_tracer) -> int:
+    try:
+      return self.shape[0]
+    except IndexError as err:
+      raise TypeError("len() of unsized object") from err  # same as numpy error
+
   @property
   def shape(self):
     try:
@@ -355,6 +364,15 @@ class AbstractRef(core.AbstractValue):
     except AttributeError:
       raise AttributeError(
           f"`Ref{{{self.inner_aval.str_short()}}} has no `sharding`."
+      ) from None
+
+  @property
+  def vma(self):
+    try:
+      return self.inner_aval.vma  # pytype: disable=attribute-error
+    except AttributeError:
+      raise AttributeError(
+          f"`Ref{{{self.inner_aval.str_short()}}} has no `vma`."
       ) from None
 
   @core.aval_property

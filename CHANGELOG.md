@@ -16,6 +16,37 @@ When releasing, please add the new-release-boilerplate to docs/pallas/CHANGELOG.
 
 ## Unreleased
 
+* Changes
+  * The minimum CuDNN version is v9.8.
+  * JAX is now built using CUDA 12.8. All versions of CUDA 12.1 or newer remain
+    supported.
+
+* Deprecations
+
+  * {func}`jax.tree_util.build_tree` is deprecated. Use {func}`jax.tree.unflatten`
+    instead.
+  * Implemented host callback handlers for CPU and GPU devices using XLA's FFI
+    and removed existing CPU/GPU handlers using XLA's custom call.
+  * All APIs in `jax.lib.xla_extension` are now deprecated.
+  * Several previously-deprecated APIs have been removed, including:
+    * From `jax.lib.xla_client`: `FftType`, `PaddingType`, `dtype_to_etype`,
+      and `shape_from_pyval`.
+    * From `jax.lib.xla_extension`: `ArrayImpl`, `XlaRuntimeError`.
+    * From `jax`: `jax.treedef_is_leaf`, `jax.tree_flatten`, `jax.tree_map`,
+      `jax.tree_leaves`, `jax.tree_structure`, `jax.tree_transpose`, and
+      `jax.tree_unflatten`. Replacements can be found in {mod}`jax.tree` or
+      {mod}`jax.tree_util`.
+    * From `jax.core`: `AxisSize`, `ClosedJaxpr`, `EvalTrace`, `InDBIdx`, `InputType`,
+      `Jaxpr`, `JaxprEqn`, `Literal`, `MapPrimitive`, `OpaqueTraceState`, `OutDBIdx`,
+      `Primitive`, `Token`, `TRACER_LEAK_DEBUGGER_WARNING`, `Var`, `concrete_aval`,
+      `dedup_referents`, `escaped_tracer_error`, `extend_axis_env_nd`, `get_referent`,
+      `join_effects`, `leaked_tracer_error`, `maybe_find_leaked_tracers`, `raise_to_shaped`,
+      `raise_to_shaped_mappings`, `reset_trace_state`, `str_eqn_compact`,
+      `substitute_vars_in_output_ty`, `typecompat`, and `used_axis_names_jaxpr`. Most
+      have no public replacement, though a few are available at {mod}`jax.extend.core`.
+
+## jax 0.5.3 (Mar 19, 2025)
+
 * New Features
 
   * Added a `allow_negative_indices` option to {func}`jax.lax.dynamic_slice`,
