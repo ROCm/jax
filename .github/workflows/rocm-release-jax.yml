@@ -1,0 +1,74 @@
+name: ROCm Release JAX
+
+on:
+  workflow_dispatch:
+    inputs:
+      jax_version:
+        required: true
+        type: string
+      rocm_version:
+        description: "ROCm version that wheels will be built against and that will be package in the Docker image"
+        required: true
+        type: string
+      rocm_build_job_name:
+        description: "If you want to use an AMD internal build of ROCm, set the name of the Jenkins job that built it"
+        required: false
+        type: string
+      rocm_build_job_num:
+        description: "If you want to use an AMD internal build of ROCm, set the build number of the job that built it"
+        required: false
+        type: string
+      python_version:
+        description: "Python version to include in Docker image"
+        required: true
+        type: string
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test-jax:
+    runs-on: mi-250
+  env:
+    RELEASE_DOCKER_IMG_NAME: "rocm/jax-build:rocm${{ inputs.rocm_version}}-jax${{ inputs.jax_version }}-py${{ inputs.python_version }}-${{ github.sha }}"
+    WORKSPACE_DIR: workdir_${{ github.run_id }}_${{ github.run_number }}_${{ github.run_attempt }}
+  steps:
+    - name: Print system info
+      run: |
+        echo RELEASE_DOCKER_IMAGE_NAME=$RELEASE_DOCKER_IMAGE_NAME
+        echo WORKSPACE_DIR=$WORKSPACE_DIR
+        whoami
+        df -h
+        rocm-smi
+    - name: Clean up Docker and old runs
+      run: |
+        # Remove old directories and docker images
+    - name: Build plugin wheels and Docker image
+      run: |
+        # Let ci_build script do the build
+        python3 ./build/rocm/ci_build \
+          --compiler clang \
+          --python-versions ${{ inputs.python_version }} \
+          --rocm-version ${{ inputs.rocm_version }} \
+          --rocm-build-job ${{ inputs.rocm_build_job_name }} \
+          --rocm-build-num ${{ inputs.rocm_build_job_num }} \
+          dist_docker \
+          --image-tag $RELEASE_DOCKER_IMG_NAME
+    - name: Archive wheels to Github
+      uses: actions/upload-artifact@v4
+        with:
+          name: rocm_jax_r${{ inputs.rocm_version }}_py${{ inputs.python_version }}_id${{ github.run_id }}
+          path: ./dist/*.whl
+    - name: Test Docker image
+      run: |
+        # Let ci_build do the testing. By default, it runs run_single_gpu.py and run_multi_gpu.sh
+        # in ./build/rocm, which in turn run tests in ./tests with pytest.
+        python3 ./build/rocm/ci_build test $RELEASE_DOCKER_IMG_NAME
+    - name: Publish wheels to PyPI
+      run: |
+        echo "Not implemeneted yet"
+    - name: Publish Docker image to Docker Hub
+      run: |
+        echo "Not implemented yet"
+
