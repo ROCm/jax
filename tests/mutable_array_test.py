@@ -117,6 +117,18 @@ class MutableArrayTest(jtu.JaxTestCase):
     self.assertAllClose(w, 10, check_dtypes=False)
 
   @parameterized.parameters([True, False])
+  def test_len_mutable_array(self, jit):
+    x_mut = core.mutable_array(jnp.zeros(3))
+
+    def f():
+      return jnp.int32(len(x_mut))
+
+    if jit:
+      f = jax.jit(f)
+
+    self.assertEqual(f(), 3)
+
+  @parameterized.parameters([True, False])
   def test_internal_mutarray_basic(self, jit):
     def f():
       x_mut = core.mutable_array(jnp.zeros(3))
@@ -226,6 +238,16 @@ class MutableArrayTest(jtu.JaxTestCase):
       x = jnp.zeros((4, 4), jnp.int32, device=sharding)
       x_ref = core.mutable_array(x)
       y = f(x_ref)
+
+  def test_vmap_basic(self):
+    @jax.vmap
+    def f(x):
+      x_ref = core.mutable_array(x)
+      x_ref[...] =  x_ref[...] * x_ref[...]
+      return x_ref[...]
+    xs = jnp.arange(4.)
+    ys = f(xs)
+    self.assertAllClose(ys, xs ** 2, check_dtypes=False)
 
 
 @jtu.with_config(jax_mutable_array_checks=True)

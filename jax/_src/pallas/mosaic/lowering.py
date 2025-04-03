@@ -230,12 +230,12 @@ def _memory_space_to_mosaic_attribute(memory_space: MemorySpace | None
 
 def _dtype_to_ir_type(dtype: jnp.dtype,
                       is_kernel_boundary: bool = False) -> ir.Type:
-  if jnp.issubdtype(dtype, tpu_core.semaphore_dtype):
+  if jnp.issubdtype(dtype, pallas_core.semaphore_dtype):
     if jnp.issubdtype(dtype, tpu_core.dma_semaphore):
       return ir.Type.parse("!tpu.dma_semaphore")
-    elif jnp.issubdtype(dtype, tpu_core.semaphore):
+    elif jnp.issubdtype(dtype, pallas_core.semaphore):
       return ir.Type.parse("!tpu.semaphore")
-    elif jnp.issubdtype(dtype, tpu_core.barrier_semaphore):
+    elif jnp.issubdtype(dtype, pallas_core.barrier_semaphore):
       return ir.Type.parse("!tpu.semaphore")
     else:
       raise NotImplementedError
@@ -517,11 +517,17 @@ class MosaicGridMapping:
     nonlocal_axis_names = set()
     def _get_nonlocal_axis_names(jaxpr: jax_core.Jaxpr):
       return {
-          e.name
-          for e in jaxpr.effects
-          if isinstance(e, jax_core.NamedAxisEffect)
-          and (not self.grid_names or e.name not in self.grid_names)
-      }
+            e.name
+            for e in jaxpr.effects
+            if isinstance(e, jax_core.NamedAxisEffect)
+            and (
+                not self.grid_names
+                or all(
+                    name not in self.grid_names
+                    for name in tree_util.tree_leaves(e.name)
+                )
+            )
+        }
     nonlocal_axis_names.update(_get_nonlocal_axis_names(self.jaxpr))
     for bm in self.block_mappings:
       if bm is not None:
@@ -2096,16 +2102,6 @@ def _convert_helper(x, *, to_dtype):
     # unsigned -> float is unsupported. We fall through and raise at the bottom.
     if not jnp.issubdtype(to_dtype, jnp.floating):
       return x.astype(to_dtype)
-  if jnp.issubdtype(from_dtype, jnp.floating) and jnp.issubdtype(
-      to_dtype, jnp.signedinteger
-  ):
-    if from_dtype.itemsize < 4:
-      x = x.astype(jnp.float32)
-    if to_dtype.itemsize < 4:
-      # Need to clip values to match XLA
-      minval, maxval = jnp.iinfo(to_dtype).min, jnp.iinfo(to_dtype).max
-      x = jnp.clip(x, minval, maxval)
-      return x.astype(jnp.int32).astype(to_dtype)
   raise NotImplementedError(f"Unsupported cast: {from_dtype} -> {to_dtype}")
 
 def _convert_element_type_lowering_rule(
@@ -2149,10 +2145,7 @@ def _convert_element_type_lowering_rule(
       return x
   # TODO(apaszke): Remove both_32bit constraints using the Mosaic canonicalizer.
   elif _from(floating) and _to(signed):
-    # TODO(apaszke): Remove once a month has passed, along with the
-    # _convert_helper float -> signed conversion above.
-    if not ctx.forward_compatible or both_32bit:
-      return arith.fptosi(out_type, x)
+    return arith.fptosi(out_type, x)
   elif _from(signed) and _to(floating) and both_32bit:
     return arith.sitofp(out_type, x)
   elif old_dtype == jnp.bool_ and _to(integer) and new_dtype.itemsize == 4:
@@ -2346,13 +2339,13 @@ def _bcast(x, y, x_aval, y_aval, out_aval):
     y_dtype = x_aval.dtype
   elif x_aval.weak_type:
     x_dtype = y_aval.dtype
-  if isinstance(x, (np.ndarray, np.number, int, float)):
+  if not isinstance(x, ir.Value):
     if getattr(y, "type", None) == ir.IndexType.get():
       mlir_type = y.type
     else:
       mlir_type = _dtype_to_ir_type(x_dtype)
     x = ir_constant(x, mlir_type)
-  if isinstance(y, (np.ndarray, np.number, int, float)):
+  if not isinstance(y, ir.Value):
     if getattr(x, "type", None) == ir.IndexType.get():
       mlir_type = x.type
     else:
@@ -2549,14 +2542,18 @@ def _nextafter_lowering_rule(ctx: LoweringRuleContext, x, y):
 lowering_rules[lax.nextafter_p] = _nextafter_lowering_rule
 
 
-def _rsqrt_lowering_rule(ctx: LoweringRuleContext, x):
+def _rsqrt_lowering_rule(ctx: LoweringRuleContext, x, accuracy):
+  if accuracy is not None:
+    raise NotImplementedError("Not implemented: accuracy")
   return math.rsqrt(x)
 
 
 lowering_rules[lax.rsqrt_p] = _rsqrt_lowering_rule
 
 
-def _sqrt_lowering_rule(ctx: LoweringRuleContext, x):
+def _sqrt_lowering_rule(ctx: LoweringRuleContext, x, accuracy):
+  if accuracy is not None:
+    raise NotImplementedError("Not implemented: accuracy")
   return math.sqrt(x)
 
 
@@ -2572,7 +2569,9 @@ def _square_lowering_rule(ctx: LoweringRuleContext, x):
 lowering_rules[lax.square_p] = _square_lowering_rule
 
 
-def _exp_lowering_rule(ctx: LoweringRuleContext, x):
+def _exp_lowering_rule(ctx: LoweringRuleContext, x, accuracy):
+  if accuracy is not None:
+    raise NotImplementedError("Not implemented: accuracy")
   return math.exp(x)
 
 
@@ -2605,9 +2604,11 @@ def _integer_pow_lowering_rule(ctx: LoweringRuleContext, x, *, y):
 lowering_rules[lax.integer_pow_p] = _integer_pow_lowering_rule
 
 
-def _exp2_lowering_rule(ctx: LoweringRuleContext, x):
+def _exp2_lowering_rule(ctx: LoweringRuleContext, x, accuracy):
   # exp2 in JAX lowers to exp(ln2 * x), not to pow2. We match that behavior
   # here.
+  if accuracy is not None:
+    raise NotImplementedError("Not implemented: accuracy")
   return lower_fun(
       lambda x: jnp.exp(jnp.astype(np.log(2), x.dtype) * x),
       multiple_results=False,
@@ -2618,7 +2619,9 @@ lowering_rules[lax.exp2_p] = _exp2_lowering_rule
 skip_mlir_conversions.add(lax.exp2_p)
 
 
-def _logistic_lowering_rule(ctx: LoweringRuleContext, x):
+def _logistic_lowering_rule(ctx: LoweringRuleContext, x, accuracy):
+  if accuracy is not None:
+    raise NotImplementedError("Not implemented: accuracy")
   neg_x = arith.negf(x)
   exp_neg_x = math.exp(neg_x)
   aval_out = ctx.avals_out[0]
@@ -2636,42 +2639,54 @@ def _logistic_lowering_rule(ctx: LoweringRuleContext, x):
 lowering_rules[lax.logistic_p] = _logistic_lowering_rule
 
 
-def _sin_lowering_rule(ctx: LoweringRuleContext, x):
+def _sin_lowering_rule(ctx: LoweringRuleContext, x, accuracy):
+  if accuracy is not None:
+    raise NotImplementedError("Not implemented: accuracy")
   return math.sin(x)
 
 
 lowering_rules[lax.sin_p] = _sin_lowering_rule
 
 
-def _cos_lowering_rule(ctx: LoweringRuleContext, x):
+def _cos_lowering_rule(ctx: LoweringRuleContext, x, accuracy):
+  if accuracy is not None:
+    raise NotImplementedError("Not implemented: accuracy")
   return math.cos(x)
 
 
 lowering_rules[lax.cos_p] = _cos_lowering_rule
 
 
-def _tan_lowering_rule(ctx: LoweringRuleContext, x):
+def _tan_lowering_rule(ctx: LoweringRuleContext, x, accuracy):
+  if accuracy is not None:
+    raise NotImplementedError("Not implemented: accuracy")
   return math.tan(x)
 
 
 lowering_rules[lax.tan_p] = _tan_lowering_rule
 
 
-def _tanh_lowering_rule(ctx: LoweringRuleContext, x):
+def _tanh_lowering_rule(ctx: LoweringRuleContext, x, accuracy):
+  if accuracy is not None:
+    raise NotImplementedError("Not implemented: accuracy")
   return math.tanh(x)
 
 
 lowering_rules[lax.tanh_p] = _tanh_lowering_rule
 
 
-def _log_lowering_rule(ctx: LoweringRuleContext, x):
+def _log_lowering_rule(ctx: LoweringRuleContext, x, accuracy):
+  if accuracy is not None:
+    raise NotImplementedError("Not implemented: accuracy")
   return math.log(x)
 
 
 lowering_rules[lax.log_p] = _log_lowering_rule
 
 
-def _log1p_lowering_rule(ctx: LoweringRuleContext, x):
+def _log1p_lowering_rule(ctx: LoweringRuleContext, x, accuracy):
+  if accuracy is not None:
+    raise NotImplementedError("Not implemented: accuracy")
   return math.log1p(x)
 
 
@@ -3392,7 +3407,7 @@ def _alloc_value(
 ) -> ir.Value:
   if isinstance(aval, pallas_core.AbstractMemoryRef):
     memspace = _memory_space_to_mosaic_attribute(aval.memory_space)
-    if jnp.issubdtype(aval.dtype, tpu_core.semaphore_dtype):
+    if jnp.issubdtype(aval.dtype, pallas_core.semaphore_dtype):
       assert aval.memory_space == TPUMemorySpace.SEMAPHORE
       memref_type = aval_to_ir_type(
           ctx.lowering_context.dynamic_shape_replacement_fn,
@@ -3442,8 +3457,8 @@ lowering_rules[primitives.run_scoped_p] = _run_scoped_lowering_rule
 
 def _device_id_to_logical(
     ctx: LoweringRuleContext, device_id,
-    device_id_type: tpu_primitives.DeviceIdType):
-  if device_id_type is tpu_primitives.DeviceIdType.MESH:
+    device_id_type: primitives.DeviceIdType):
+  if device_id_type is primitives.DeviceIdType.MESH:
     # Mesh means we are passed the mesh coordinates for the device
     device_ids = tree_util.tree_leaves(device_id)
     mesh_strides = ctx.lowering_context.mesh_context.mesh_strides
@@ -3458,7 +3473,7 @@ def _device_id_to_logical(
             for a, b in zip(device_ids, mesh_strides)
         ),
     )
-  elif device_id_type is tpu_primitives.DeviceIdType.LOGICAL:
+  elif device_id_type is primitives.DeviceIdType.LOGICAL:
     return device_id
   raise NotImplementedError(f"Unsupported device id type: {device_id_type}")
 
@@ -3468,19 +3483,30 @@ def _semaphore_read_lowering_rule(
     *args,
     args_tree,
 ):
-  sem_aval, _ = tree_util.tree_unflatten(args_tree, ctx.avals_in)
+  sem_aval, sem_transforms_avals = tree_util.tree_unflatten(args_tree, ctx.avals_in)
+  primitives.check_sem_avals(
+      sem_aval,
+      sem_transforms_avals,
+      "read",
+      allowed_semaphore_types={
+          tpu_core.dma_semaphore,
+          pallas_core.semaphore,
+          pallas_core.barrier_semaphore,
+          pallas_core.SEMAPHORE_INTERPRET_DTYPE,
+      },
+  )
   sem, transforms = tree_util.tree_unflatten(args_tree, args)
   sem, _ = _transform_ref(sem, sem_aval.dtype, sem_aval.shape, transforms)
   return tpu.sem_read(sem)
 
 
-lowering_rules[tpu_primitives.semaphore_read_p] = _semaphore_read_lowering_rule
+lowering_rules[primitives.semaphore_read_p] = _semaphore_read_lowering_rule
 
 def _semaphore_signal_lowering_rule(
     ctx: LoweringRuleContext,
     *args,
     args_tree,
-    device_id_type: tpu_primitives.DeviceIdType,
+    device_id_type: primitives.DeviceIdType,
 ):
   sem_aval, _, _, _, _ = tree_util.tree_unflatten(args_tree, ctx.avals_in)
   sem, transforms, value, device_id, core_index = tree_util.tree_unflatten(
@@ -3493,7 +3519,7 @@ def _semaphore_signal_lowering_rule(
   return []
 
 
-lowering_rules[tpu_primitives.semaphore_signal_p] = (
+lowering_rules[primitives.semaphore_signal_p] = (
     _semaphore_signal_lowering_rule)
 
 
@@ -3503,10 +3529,10 @@ def _semaphore_wait_lowering_rule(ctx: LoweringRuleContext, *args, args_tree):
   sem, _ = _transform_ref(sem, sem_aval.dtype, sem_aval.shape, transforms)
   tpu.sem_wait(sem, value)
   return []
-lowering_rules[tpu_primitives.semaphore_wait_p] = _semaphore_wait_lowering_rule
+lowering_rules[primitives.semaphore_wait_p] = _semaphore_wait_lowering_rule
 
 def _dma_start_lowering_rule(ctx: LoweringRuleContext, *args, tree,
-                             device_id_type: tpu_primitives.DeviceIdType):
+                             device_id_type: primitives.DeviceIdType):
   (
       src_ref,
       src_transforms,
@@ -3546,7 +3572,7 @@ lowering_rules[tpu_primitives.dma_start_p] = _dma_start_lowering_rule
 
 
 def _dma_wait_lowering_rule(ctx: LoweringRuleContext, *args, tree,
-                            device_id_type: tpu_primitives.DeviceIdType):
+                            device_id_type: primitives.DeviceIdType):
   del device_id_type
   (src, src_transforms, dst, transforms, sem, sem_transforms, _, _, _) = (
       tree_util.tree_unflatten(tree, args)
@@ -3575,10 +3601,6 @@ def _dma_wait_lowering_rule(ctx: LoweringRuleContext, *args, tree,
   return []
 
 lowering_rules[tpu_primitives.dma_wait_p] = _dma_wait_lowering_rule
-
-def _device_id_lowering_rule(ctx: LoweringRuleContext):
-  return tpu.device_id()
-lowering_rules[tpu_primitives.device_id_p] = _device_id_lowering_rule
 
 def _axis_index_rule(ctx: LoweringRuleContext, *, axis_name: Hashable):
   grid_names = ctx.lowering_context.grid_names

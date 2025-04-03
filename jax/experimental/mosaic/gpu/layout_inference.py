@@ -44,7 +44,9 @@ _layout_inference_rules: dict[str, LayoutInferenceRule] = {}
 
 
 def _add_layout_inference_rule(op: type[ir.OpView], rule: LayoutInferenceRule):
-  _layout_inference_rules[op.OPERATION_NAME] = rule  # pytype: disable=attribute-error
+  if op is not None:
+    _layout_inference_rules[op.OPERATION_NAME] = rule  # pytype: disable=attribute-error
+  return rule
 
 
 def _set_layout_attributes(
@@ -192,7 +194,7 @@ def _infer_pointwise_op_layouts(op: ir.OpView) -> OptionalLayouts:
   # This is left for a future change, and currently we only do "down
   # propagation".
   layout = _choose_representative_layout(layouts)
-  # It is unsafe to t conclude that this op produces a splat if not all inputs
+  # It is unsafe to conclude that this op produces a splat if not all inputs
   # have been inferred: some of them might turn out not to be splats!
   if layouts_lib.is_splat_fragmented_layout(layout) and not all_inputs_have_layout:
     return None
@@ -245,6 +247,51 @@ for op in [
     vector.StoreOp,
 ]:
   _add_layout_inference_rule(op, _infer_pointwise_op_layouts)
+
+
+# TODO(bchetioui): remove once minimum jaxlib >= 0.5.3.
+OptimizationBarrierOp = getattr(mgpu, "OptimizationBarrierOp", None)
+
+
+@partial(_add_layout_inference_rule, OptimizationBarrierOp)
+def _infer_optimization_barrier_op_layout(
+    op: OptimizationBarrierOp,
+) -> OptionalLayouts:
+  def is_array(v: ir.Value) -> bool:
+    return ir.VectorType.isinstance(v.type)
+
+  if inference_utils.has_in_layouts_set(op):
+    op_in_layouts = list(inference_utils.in_layouts(op))
+    return op_in_layouts, op_in_layouts
+
+  if inference_utils.has_out_layouts_set(op):
+    op_out_layouts = list(inference_utils.out_layouts(op))
+    return op_out_layouts, op_out_layouts
+
+  layouts = [None] * len(op.operands)
+  for i, operand in enumerate(filter(is_array, op.operands)):
+    layouts[i] = inference_utils.value_layout(operand)
+
+  for i, result in enumerate(filter(is_array, op.results)):
+    possible_layouts = set()
+    for op_operand_use in cast(ir.OpResult, result).uses:
+      consumer = op_operand_use.owner
+      op_user = consumer.operands[op_operand_use.operand_number]
+      layout = inference_utils.in_layout_for_operand(consumer, op_user)
+      if layout is not None:
+        possible_layouts.add(layout)
+      if possible_layouts and layouts[i] is None:
+        # TODO(bchetioui): we could actually just pick any user layout here,
+        # and optimize later. This is fine for now.
+        layouts[i] = _choose_representative_layout(possible_layouts)
+
+  # TODO(bchetioui): handle annotating layout for only certain operands.
+  # Otherwise, layouts may not get propagated through optimization barriers, if
+  # a single branch does not carry any forcing layout, which is pretty bad.
+  if any(layout is None for layout in layouts):
+    return None
+
+  return layouts, layouts
 
 
 @partial(_add_layout_inference_rule, arith.ConstantOp)
@@ -306,23 +353,46 @@ def _infer_yield_op_layout(op: scf.YieldOp) -> OptionalLayouts:
   return (layouts, [])
 
 
-@partial(_add_layout_inference_rule, scf.ForOp)
-def _infer_for_op_layout(op: scf.ForOp) -> OptionalLayouts:
-  yield_op = op.body.operations[len(op.body.operations) - 1]
-  assert isinstance(yield_op, scf.YieldOp)
-
-  if inference_utils.has_in_layouts_set(yield_op):
-    yield_layouts = list(inference_utils.in_layouts(yield_op))
+def _infer_from_yield_ops(op: ir.Operation) -> list[ir.Attribute] | None:
+  candidates = []
+  for region in op.regions:
+    [block] = region.blocks
+    yield_op = block.operations[len(block.operations) - 1]
+    assert isinstance(yield_op, scf.YieldOp)
+    if not inference_utils.has_in_layouts_set(yield_op):
+      continue
+    yield_layouts = inference_utils.in_layouts(yield_op)
     if any(
         layouts_lib.is_splat_fragmented_layout(layout)
         for layout in yield_layouts
     ):
-      return None
-    return (yield_layouts, yield_layouts)
+      continue
+    candidates.append(yield_layouts)
+  if not candidates:
+    return None
+  return [_choose_representative_layout(set(c)) for c in zip(*candidates)]
 
+
+@partial(_add_layout_inference_rule, scf.ForOp)
+def _infer_for_op_layout(op: scf.ForOp) -> OptionalLayouts:
   # TODO(bchetioui): we don't attempt to propagate from outside for the moment.
   # For the existing kernels, propagating from the YieldOp should be enough.
+  if layouts := _infer_from_yield_ops(op):
+    return layouts, layouts
+  return None
 
+
+@partial(_add_layout_inference_rule, scf.IfOp)
+def _infer_if_op_layout(op: scf.IfOp) -> OptionalLayouts:
+  if layouts := _infer_from_yield_ops(op):
+    return [], layouts
+  return None
+
+
+@partial(_add_layout_inference_rule, scf.IndexSwitchOp)
+def _infer_index_switch_op_layout(op: scf.IndexSwitchOp) -> OptionalLayouts:
+  if layouts := _infer_from_yield_ops(op):
+    return [], layouts
   return None
 
 
@@ -333,7 +403,6 @@ def _infer_splat_op_layout(splat_op: vector.SplatOp) -> OptionalLayouts:
           shape=cast(ir.ShapedType, splat_op.result.type).shape
       )
   )
-
   return [], [layout]
 
 
@@ -479,23 +548,33 @@ def infer_layout(module: ir.Module):
   # make sure to derive a single vector size in order to avoid relayouts at
   # lowering time.
   default_vector_size = math.inf
-
-  def update_default_vector_size(op: ir.OpView):
+  def update_default_vector_size_from_vector(v: ir.Value):
     nonlocal default_vector_size
-    for v in list(op.operands) + list(op.results):
-      if ir.VectorType.isinstance(v.type):
-        max_vec_size_for_v = (
-            np.prod(cast(ir.ShapedType, v.type).shape) // fa.WARPGROUP_SIZE
-        )
-        desired_vec_size = 8 // utils.bytewidth(v.type.element_type)
-        default_vector_size = min(
-            default_vector_size, max_vec_size_for_v, desired_vec_size
-        )
+    max_vec_size_for_v = (
+          np.prod(cast(ir.ShapedType, v.type).shape) // fa.WARPGROUP_SIZE
+      )
+    desired_vec_size = 8 // utils.bytewidth(v.type.element_type)
+    default_vector_size = min(
+        default_vector_size, max_vec_size_for_v, desired_vec_size
+    )
+
+  def update_default_vector_size_from_op(op: ir.OpView):
+    for i, v in enumerate(
+        filter(lambda v: ir.VectorType.isinstance(v.type), op.operands)
+    ):
+      if inference_utils.attr_element("in_layouts", op, i) is None:
+        update_default_vector_size_from_vector(v)
+
+    for i, v in enumerate(
+        filter(lambda v: ir.VectorType.isinstance(v.type), op.results)
+    ):
+      if inference_utils.attr_element("out_layouts", op, i) is None:
+        update_default_vector_size_from_vector(v)
 
   for op in module.body:
-    traverse_op(op, update_default_vector_size)
+    traverse_op(op, update_default_vector_size_from_op)
 
-  if default_vector_size is None:  # Nothing to annotate.
+  if default_vector_size == math.inf:  # Nothing to annotate.
     return
 
   def to_default_layout(ty: ir.Type) -> ir.Attribute | None:

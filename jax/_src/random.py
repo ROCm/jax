@@ -41,6 +41,8 @@ from jax._src.interpreters import mlir
 from jax._src.lax import lax as lax_internal
 from jax._src.numpy.lax_numpy import _convert_and_clip_integer
 from jax._src.numpy.util import _arraylike, check_arraylike, promote_dtypes_inexact
+from jax._src.pjit import auto_axes
+from jax._src.sharding_impls import canonicalize_sharding
 from jax._src.typing import Array, ArrayLike, DTypeLike
 from jax._src.util import canonicalize_axis
 
@@ -346,9 +348,18 @@ def _check_shape(name: str, shape: Shape, *param_shapes) -> None:
       raise ValueError(msg.format(name, shape_, shape))
 
 
+def maybe_auto_axes(f, out_shardings, **hoist_kwargs):
+  f_ = partial(f, **hoist_kwargs)
+  if out_shardings is None:
+    return f_
+  else:
+    return auto_axes(f_, out_shardings=out_shardings)
+
+
 def bits(key: ArrayLike,
          shape: Shape = (),
-         dtype: DTypeLikeUInt | None = None) -> Array:
+         dtype: DTypeLikeUInt | None = None,
+         out_sharding=None) -> Array:
   """Sample uniform bits in the form of unsigned integers.
 
   Args:
@@ -371,15 +382,18 @@ def bits(key: ArrayLike,
                      f"got {dtype}")
   dtype = dtypes.canonicalize_dtype(dtype)
   shape = core.canonicalize_shape(shape)
+  out_sharding = canonicalize_sharding(out_sharding, "bits")
   bit_width = dtype.itemsize * 8
-  return _random_bits(key, bit_width, shape)
+  return maybe_auto_axes(_random_bits, out_sharding,
+                         bit_width=bit_width, shape=shape)(key)
 
 
 def uniform(key: ArrayLike,
             shape: Shape = (),
             dtype: DTypeLikeFloat = float,
             minval: RealArray = 0.,
-            maxval: RealArray = 1.) -> Array:
+            maxval: RealArray = 1.,
+            out_sharding=None) -> Array:
   """Sample uniform random values in [minval, maxval) with given shape/dtype.
 
   Args:
@@ -397,12 +411,17 @@ def uniform(key: ArrayLike,
   key, _ = _check_prng_key("uniform", key)
   dtypes.check_user_dtype_supported(dtype)
   shape = core.canonicalize_shape(shape)
+  out_sharding = canonicalize_sharding(out_sharding, "uniform")
 
   if not dtypes.issubdtype(dtype, np.floating):
     raise ValueError(f"dtype argument to `uniform` must be a float dtype, "
                      f"got {dtype}")
   dtype = dtypes.canonicalize_dtype(dtype)
-  return _uniform(key, shape, dtype, minval, maxval)
+  if out_sharding is None:
+    return _uniform(key, shape, dtype, minval, maxval)
+  def f(k, minv, maxv):
+    return _uniform(k, shape, dtype, minv, maxv)
+  return auto_axes(f, out_shardings=out_sharding)(key, minval, maxval)
 
 @partial(jit, static_argnums=(1, 2))
 def _uniform(key, shape, dtype, minval, maxval) -> Array:
@@ -680,7 +699,8 @@ def choice(key: ArrayLike,
 
 def normal(key: ArrayLike,
            shape: Shape = (),
-           dtype: DTypeLikeFloat = float) -> Array:
+           dtype: DTypeLikeFloat = float,
+           out_sharding=None) -> Array:
   r"""Sample standard normal random values with given shape and float dtype.
 
   The values are returned according to the probability density function:
@@ -702,12 +722,13 @@ def normal(key: ArrayLike,
   """
   key, _ = _check_prng_key("normal", key)
   shape = core.canonicalize_shape(shape)
+  out_sharding = canonicalize_sharding(out_sharding, "normal")
   dtypes.check_user_dtype_supported(dtype)
   if not dtypes.issubdtype(dtype, np.inexact):
     raise ValueError(f"dtype argument to `normal` must be a float or complex dtype, "
                      f"got {dtype}")
   dtype = dtypes.canonicalize_dtype(dtype)
-  return _normal(key, shape, dtype)
+  return maybe_auto_axes(_normal, out_sharding, shape=shape, dtype=dtype)(key)
 
 @partial(jit, static_argnums=(1, 2))
 def _normal(key, shape, dtype) -> Array:
@@ -1568,8 +1589,8 @@ def categorical(
     shape: Optional, a tuple of nonnegative integers representing the result shape.
       Must be broadcast-compatible with ``np.delete(logits.shape, axis)``.
       The default (None) produces a result shape equal to ``np.delete(logits.shape, axis)``.
-    replace: If True, perform sampling without replacement. Default (False) is to
-      perform sampling with replacement.
+    replace: If True (default), perform sampling with replacement. If False, perform
+      sampling without replacement.
 
   Returns:
     A random array with int dtype and shape given by ``shape`` if ``shape``
