@@ -13,15 +13,15 @@ See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
 
-#ifndef JAXLIB_PASS_BOILERPLATE_H_
-#define JAXLIB_PASS_BOILERPLATE_H_
+#ifndef JAXLIB_MOSAIC_PASS_BOILERPLATE_H_
+#define JAXLIB_MOSAIC_PASS_BOILERPLATE_H_
 
 #include <memory>
 
-#include "mlir/include/mlir/IR/DialectRegistry.h"
-#include "mlir/include/mlir/Pass/Pass.h"
-#include "mlir/include/mlir/Support/LLVM.h"
-#include "mlir/include/mlir/Support/TypeID.h"
+#include "mlir/IR/DialectRegistry.h"
+#include "mlir/Pass/Pass.h"
+#include "mlir/Support/LLVM.h"
+#include "mlir/Support/TypeID.h"
 
 namespace jaxlib {
 namespace mlir {
@@ -64,4 +64,4 @@ class Pass : public ::mlir::OperationPass<Op> {
 }  // namespace mlir
 }  // namespace jaxlib
 
-#endif  // JAXLIB_PASS_BOILERPLATE_H_
+#endif  // JAXLIB_MOSAIC_PASS_BOILERPLATE_H_

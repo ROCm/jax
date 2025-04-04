@@ -515,7 +515,7 @@ def ffi_call(
               "and an output with a different layout "
               f"{static_output_layouts[o_idx]}.")
         static_input_output_aliases += ((i_idx, o_idx),)
-
+    args = core.standard_insert_pbroadcast(*args)
     results = ffi_call_p.bind(
         *args,
         result_avals=result_avals,
@@ -638,9 +638,10 @@ def ffi_call_abstract_eval(
     has_side_effect: bool,
     **_,
 ):
-  del avals_in  # unused
+  out_vma = core.standard_vma_rule('ffi_call', *avals_in)
   effects = {_FfiEffect} if has_side_effect else core.no_effects
-  return result_avals, effects
+  return tuple(r if r is core.abstract_token else r.update(vma=out_vma)
+               for r in result_avals), effects
 
 
 def ffi_call_jvp(*args, target_name, **_):

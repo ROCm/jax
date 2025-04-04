@@ -49,24 +49,24 @@ from jax._src.lax import lax as lax_internal
 from jax._src.lax.lax import (PrecisionLike,_array_copy,
                               _sort_le_comparator, _sort_lt_comparator)
 from jax._src.lib import xla_client as xc
-from jax._src.numpy.array_creation import (empty, empty_like, full,
-                                           ones, ones_like, zeros, zeros_like)
 from jax._src.numpy import indexing
 from jax._src.numpy import reductions
 from jax._src.numpy import tensor_contractions
 from jax._src.numpy import ufuncs
 from jax._src.numpy import util
+from jax._src.numpy.array_creation import (empty, empty_like, full,
+                                           ones, ones_like, zeros, zeros_like)
 from jax._src.numpy.sorting import argsort, sort
 from jax._src.numpy.vectorize import vectorize
+from jax._src.sharding_impls import SingleDeviceSharding
 from jax._src.typing import (
-  Array, ArrayLike, DType, DTypeLike, DeprecatedArg, DimSize, Shape
+  Array, ArrayLike, DType, DTypeLike, DeprecatedArg, DimSize, Shape, SupportsShape
 )
 from jax._src.util import (
     NumpyComplexWarning, canonicalize_axis as _canonicalize_axis,
     ceil_of_ratio, safe_zip, set_module, unzip2)
 from jax.sharding import Sharding
-from jax._src.sharding_impls import SingleDeviceSharding
-from jax.tree_util import tree_leaves, tree_map
+from jax.tree_util import tree_flatten, tree_map
 import numpy as np
 
 export = set_module('jax.numpy')
@@ -1203,8 +1203,8 @@ def transpose(a: ArrayLike, axes: Sequence[int] | None = None) -> Array:
     Array([[1, 3],
            [2, 4]], dtype=int32)
   """
-  util.check_arraylike("transpose", a)
-  axes_ = list(range(np.ndim(a))[::-1]) if axes is None else axes
+  a = util.ensure_arraylike("transpose", a)
+  axes_ = list(range(a.ndim)[::-1]) if axes is None else axes
   axes_ = [_canonicalize_axis(i, np.ndim(a)) for i in axes_]
   return lax.transpose(a, axes_)
 
@@ -1285,8 +1285,8 @@ def matrix_transpose(x: ArrayLike, /) -> Array:
            [[5, 7],
             [6, 8]]], dtype=int32)
   """
-  util.check_arraylike("matrix_transpose", x)
-  ndim = np.ndim(x)
+  x = util.ensure_arraylike("matrix_transpose", x)
+  ndim = x.ndim
   if ndim < 2:
     raise ValueError(f"x must be at least two-dimensional for matrix_transpose; got {ndim=}")
   axes = (*range(ndim - 2), ndim - 1, ndim - 2)
@@ -1944,8 +1944,7 @@ def isrealobj(x: Any) -> bool:
 
 @export
 def reshape(
-    a: ArrayLike, shape: DimSize | Shape | None = None, order: str = "C", *,
-    newshape: DimSize | Shape | DeprecatedArg = DeprecatedArg(),
+    a: ArrayLike, shape: DimSize | Shape, order: str = "C", *,
     copy: bool | None = None) -> Array:
   """Return a reshaped copy of an array.
 
@@ -1962,8 +1961,6 @@ def reshape(
       JAX does not support ``order="A"``.
     copy: unused by JAX; JAX always returns a copy, though under JIT the compiler
       may optimize such copies away.
-    newshape: deprecated alias of the ``shape`` argument. Will result in a
-      :class:`DeprecationWarning` if used.
 
   Returns:
     reshaped copy of input array with the specified shape.
@@ -2021,14 +2018,6 @@ def reshape(
   __tracebackhide__ = True
   util.check_arraylike("reshape", a)
 
-  # TODO(jakevdp): finalized 2024-12-2; remove argument after JAX v0.4.40.
-  if not isinstance(newshape, DeprecatedArg):
-    raise TypeError("The newshape argument to jnp.reshape was removed in JAX v0.4.36."
-                    " Use shape instead.")
-  if shape is None:
-    raise TypeError(
-      "jnp.shape requires passing a `shape` argument, but none was given."
-    )
   try:
     # forward to method for ndarrays
     return a.reshape(shape, order=order)  # type: ignore[call-overload,union-attr]
@@ -2918,6 +2907,12 @@ def select(
     raise ValueError(msg.format(len(condlist), len(choicelist)))
   if len(condlist) == 0:
     raise ValueError("condlist must be non-empty")
+
+  util.check_arraylike("select", *condlist, *choicelist, default)
+  condlist = [asarray(cond) for cond in condlist]
+  choicelist = [asarray(choice) for choice in choicelist]
+  default = asarray(default)
+
   # Put the default at front with condition False because
   # argmax returns zero for an array of False values.
   choicelist = util.promote_dtypes(default, *choicelist)
@@ -2989,7 +2984,7 @@ def bincount(x: ArrayLike, weights: ArrayLike | None = None,
     >>> jnp.bincount(x, length=5)
     Array([2, 1, 0, 1, 0], dtype=int32)
   """
-  util.check_arraylike("bincount", x)
+  x = util.ensure_arraylike("bincount", x)
   if _dtype(x) == bool:
     x = lax.convert_element_type(x, 'int32')
   if not issubdtype(_dtype(x), np.integer):
@@ -4471,7 +4466,7 @@ def stack(arrays: np.ndarray | Array | Sequence[ArrayLike],
     axis = _canonicalize_axis(axis, arrays.ndim)
     return concatenate(expand_dims(arrays, axis + 1), axis=axis, dtype=dtype)
   else:
-    util.check_arraylike("stack", *arrays)
+    arrays = util.ensure_arraylike_tuple("stack", arrays)
     shape0 = np.shape(arrays[0])
     axis = _canonicalize_axis(axis, len(shape0) + 1)
     new_arrays = []
@@ -4560,7 +4555,7 @@ def tile(A: ArrayLike, reps: DimSize | Sequence[DimSize]) -> Array:
            [1, 2],
            [3, 4]], dtype=int32)
   """
-  util.check_arraylike("tile", A)
+  A = util.ensure_arraylike("tile", A)
   try:
     iter(reps)  # type: ignore[arg-type]
   except TypeError:
@@ -4633,7 +4628,7 @@ def concatenate(arrays: np.ndarray | Array | Sequence[ArrayLike],
   """
   if isinstance(arrays, (np.ndarray, Array)):
     return _concatenate_array(arrays, axis, dtype=dtype)
-  util.check_arraylike("concatenate", *arrays)
+  arrays = util.ensure_arraylike_tuple("concatenate", arrays)
   if not len(arrays):
     raise ValueError("Need at least one array to concatenate.")
   if axis is None:
@@ -4875,6 +4870,7 @@ def dstack(tup: np.ndarray | Array | Sequence[ArrayLike],
   else:
     # TODO(jakevdp): Non-array input deprecated 2023-09-22; change to error.
     util.check_arraylike("dstack", *tup, emit_warning=True)
+    tup = util.ensure_arraylike_tuple("dstack", tup)
     arrs = [atleast_3d(m) for m in tup]
   return concatenate(arrs, axis=2, dtype=dtype)
 
@@ -5022,7 +5018,7 @@ def choose(a: ArrayLike, choices: Array | np.ndarray | Sequence[ArrayLike],
   """
   if out is not None:
     raise NotImplementedError("The 'out' argument to jnp.choose is not supported.")
-  util.check_arraylike('choose', a, *choices)
+  a, *choices = util.ensure_arraylike_tuple('choose', (a, *choices))
   if not issubdtype(_dtype(a), np.integer):
     raise ValueError("`a` array must be integer typed")
   N = len(choices)
@@ -5504,18 +5500,15 @@ def array(object: Any, dtype: DTypeLike | None = None, copy: bool = True,
       object = xc._xla.cuda_array_interface_to_buffer(
           cai=cai, gpu_backend=backend, device_id=device_id)
 
-  object = tree_map(lambda leaf: leaf.__jax_array__()
-                    if hasattr(leaf, "__jax_array__") else leaf, object)
-  leaves = tree_leaves(object, is_leaf=lambda x: x is None)
+  leaves, treedef = tree_flatten(object, is_leaf=lambda x: x is None)
   if any(leaf is None for leaf in leaves):
-    # Added Nov 16 2023
-    if deprecations.is_accelerated("jax-numpy-array-none"):
-      raise TypeError("None is not a valid value for jnp.array")
-    warnings.warn(
-      "None encountered in jnp.array(); this is currently treated as NaN. "
-      "In the future this will result in an error.",
-      FutureWarning, stacklevel=2)
-    leaves = tree_leaves(object)
+    raise ValueError("None is not a valid value for jnp.array")
+  leaves = [
+      leaf
+      if (leaf_jax_array := getattr(leaf, "__jax_array__", None)) is None
+      else leaf_jax_array()
+      for leaf in leaves
+  ]
   if dtype is None:
     # Use lattice_result_type rather than result_type to avoid canonicalization.
     # Otherwise, weakly-typed inputs would have their dtypes canonicalized.
@@ -5530,8 +5523,8 @@ def array(object: Any, dtype: DTypeLike | None = None, copy: bool = True,
   if not weak_type:
     dtype = dtypes.canonicalize_dtype(dtype, allow_extended_dtype=True)  # type: ignore[assignment]
 
+  object = treedef.unflatten(leaves)
   out: ArrayLike
-
   if all(not isinstance(leaf, Array) for leaf in leaves):
     # TODO(jakevdp): falling back to numpy here fails to overflow for lists
     # containing large integers; see discussion in
@@ -7564,7 +7557,7 @@ def tril_indices(n: int, k: int = 0, m: int | None = None) -> tuple[Array, Array
 
 
 @export
-def triu_indices_from(arr: ArrayLike, k: int = 0) -> tuple[Array, Array]:
+def triu_indices_from(arr: ArrayLike | SupportsShape, k: int = 0) -> tuple[Array, Array]:
   """Return the indices of upper triangle of a given array.
 
   JAX implementation of :func:`numpy.triu_indices_from`.
@@ -7615,14 +7608,18 @@ def triu_indices_from(arr: ArrayLike, k: int = 0) -> tuple[Array, Array]:
     >>> jnp.triu_indices_from(arr, k=-1)
     (Array([0, 0, 0, 1, 1, 1, 2, 2], dtype=int32), Array([0, 1, 2, 0, 1, 2, 1, 2], dtype=int32))
   """
-  arr_shape = np.shape(arr)
+  if hasattr(arr, "shape"):
+    arr_shape = arr.shape
+  else:
+    arr = util.ensure_arraylike("triu_indices_from", arr)
+    arr_shape = arr.shape
   if len(arr_shape) != 2:
     raise ValueError("Only 2-D inputs are accepted")
   return triu_indices(arr_shape[0], k=k, m=arr_shape[1])
 
 
 @export
-def tril_indices_from(arr: ArrayLike, k: int = 0) -> tuple[Array, Array]:
+def tril_indices_from(arr: ArrayLike | SupportsShape, k: int = 0) -> tuple[Array, Array]:
   """Return the indices of lower triangle of a given array.
 
   JAX implementation of :func:`numpy.tril_indices_from`.
@@ -7673,7 +7670,11 @@ def tril_indices_from(arr: ArrayLike, k: int = 0) -> tuple[Array, Array]:
     >>> jnp.tril_indices_from(arr, k=-1)
     (Array([1, 2, 2], dtype=int32), Array([0, 0, 1], dtype=int32))
   """
-  arr_shape = np.shape(arr)
+  if hasattr(arr, "shape"):
+    arr_shape = arr.shape
+  else:
+    arr = util.ensure_arraylike("tril_indices_from", arr)
+    arr_shape = arr.shape
   if len(arr_shape) != 2:
     raise ValueError("Only 2-D inputs are accepted")
   return tril_indices(arr_shape[0], k=k, m=arr_shape[1])
@@ -8773,6 +8774,7 @@ def argwhere(
     >>> jnp.argwhere(0)
     Array([], shape=(0, 0), dtype=int32)
   """
+  a = util.ensure_arraylike("argwhere", a)
   result = transpose(vstack(nonzero(atleast_1d(a), size=size, fill_value=fill_value)))
   if np.ndim(a) == 0:
     return result[:0].reshape(result.shape[0], 0)

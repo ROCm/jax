@@ -2685,6 +2685,55 @@ class ShardMapTest(jtu.JaxTestCase):
               )(x)  # don't crash
     self.assertArraysEqual(y, np.array([6, 7], dtype=np.float32))
 
+  @config.varying_axes_in_types(True)
+  def test_pmax_vma_in_types(self):
+    mesh = jtu.create_mesh((4,), ('i',))
+    x = jnp.arange(8., dtype=np.float32)
+    f = jax.jit(shard_map(lambda x: jax.lax.pmax(x, 'i'), mesh=mesh,
+                          in_specs=P(), out_specs=P()))
+    jaxpr = f.trace(x).jaxpr
+    self.assertIn("pbroadcast[axes=('i',)", str(jaxpr))
+    f(x)  # doesn't crash
+
+  @config.varying_axes_in_types(True)
+  def test_mul_with_vma_in_types(self):
+    mesh = jtu.create_mesh((2,), ('x',))
+    x = np.arange(8.)
+
+    def f(x):
+      self.assertEqual(x.aval.vma, frozenset({'x'}))
+      out = x * 2
+      self.assertEqual(out.aval.vma, frozenset({'x'}))
+      return out
+
+    f = jax.jit(shard_map(f, mesh=mesh, in_specs=P('x'), out_specs=P('x')))
+    jaxpr = f.trace(x).jaxpr
+    self.assertIn("pbroadcast[axes=('x',)", str(jaxpr))
+    out = f(x)
+    self.assertArraysEqual(out, x * 2)
+
+    # TODO(yashkatariya): Enable grad test which requires adding psum_p support.
+    # def g(x, y):
+    #   return jnp.sum(f(x, y))
+    # print(jax.jit(jax.grad(g)).trace(x, y).jaxpr)
+
+  @config.varying_axes_in_types(True)
+  def test_all_gather_with_vma_in_types(self):
+    mesh = jtu.create_mesh((2,), ('x',))
+    x = np.arange(8.)
+
+    def f(x):
+      self.assertEqual(x.aval.vma, frozenset())
+      out = jax.lax.all_gather(x, 'x')
+      self.assertEqual(out.aval.vma, frozenset({'x'}))
+      return out
+
+    f = jax.jit(shard_map(f, mesh=mesh, in_specs=P(), out_specs=P('x')))
+    jaxpr = f.trace(x).jaxpr
+    self.assertIn("pbroadcast[axes=('x',)", str(jaxpr))
+
+    f(x)  # doesn't crash
+
 
 class FunSpec(NamedTuple):
   name: str
@@ -3042,7 +3091,7 @@ class ShardMapSystematicTest(jtu.JaxTestCase):
     else:
       slices = map(jnp.stack, zip(*expected_slices))
       expected = jax.tree.unflatten(treedef, slices)
-    tol = 1e-2 if jtu.test_device_matches(['tpu']) else None
+    tol = 1e-2 if jtu.test_device_matches(['gpu', 'tpu']) else None
     self.assertAllClose(ans, expected, check_dtypes=False, atol=tol, rtol=tol)
 
 @jtu.pytest_mark_if_available('multiaccelerator')
@@ -3083,6 +3132,7 @@ class CustomPartitionerTest(jtu.JaxTestCase):
         infer_sharding_from_operands=infer_sharding_from_operands,
         partition=partition,
         propagate_user_sharding=propagate_user_sharding,
+        sharding_rule='i -> i',
     )
 
     @jax.jit

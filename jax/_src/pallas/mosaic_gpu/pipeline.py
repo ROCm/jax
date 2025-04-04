@@ -33,7 +33,6 @@ from jax._src.interpreters import partial_eval as pe
 from jax._src.pallas import core as pallas_core
 from jax._src.pallas.mosaic_gpu import core as gpu_core
 from jax._src.pallas.mosaic_gpu import primitives as gpu_primitives
-from jax._src.util import foreach
 from jax.experimental import pallas as pl
 import jax.numpy as jnp
 
@@ -171,7 +170,8 @@ def emit_pipeline(
   """Creates a function to emit a manual pipeline within a Pallas kernel.
 
   Args:
-    body: The pipeline body.
+    body: The pipeline body, called with the indices for the current step, the
+      input refs, followed by the output refs.
     grid: The grid to use for the pipeline.
     in_specs: The block specs for the inputs.
     out_specs: The block specs for the outputs.
@@ -248,7 +248,8 @@ def emit_pipeline(
         it.islice(it.product(*map(range, grid)), max_concurrent_steps)
     ):
       indices = tuple(map(lambda i: jnp.asarray(i, dtype=jnp.int32), indices))
-      foreach(lambda bref: bref.copy_in(step, indices, barrier_ref), in_brefs)
+      for bref in in_brefs:
+        bref.copy_in(step, indices, barrier_ref)
 
     # This is true if any of the outputs need to be transferred inside the loop.
     copies_out_in_loop = not all(bref.is_index_invariant for bref in out_brefs)
@@ -266,11 +267,13 @@ def emit_pipeline(
             max_concurrent_steps - (1 + delay_release), wait_read_only=True
         )
 
-      with pallas_core.grid_env(map(pallas_core.GridAxis, indices, grid)):
-        body(*(
-            bref.get_ref_for_slot(slot)
-            for bref in it.chain(in_brefs, out_brefs)
-        ))
+      body(
+          indices,
+          *(
+              bref.get_ref_for_slot(slot)
+              for bref in it.chain(in_brefs, out_brefs)
+          ),
+      )
 
       if copies_out_in_loop:
         gpu_primitives.commit_smem()
@@ -355,13 +358,14 @@ def emit_pipeline(
 
   return pipeline
 
+
 def emit_pipeline_warp_specialized(
     body: Callable[..., None],
     *,
     grid: pallas_core.StaticGrid,
     memory_registers: int,
-    in_specs: Sequence[gpu_core.GPUBlockSpec] = (),
-    out_specs: Sequence[gpu_core.GPUBlockSpec] = (),
+    in_specs: Sequence[pl.BlockSpec] = (),
+    out_specs: Sequence[pl.BlockSpec] = (),
     max_concurrent_steps: int = 2,
     wg_axis: str,
     num_compute_wgs: int,
@@ -376,14 +380,16 @@ def emit_pipeline_warp_specialized(
   ``manual_consumed_barriers`` argument is True.
 
   ```
-  def body(*input_refs, *output_refs, [consumed_barriers]) -> None:
+  def body(indices, *input_refs, *output_refs, [consumed_barriers]) -> None:
   ```
 
   or with a carries enabled (enabled via the ``carry_coroutine`` argument),
   where the body returns the next carry:
 
   ```
-  def body(*input_refs, *output_refs, [consumed_barriers], carry) -> Carry:
+  def body(
+      indices, *input_refs, *output_refs, [consumed_barriers], carry
+  ) -> Carry:
   ```
 
   Args:
@@ -423,9 +429,9 @@ def emit_pipeline_warp_specialized(
   # Trace the index maps to determine if they depend on the grid.
   # Grid-independent values will not be multiple-buffered.
   in_spec_has_seq_axis = [
-      ~_is_index_invariant(spec, grid) for spec in in_specs]
+      not _is_index_invariant(spec, grid) for spec in in_specs]
   out_spec_has_seq_axis = [
-      ~_is_index_invariant(spec, grid) for spec in out_specs]
+      not _is_index_invariant(spec, grid) for spec in out_specs]
   spec_has_seq_axis = [*in_spec_has_seq_axis, *out_spec_has_seq_axis]
 
   num_pipeline_steps = math.prod(grid)
@@ -458,7 +464,7 @@ def emit_pipeline_warp_specialized(
           gpu_core.SMEM(
               (slots, *spec.block_shape),   # type: ignore
               gmem_ref.dtype,
-              transforms=spec.transforms,
+              transforms=getattr(spec, "transforms", ()),
           )
       )
     in_smem_refs, out_smem_refs = util.split_list(
@@ -510,13 +516,13 @@ def emit_pipeline_warp_specialized(
       consumed_barrier_refs,
   ):
     in_brefs: Sequence[BufferedRef] = [
-        BufferedRef(spec, ~has_seq_axis, gmem_ref, smem_ref)
+        BufferedRef(spec, not has_seq_axis, gmem_ref, smem_ref)
         for spec, has_seq_axis, gmem_ref, smem_ref in zip(
             in_specs, in_spec_has_seq_axis, in_gmem_refs, in_smem_refs
         )
     ]
     out_brefs: Sequence[BufferedRef] = [
-        BufferedRef(spec, ~has_seq_axis, gmem_ref, smem_ref)
+        BufferedRef(spec, not has_seq_axis, gmem_ref, smem_ref)
         for spec, has_seq_axis, gmem_ref, smem_ref in zip(
             out_specs, out_spec_has_seq_axis, out_gmem_refs, out_smem_refs
         )
@@ -545,18 +551,17 @@ def emit_pipeline_warp_specialized(
         if copies_out_in_loop:
           gpu_primitives.wait_smem_to_gmem(max_concurrent_steps - 1)
 
-        with pallas_core.grid_env(map(pallas_core.GridAxis, indices, grid)):
-          body_refs = []
-          for bref in it.chain(in_brefs, out_brefs):
-            buf_slot = _get_slot(slot, ~bref.is_index_invariant)
-            body_refs.append(bref.get_ref_for_slot(buf_slot))
+        body_refs = []
+        for bref in it.chain(in_brefs, out_brefs):
+          buf_slot = _get_slot(slot, not bref.is_index_invariant)
+          body_refs.append(bref.get_ref_for_slot(buf_slot))
 
-          body_args = body_refs
-          if manual_consumed_barriers:
-            body_args += [consumed_barrier_ref.at[slot] for consumed_barrier_ref in consumed_barrier_refs]
-          if has_carry:
-            body_args += [prev_body_carry]
-          next_body_carry = body(*body_args)
+        body_args = body_refs
+        if manual_consumed_barriers:
+          body_args += [consumed_barrier_ref.at[slot] for consumed_barrier_ref in consumed_barrier_refs]
+        if has_carry:
+          body_args += [prev_body_carry]
+        next_body_carry = body(indices, *body_args)
 
         if not manual_consumed_barriers:
           [consumed_barrier_ref] = consumed_barrier_refs
@@ -581,7 +586,7 @@ def emit_pipeline_warp_specialized(
               new_store_slices[idx],
           )
           slices_changed = ~functools.reduce(lax.bitwise_and, are_same_slices)
-          bref.copy_out(_get_slot(slot, ~bref.is_index_invariant),
+          bref.copy_out(_get_slot(slot, not bref.is_index_invariant),
                         indices,
                         predicate=slices_changed)
         gpu_primitives.commit_smem_to_gmem_group()
@@ -624,7 +629,8 @@ def emit_pipeline_warp_specialized(
       last_slot = lax.rem(num_pipeline_steps - 1, max_concurrent_steps)
       for bref in out_brefs:
         if bref.is_index_invariant:
-          bref.copy_out(last_slot, last_indices, predicate=None)
+          bref.copy_out(_get_slot(last_slot, has_seq_dim=False),
+                        last_indices, predicate=None)
 
       gpu_primitives.commit_smem_to_gmem_group()
 
@@ -639,7 +645,7 @@ def emit_pipeline_warp_specialized(
       # Begin initial copies.
       for step in range(max_concurrent_steps):
         for bref, barrier in zip(in_brefs, in_smem_barrier_refs):
-          buf_slot = _get_slot(step, ~bref.is_index_invariant)
+          buf_slot = _get_slot(step, not bref.is_index_invariant)
           bref.copy_in(buf_slot, indices, barrier)
         indices = _inc_grid_by_1(indices, grid)
 
@@ -662,7 +668,7 @@ def emit_pipeline_warp_specialized(
           if manual_consumed_barriers:
             gpu_primitives.barrier_wait(consumed_barrier.at[slot])  # pytype: disable=attribute-error
           bref.copy_in(
-              _get_slot(fetch_slot, ~bref.is_index_invariant), indices, barrier)
+              _get_slot(fetch_slot, not bref.is_index_invariant), indices, barrier)
         next_indices = _inc_grid_by_1(indices, grid)
         return (next_indices,)
       lax.fori_loop(0, num_pipeline_steps - max_concurrent_steps,

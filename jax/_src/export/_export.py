@@ -43,7 +43,7 @@ from jax._src import mesh as mesh_lib
 from jax._src.interpreters import mlir
 from jax._src.interpreters import pxla
 from jax._src.lib import xla_client
-from jax._src.lib import xla_extension, xla_extension_version
+from jax._src.lib import xla_extension
 from jax._src.lib.mlir import ir, passmanager
 from jax._src.lib.mlir.dialects import hlo
 from jax._src.lib.mlir.dialects import func as func_dialect
@@ -529,6 +529,7 @@ def export(
     *,
     platforms: Sequence[str] | None = None,
     disabled_checks: Sequence[DisabledSafetyCheck] = (),
+    _override_lowering_rules: Sequence[tuple[Any, Any]] | None = None
     ) -> Callable[..., Exported]:
   """Exports a JAX function for persistent serialization.
 
@@ -541,6 +542,13 @@ def export(
         If None, then use the default JAX backend.
         The calling convention for multiple platforms is explained at
         https://jax.readthedocs.io/en/latest/export/export.html#module-calling-convention.
+    _override_lowering_rules: an optional sequence of custom lowering rules
+        for some JAX primitives. Each element of the sequence is a pair
+        of a JAX primitive and a lowering function. Defining lowering rules
+        is an advanced feature using JAX internal APIs, which are subject
+        to change. Furthermore, the responsibility for the stability of the
+        MLIR emitted through these custom lowering rules, rests with the user
+        of these rules.
     disabled_checks: the safety checks to disable. See documentation for
         of `jax.export.DisabledSafetyCheck`.
 
@@ -568,7 +576,8 @@ def export(
       Array([0.09983342, 0.19866933, 0.29552022, 0.38941833], dtype=float32)
   """
   return _export_internal(fun_jit, platforms=platforms,
-                          disabled_checks=disabled_checks)
+                          disabled_checks=disabled_checks,
+                          override_lowering_rules=_override_lowering_rules)
 
 
 # TODO(necula): remove this once we improve the integration with jax2tf.
@@ -577,7 +586,8 @@ def _export_internal(
     *,
     platforms: Sequence[str] | None = None,
     disabled_checks: Sequence[DisabledSafetyCheck] = (),
-    _device_assignment_for_internal_jax2tf_use_only = None,
+    _device_assignment_for_internal_jax2tf_use_only=None,
+    override_lowering_rules=None,
     ) -> Callable[..., Exported]:
   """Exports native serialization for a JAX function.
 
@@ -604,6 +614,7 @@ def _export_internal(
     lowered = traced.lower(
         lowering_platforms=actual_lowering_platforms,
         _private_parameters=mlir.LoweringParameters(
+            override_lowering_rules=override_lowering_rules,
             for_export=True,
             export_ignore_forward_compatibility=config.export_ignore_forward_compatibility.value))
     return _export_lowered(
@@ -674,10 +685,8 @@ def _export_lowered(
   # Shardy was used during lowering if we can find the Shardy mesh in the
   # module. Note that the mesh should have been lifted by the
   # `sdy-lift-inlined-meshes` pass in mlir.py.
-  shardy_enabled = False
-  if xla_extension_version >= 319:
-    shardy_enabled = xla_extension.sdy.lowered_with_shardy(
-        mlir.module_to_bytecode(mlir_module))
+  shardy_enabled = xla_extension.sdy.lowered_with_shardy(
+      mlir.module_to_bytecode(mlir_module))
 
   mlir_module_serialized = _module_to_bytecode(mlir_module, shardy_enabled)
 
@@ -784,7 +793,7 @@ def _export_lowered(
       _get_vjp=_get_exported_vjp)
 
 def _module_to_bytecode(module: ir.Module, shardy_enabled: bool) -> bytes:
-  if xla_extension_version >= 319 and shardy_enabled:
+  if shardy_enabled:
     mlir_str = xla_extension.sdy.sdy_round_trip_export_pipeline(
         mlir.module_to_bytecode(module))
   else:
@@ -1423,10 +1432,8 @@ def _call_exported_lowering(ctx: mlir.LoweringRuleContext, *args,
     ctx.module_context.shape_poly_state.uses_dim_vars = True
   submodule = ir.Module.parse(exported.mlir_module())
 
-  shardy_enabled = False
-  if xla_extension_version >= 319:
-    shardy_enabled = xla_extension.sdy.lowered_with_shardy(
-        mlir.module_to_bytecode(submodule))
+  shardy_enabled = xla_extension.sdy.lowered_with_shardy(
+      mlir.module_to_bytecode(submodule))
   if shardy_enabled:
     submodule = ir.Module.parse(xla_extension.sdy.sdy_round_trip_import_shardings(
         mlir.module_to_bytecode(submodule)))
