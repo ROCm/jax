@@ -10,19 +10,17 @@
 #include <type_traits>
 #include <utility>
 
+#include "absl/status/status.h"
+#include "absl/types/span.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
+#include "mlir/IR/Attributes.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Diagnostics.h"
 #include "mlir/IR/Location.h"
+#include "mlir/IR/Value.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Support/LogicalResult.h"
-#include "absl/status/status.h"
-#include "absl/types/span.h"
-#include "mlir/include/mlir/IR/Attributes.h"
-#include "mlir/include/mlir/IR/BuiltinTypes.h"
-#include "mlir/include/mlir/IR/Diagnostics.h"
-#include "mlir/include/mlir/IR/Value.h"
 #include "jaxlib/mosaic/dialect/tpu/layout.h"
 #include "jaxlib/mosaic/dialect/tpu/tpu_dialect.h"
 #include "tsl/platform/statusor.h"
@@ -192,8 +190,15 @@ std::string shapeToString(const T &shape) {
   return os.str();
 }
 
-SmallVector<int64_t> ComputeTileStrides(MemRefType memref_ty,
+SmallVector<int64_t> ComputeTileStrides(absl::Span<const int64_t> shape,
                                         absl::Span<const int64_t> tiling);
+
+inline SmallVector<int64_t> ComputeTileStrides(
+    MemRefType memref_ty, absl::Span<const int64_t> tiling) {
+  absl::Span<const int64_t> shape(memref_ty.getShape().data(),
+                                  memref_ty.getShape().size());
+  return ComputeTileStrides(shape, tiling);
+}
 // Assuming MKN matmul - This function must only be called after
 // canonicalization passes.
 //
