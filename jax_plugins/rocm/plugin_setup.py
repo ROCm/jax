@@ -67,4 +67,20 @@ setup(
     },
     zip_safe=False,
     distclass=BinaryDistribution,
+    extras_require={
+        "with_rocm": [
+            "amd_rocm_hip_runtime_devel_instinct",
+            "amd_rocm_hip_runtime_instinct",
+            "amd_hipblas_instinct",
+            "amd_hipsparse_instinct",
+            "amd_hipsolver_instinct",
+            "amd_miopen_hip_instinct",
+            "amd_rocm_llvm_instinct",
+            "amd_rocm_language_runtime_instinct",
+            "amd_rccl_instinct",
+            "amd_hipfft_instinct",
+            "amd_rocm_device_libs_instinct",
+            "amd_hipsparselt_instinct",
+        ],
+    },
 )
