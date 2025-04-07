@@ -17,12 +17,11 @@
 #include "shardy/integrations/c/passes.h"
 #include "jaxlib/mosaic/gpu/integrations/c/passes.h"
 
-
 namespace nb = nanobind;
 
-#define REGISTER_DIALECT(name) \
-    MlirDialectHandle name##_dialect = mlirGetDialectHandle__##name##__(); \
-    mlirDialectHandleInsertDialect(name##_dialect, registry)
+#define REGISTER_DIALECT(name)                                           \
+  MlirDialectHandle name##_dialect = mlirGetDialectHandle__##name##__(); \
+  mlirDialectHandleInsertDialect(name##_dialect, registry)
 
 NB_MODULE(register_jax_dialects, m) {
   m.doc() = "Registers upstream MLIR dialects used by JAX.";

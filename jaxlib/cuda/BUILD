@@ -89,7 +89,7 @@ cc_library(
     deps = [
         ":cuda_gpu_kernel_helpers",
         ":cuda_vendor",
-        "//jaxlib:handle_pool",
+        "//jaxlib/gpu:handle_pool",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/synchronization",
         "@local_config_cuda//cuda:cuda_headers",
@@ -155,8 +155,8 @@ cc_library(
         ":cuda_gpu_kernel_helpers",
         ":cuda_vendor",
         ":ffi_wrapper",
-        "//jaxlib:handle_pool",
         "//jaxlib:kernel_helpers",
+        "//jaxlib/gpu:handle_pool",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings:str_format",
@@ -195,7 +195,7 @@ cc_library(
     deps = [
         ":cuda_gpu_kernel_helpers",
         ":cuda_vendor",
-        "//jaxlib:handle_pool",
+        "//jaxlib/gpu:handle_pool",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/synchronization",
         "@local_config_cuda//cuda:cuda_headers",
@@ -308,8 +308,8 @@ cc_library(
         ":cuda_gpu_kernel_helpers",
         ":cuda_vendor",
         ":ffi_wrapper",
-        "//jaxlib:handle_pool",
         "//jaxlib:kernel_helpers",
+        "//jaxlib/gpu:handle_pool",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings",
@@ -657,11 +657,48 @@ py_library(
     ],
 )
 
+cc_library(
+    name = "py_client_gpu",
+    srcs = ["//jaxlib/gpu:py_client_gpu.cc"],
+    hdrs = ["//jaxlib/gpu:py_client_gpu.h"],
+    copts = [
+        "-fexceptions",
+        "-fno-strict-aliasing",
+    ],
+    features = ["-use_header_modules"],
+    deps = [
+        ":cuda_vendor",
+        "@com_google_absl//absl/algorithm:container",
+        "@com_google_absl//absl/base",
+        "@com_google_absl//absl/container:inlined_vector",
+        "@com_google_absl//absl/log:check",
+        "@com_google_absl//absl/status",
+        "@com_google_absl//absl/status:statusor",
+        "@com_google_absl//absl/strings",
+        "@com_google_absl//absl/strings:str_format",
+        "@com_google_absl//absl/strings:string_view",
+        "@com_google_absl//absl/types:span",
+        "@nanobind",
+        "@xla//third_party/python_runtime:headers",  # buildcleaner: keep
+        "@xla//xla:comparison_util",
+        "@xla//xla:shape_util",
+        "@xla//xla/ffi:ffi_api",
+        "@xla//xla/ffi/api:ffi",
+        "@xla//xla/pjrt:host_callback",
+        "@xla//xla/pjrt:transpose",
+        "@xla//xla/python:nb_numpy",
+        "@xla//xla/python:types",
+        "@xla//xla/service:platform_util",
+    ],
+)
+
 nanobind_extension(
     name = "cuda_plugin_extension",
     srcs = ["cuda_plugin_extension.cc"],
     module_name = "cuda_plugin_extension",
     deps = [
+        ":py_client_gpu",
+        "//jaxlib:kernel_nanobind_helpers",
         "//jaxlib/gpu:gpu_plugin_extension",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/strings",

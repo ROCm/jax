@@ -55,7 +55,7 @@ from jax._src.sharding_impls import (AUTO, NamedSharding,
                                      SdyArraySharding, SdyArrayShardingList)
 from jax._src.util import foreach
 from jax._src.lib import xla_client as xc
-from jax._src.lib import xla_extension, xla_extension_version
+from jax._src.lib import xla_extension
 from jax._src.lib.mlir import dialects, ir, passmanager
 from jax._src.lib.mlir.dialects import func as func_dialect, hlo
 from jax._src.lib.mlir import register_jax_dialects
@@ -593,6 +593,15 @@ def module_to_bytecode(module: ir.Module) -> bytes:
 
 # Translation rules
 
+# Create one global thread pool that can be shared between multiple ir.Contexts
+# and enabling multi-threading
+# TODO: remove this check after jaxlib 0.5.4
+if hasattr(ir, "ThreadPool"):
+  global_thread_pool = ir.ThreadPool()
+else:
+  global_thread_pool = None
+
+
 class JaxIrContext(ir.Context):
   def __init__(self, *args, **kwargs):
     # Note: we're very intentionally *not* calling the __init__() of our
@@ -607,12 +616,16 @@ def make_ir_context() -> ir.Context:
   context.append_dialect_registry(upstream_dialects)
   context.load_all_available_dialects()
 
-  # If threading is enabled, each MLIR context will keep alive a thread pool.
-  # Since we cache MLIR modules (and hence contexts), this means we might keep
-  # several threads alive for each cache entry. This is a terrible idea. However
-  # we don't do any heavy computation on MLIR modules from Python anyway, so we
-  # just disable threading.
-  context.enable_multithreading(False)
+  # TODO: remove this check after v0.5.4 jaxlib
+  if global_thread_pool is not None:
+    context.set_thread_pool(global_thread_pool)
+  else:
+    # If threading is enabled, each MLIR context will keep alive a thread pool.
+    # Since we cache MLIR modules (and hence contexts), this means we might keep
+    # several threads alive for each cache entry. This is a terrible idea. However
+    # we don't do any heavy computation on MLIR modules from Python anyway, so we
+    # just disable threading.
+    context.enable_multithreading(False)
   # TODO(bartchr): Once JAX is released with SDY, remove the if.
   if dialects.sdy:
     dialects.sdy.register_dialect(context)
@@ -834,10 +847,17 @@ class LoweringRuleContext:
     """Returns true if the lowering parameters are in forward compatibility mode.
     """
     lowering_parameters = self.module_context.lowering_parameters
-    return (
-        lowering_parameters.for_export
-        and not lowering_parameters.export_ignore_forward_compatibility
+
+    check_platforms: Sequence[str] = (
+        self.platforms or self.module_context.platforms
     )
+    force_forward_compat = any(
+        p in xb.FORCE_FORWARD_COMPAT_LOWERING_PLATFORMS for p in check_platforms
+    )
+
+    return (
+        lowering_parameters.for_export or force_forward_compat
+    ) and not lowering_parameters.export_ignore_forward_compatibility
 
 
 if not MYPY:
@@ -2340,7 +2360,10 @@ def wrap_compute_type_in_place(ctx, op):
   if ctx.jaxpr_eqn_ctx is not None and ctx.jaxpr_eqn_ctx.compute_type is not None:
     if ctx.jaxpr_eqn_ctx.compute_type.startswith("gpu_stream:"):
       stream = ctx.jaxpr_eqn_ctx.compute_type.split(":")[1]
-      dict_attr = {"_xla_stream_annotation": ir.StringAttr.get(stream)}
+      dict_attr = {
+        "_xla_stream_annotation": ir.StringAttr.get(stream),
+        "inlineable": ir.StringAttr.get("false"),
+      }
       op.operation.attributes["mhlo.frontend_attributes"] = ir.DictAttr.get(dict_attr)
     else:
       dict_attr = {"_xla_compute_type": ir.StringAttr.get(
@@ -3031,11 +3054,8 @@ def refine_polymorphic_shapes(module: ir.Module) -> ir.Module:
             mlir_module=module_to_bytecode(module),
             enable_shape_assertions=True,
             validate_static_shapes=True)
-    if xla_extension_version >= 319:
-      refined_module_str = refine_polymorphic_shapes(
-          enable_shardy=config.use_shardy_partitioner.value)
-    else:
-      refined_module_str = refine_polymorphic_shapes()
+    refined_module_str = refine_polymorphic_shapes(
+        enable_shardy=config.use_shardy_partitioner.value)
   except Exception as e:
     raise ValueError(
         "Error refining shapes. " +
