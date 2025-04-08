@@ -1,6 +1,10 @@
 name: ROCm Release JAX
 
 on:
+  # TODO: Remove the push after we find this is working
+  push:
+    branches:
+      - '*'
   workflow_dispatch:
     inputs:
       jax_version:
