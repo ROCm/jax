@@ -26,6 +26,11 @@ on:
         description: "Python version to include in Docker image"
         required: true
         type: string
+      base_docker:
+        description: "What docker image will the release image be built from?"
+        required: false
+        default: "ubuntu:22.04"
+        type: string
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
@@ -64,6 +69,7 @@ jobs:
           # Let ci_build script do the build
           python3 ./build/rocm/ci_build \
             --compiler clang \
+            --base-docker "ubuntu:22.04" \
             --python-versions 3.10.12 \
             --rocm-version 6.3.3 \
             --rocm-build-job "" \
@@ -72,6 +78,7 @@ jobs:
             --image-tag $RELEASE_DOCKER_IMG_NAME
             #python3 ./build/rocm/ci_build \
             #--compiler clang \
+            #--base-docker ${{ inputs.base_docker }}
             #--python-versions ${{ inputs.python_version }} \
             #--rocm-version ${{ inputs.rocm_version }} \
             #--rocm-build-job ${{ inputs.rocm_build_job_name }} \
