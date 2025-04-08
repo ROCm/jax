@@ -51,6 +51,7 @@ jobs:
           echo "Not implemented yet"
       - name: Build plugin wheels and Docker image
         run: |
+          pushd $WORKSPACE_DIR
           # Let ci_build script do the build
           python3 ./build/rocm/ci_build \
             --compiler clang \
