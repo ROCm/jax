@@ -57,9 +57,9 @@ jobs:
           --image-tag $RELEASE_DOCKER_IMG_NAME
     - name: Archive wheels to Github
       uses: actions/upload-artifact@v4
-        with:
-          name: rocm_jax_r${{ inputs.rocm_version }}_py${{ inputs.python_version }}_id${{ github.run_id }}
-          path: ./dist/*.whl
+      with:
+        name: rocm_jax_r${{ inputs.rocm_version }}_py${{ inputs.python_version }}_id${{ github.run_id }}
+        path: ./dist/*.whl
     - name: Test Docker image
       run: |
         # Let ci_build do the testing. By default, it runs run_single_gpu.py and run_multi_gpu.sh
