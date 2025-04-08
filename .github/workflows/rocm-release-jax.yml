@@ -41,7 +41,8 @@ jobs:
       - name: Clean up Docker and old run directories
         run: |
           # Remove old docker images
-          docker image rm rocm/jax-build:rocm*
+          # TODO: Need to do a string replace . with empty on rocm_version
+          docker images rm jax-build-manylinux_2_28_x86_64_rocm${{ inputs.rocm_version }}
           # Make sure we own all the files that we clean up
           docker run -v "./:/jax" ubuntu /bin/bash -c "chown -R $UID /jax/workdir_release_* || true"
           # Remove old work directories from this machine
