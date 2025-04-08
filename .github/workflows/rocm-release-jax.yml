@@ -51,7 +51,7 @@ jobs:
           # Make sure we own all the files that we clean up
           docker run -v "./:/jax" ubuntu /bin/bash -c "chown -R $UID /jax/workdir_release_* || true"
           # Remove old work directories from this machine
-          rm -rf ./workdir_release_*
+          rm -rf ./workdir_release_* || true
       - name: Print system info
         run: |
           pwd
