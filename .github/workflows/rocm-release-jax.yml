@@ -89,13 +89,21 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: rocm_jax_r${{ inputs.rocm_version }}_py${{ inputs.python_version }}_id${{ github.run_id }}
-          path: ${{ env.WORKSPACE_DIR }}/dist/*.whl
+          path: ${{ env.WORKSPACE_DIR }}/wheelhouse/*.whl
+          if-no-files-found: error
       - name: Test Docker image
         run: |
           pushd $WORKSPACE_DIR
           # Let ci_build do the testing. By default, it runs run_single_gpu.py and run_multi_gpu.sh
           # in ./build/rocm, which in turn run tests in ./tests with pytest.
           python3 ./build/rocm/ci_build test $RELEASE_DOCKER_IMG_NAME
+      - name: Archive test summary JSON to Github
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rocm_jax_test_summary.json
+          path: ${{ env.WORKSPACE_DIR }}/logs/final_compiled_report.json
+          if-no-files-found: error
       - name: Publish wheels to PyPI
         run: |
           echo "Not implemeneted yet"
