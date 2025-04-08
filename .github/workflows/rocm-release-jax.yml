@@ -43,11 +43,16 @@ jobs:
       RELEASE_DOCKER_IMG_NAME: "rocm/jax-build:rocm${{ inputs.rocm_version}}-jax${{ inputs.jax_version }}-py${{ inputs.python_version }}-${{ github.sha }}"
       WORKSPACE_DIR: workdir_release_${{ github.run_id }}_${{ github.run_number }}_${{ github.run_attempt }}
     steps:
+      - name: Strip . from ROCm version
+        id: strip-rocm-version
+        run: |
+          rocm_version=${{ inputs.rocm_version }}
+          echo "rocm_version=${rocm_version//./}" >> $GITHUB_ENV
       - name: Clean up Docker and old run directories
         run: |
           # Remove old docker images
           # TODO: Need to do a string replace . with empty on rocm_version
-          docker image rm jax-build-manylinux_2_28_x86_64_rocm${{ inputs.rocm_version }} || true
+          docker image rm jax-build-manylinux_2_28_x86_64_rocm${{ steps.strip-rocm-version.outputs.rocm_version }} || true
           # Make sure we own all the files that we clean up
           docker run -v "./:/jax" ubuntu /bin/bash -c "chown -R $UID /jax/workdir_release_* || true"
           # Remove old work directories from this machine
