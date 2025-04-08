@@ -49,12 +49,13 @@ jobs:
           # TODO: Need to do a string replace . with empty on rocm_version
           docker image rm jax-build-manylinux_2_28_x86_64_rocm${{ inputs.rocm_version }} || true
           # Make sure we own all the files that we clean up
-          docker run -v "./:/jax" ubuntu /bin/bash -c "chown -R $UID /jax/workdir_release_* || true"
+          docker run -v "./jax:/jax" ubuntu /bin/bash -c "chown -R $UID /jax/workdir_release_* || true"
           # Remove old work directories from this machine
-          rm -rf workdir_release_*
-          ls
+          rm -rf ./jax/workdir_release_*
       - name: Print system info
         run: |
+          pwd
+          ls
           echo RELEASE_DOCKER_IMAGE_NAME=$RELEASE_DOCKER_IMAGE_NAME
           echo WORKSPACE_DIR=$WORKSPACE_DIR
           whoami
