@@ -2024,8 +2024,11 @@ class ScipyLinalgTest(jtu.JaxTestCase):
     rng = jtu.rand_default(self.rng())
     args_maker = lambda: [rng(cshape, cdtype), rng(rshape, rdtype)]
     with jtu.strict_promotion_if_dtypes_match([rdtype, cdtype]):
-      self._CheckAgainstNumpy(jtu.promote_like_jnp(osp.linalg.toeplitz),
-                              jsp.linalg.toeplitz, args_maker)
+      import warnings
+      with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        self._CheckAgainstNumpy(jtu.promote_like_jnp(osp.linalg.toeplitz),
+                                jsp.linalg.toeplitz, args_maker)
       self._CompileAndCheck(jsp.linalg.toeplitz, args_maker)
 
   @jtu.sample_product(
