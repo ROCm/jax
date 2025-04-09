@@ -2005,7 +2005,6 @@ class ScipyLinalgTest(jtu.JaxTestCase):
 
     self.assertAllClose(root, expected, check_dtypes=False)
 
-  @jtu.ignore_warning(category=FutureWarning, message="Don't treat future SciPy warning as error")
   @jtu.sample_product(
     cshape=[(), (4,), (8,), (3, 7), (0, 5, 1)],
     cdtype=float_types + complex_types,
