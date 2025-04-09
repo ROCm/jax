@@ -50,6 +50,8 @@ except (ModuleNotFoundError, ImportError):
 
 import hypothesis.extra.numpy as hnp
 import hypothesis.strategies as hps
+from hypothesis import settings
+
 
 # There are many inherited redefinitions of _
 # ruff: noqa: F811
@@ -480,6 +482,7 @@ class OpsTest(PallasBaseTest):
   # TODO(sharadmv): test rank < 2, size < 2
   @hp.given(select_n_strategy(max_cases=2, min_rank=2, max_rank=4,
                               min_size_exp=1))
+  @settings(suppress_health_check=[hp.HealthCheck.differing_executors])
   def test_select_n(self, args):
     if jtu.test_device_matches(["gpu"]):
       self.skipTest("TODO: error on GPU, lowering bug for select_n")
