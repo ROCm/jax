@@ -30,6 +30,7 @@ from jax._src.lib.mlir.dialects import builtin
 from jax._src.lib.mlir.dialects import gpu
 from jax._src.lib.mlir.dialects import memref
 from jax._src.lib.mlir.dialects import vector
+from jax._src.util import safe_zip
 
 from . import fragmented_array as fa
 from . import inference_utils
@@ -60,17 +61,45 @@ def _set_transform_attributes(
   op.attributes["out_transforms"] = ir.ArrayAttr.get(out_transforms)
 
 
+def _resolve_transforms(
+    transforms: ir.ArrayAttr | None,
+    other_transforms: ir.ArrayAttr | None,
+) -> ir.ArrayAttr | None:
+  """Resolves two sets of competing transforms to a single compatible set.
+
+  Args:
+    transforms: one optional set of transforms.
+    other_transforms: another optional set of transforms.
+
+  Returns:
+    A single set of transforms that is compatible with both `transforms` and
+    `other_transforms`, or `None` if both transforms are `None`.
+  Raises:
+    NotImplementedError: if the two sets of transforms can't be resolved to a
+      single set.
+  """
+  if transforms is None:
+    return other_transforms
+
+  if other_transforms is None:
+    return transforms
+
+  if transforms != other_transforms:
+    raise NotImplementedError(
+        f"Conflicting transforms {transforms} != {other_transforms}."
+    )
+
+  return transforms
+
+
 def infer_transforms_for_wgmma_ref(ref_ty: ir.MemRefType) -> ir.ArrayAttr:
   if len(ref_ty.shape) != 2:
     raise ValueError(f"Expected a 2D memref, got {ref_ty}")
 
   element_bytewidth = utils.bytewidth(ref_ty.element_type)
   strides, _ = ref_ty.get_strides_and_offset()
-
-  if strides[0] < strides[1]:
-    raise NotImplementedError("Transpositions aren't handled yet.")
-
-  minor_dim = ref_ty.shape[1]
+  transposed = strides[0] < strides[1]
+  minor_dim = ref_ty.shape[0 if transposed else 1]
   major_tiling = 8
 
   # Try tiling with all swizzling modes starting from the largest one.
@@ -86,12 +115,14 @@ def infer_transforms_for_wgmma_ref(ref_ty: ir.MemRefType) -> ir.ArrayAttr:
       break
   else:
     # No valid tile transform can be inferred.
-    raise ValueError(
-        f"{ref_ty.shape} is not a valid WGMMA shape"
-    )
+    raise ValueError(f"{ref_ty.shape} is not a valid WGMMA shape")
 
+  if transposed:
+    tiling = (minor_tiling, major_tiling)
+  else:
+    tiling = (major_tiling, minor_tiling)
   return ir.ArrayAttr.get([
-      mgpu.TileTransformAttr.get((major_tiling, minor_tiling)),
+      mgpu.TileTransformAttr.get(tiling),
       mgpu.SwizzleTransformAttr.get(minor_tiling * element_bytewidth),
   ])
 
@@ -156,27 +187,12 @@ def _infer_vector_load_store_transforms(
         f"Got layout {layout} which is not yet supported"
     )
 
-  if transforms is not None and layout_transforms is not None:
-    if transforms != layout_transforms:
-      raise NotImplementedError(
-          f"Conflicting transforms for {op.base} in {op}: "
-          f"{transforms} != {layout_transforms}."
-      )
-    return [transforms], []
+  transforms = _resolve_transforms(transforms, layout_transforms)
+  return None if transforms is None else ([transforms], [])
 
-  if transforms is not None:
-    return [transforms], []
 
-  if layout_transforms is not None:
-    return [layout_transforms], []
-
-  return None
-
-# TODO(bchetioui): remove this once jaxlib minimum version >= 0.5.2.
-SliceSMEMOp = getattr(mgpu, "SliceSMEMOp", None)
-
-@partial(_add_transform_inference_rule, SliceSMEMOp)
-def _infer_slice_smem_transforms(op: SliceSMEMOp) -> OptionalTransforms:
+@partial(_add_transform_inference_rule, mgpu.SliceSMEMOp)
+def _infer_slice_smem_transforms(op: mgpu.SliceSMEMOp) -> OptionalTransforms:
   transforms = None
   uses = cast(ir.OpResult, op.result).uses
 
@@ -186,21 +202,14 @@ def _infer_slice_smem_transforms(op: SliceSMEMOp) -> OptionalTransforms:
     out_transforms = inference_utils.in_transforms_for_operand(
         consumer, op_user
     )
-    if transforms is not None and out_transforms is not None:
-      if transforms != out_transforms:
-        raise NotImplementedError(
-            f"Conflicting transforms for {op_user} in {op}: "
-            f"{transforms} != {out_transforms}."
-        )
-    elif out_transforms is not None:
-      transforms = out_transforms
+    transforms = _resolve_transforms(transforms, out_transforms)
 
   return None if transforms is None else ([], [transforms])
 
 
 # TODO(bchetioui,apaszke): this empty rule is necessary while Mosaic doesn't use
 # the dialect in all cases.
-# The rule is necessary in order to handle the lowering of `utils.memref_ptr`
+# The rule is necessary in order to handle the lowering of `utils.memref_ptr`
 # which is used in `_construct_smem_reftree`.
 @partial(_add_transform_inference_rule, builtin.UnrealizedConversionCastOp)
 def _infer_unrealized_conversion_cast_transforms(
@@ -229,14 +238,7 @@ def _infer_memref_view_transforms(op: memref.ViewOp) -> OptionalTransforms:
     out_transforms = inference_utils.in_transforms_for_operand(
         consumer, op_user
     )
-    if transforms is not None and out_transforms is not None:
-      if transforms != out_transforms:
-        raise ValueError(
-            f"Conflicting transforms for {op_user} in {op}: "
-            f"{transforms} != {out_transforms}."
-        )
-    elif out_transforms is not None:
-      transforms = out_transforms
+    transforms = _resolve_transforms(transforms, out_transforms)
 
   # TODO(bchetioui): do we actually need to assign a transform to the input of
   # the view op? Presumably, it'll only be used to access scratch memory.
@@ -250,6 +252,125 @@ def _infer_dynamic_smem_transforms(
     _: gpu.DynamicSharedMemoryOp,
 ) -> OptionalTransforms:
   return None
+
+
+def _get_tile_and_swizzle_transforms(
+    transforms: ir.ArrayAttr | None,
+) -> tuple[ir.Attribute, ir.Attribute]:
+  if transforms is None:
+    return
+
+  if len(transforms) == 2:
+    tile_transform, swizzle_transform = transforms
+    if not (
+        mgpu.TileTransformAttr.isinstance(tile_transform)
+        and mgpu.SwizzleTransformAttr.isinstance(swizzle_transform)
+    ):
+      raise NotImplementedError(f"Unsupported transforms {transforms}.")
+    return tile_transform, swizzle_transform
+  else:
+    raise NotImplementedError(f"Unsupported transforms {transforms}.")
+
+
+# This is used by Pallas' "_handle_indexing" memory transform.
+@partial(_add_transform_inference_rule, memref.SubViewOp)
+def _infer_memref_subview_transforms(
+    op: memref.SubViewOp,
+) -> OptionalTransforms:
+  transforms = None
+
+  for result_use in cast(ir.OpResult, op.result).uses:
+    consumer = result_use.owner
+    op_user = consumer.operands[result_use.operand_number]
+    user_transforms = inference_utils.in_transforms_for_operand(
+        consumer, op_user
+    )
+    transforms = _resolve_transforms(transforms, user_transforms)
+
+  in_transforms = inference_utils.value_transforms(op.source)
+  transforms = _resolve_transforms(transforms, in_transforms)
+
+  if transforms is None:
+    return None
+
+  # Here, we have some transforms to propagate one way or the other. For now,
+  # we implement only the following basic propagation rules:
+  #  - A tile transform can be propagated bidirectionally if the axes being
+  #    tiled are not sliced, and are the logical minor axes of the source.
+  #  - A swizzle transform can be propagated towards the input of a subview if
+  #    the physical minormost dimension is unchanged.
+  #  - We only propagate transforms if they consist of a single tile transform
+  #    and a single swizzle transform.
+  # TODO(bchetioui): implement more complex propagation rules.
+  tile_transform, _ = _get_tile_and_swizzle_transforms(transforms)
+
+  # Check swizzle transform propagation.
+  strides, _ = ir.MemRefType.get_strides_and_offset(op.source.type)
+  minor_dim = strides.index(min(strides))
+  if op.source.type.shape[minor_dim] != op.static_sizes[minor_dim]:
+    raise NotImplementedError(
+        "Swizzle transforms can only propagated if the minor dimension is "
+        "unchanged."
+    )
+
+  # Check tile transform propagation.
+  num_tiled_axes = len(mgpu.TileTransformAttr(tile_transform).tiling)
+  last_n_dims = op.source.type.shape[-num_tiled_axes:]
+  last_n_sizes = list(op.static_sizes)[-num_tiled_axes:]
+  for slice_size, dim_size in safe_zip(last_n_sizes, last_n_dims):
+    if slice_size != dim_size:
+      raise NotImplementedError(
+          "Tile transforms are only propagated if the tiled axes are not "
+          "sliced."
+      )
+
+  return [transforms], [transforms]
+
+
+@partial(_add_transform_inference_rule, memref.TransposeOp)
+def _infer_memref_transpose_transforms(
+    op: memref.TransposeOp,
+) -> OptionalTransforms:
+  in_ty = ir.MemRefType(op.in_.type)
+  if len(in_ty.shape) != 2:
+    raise NotImplementedError(f"Only 2D memrefs are supported, got {in_ty}")
+  in_strides, _ = in_ty.get_strides_and_offset()
+  out_strides, _ = ir.MemRefType(op.result.type).get_strides_and_offset()
+  transpose = in_strides != out_strides
+
+  users = list(op.result.uses)
+  if len(users) != 1:
+    raise NotImplementedError(
+        f"Only memref.transpose with a single use are supported, got {op}"
+    )
+
+  op_operand_use = users[0]
+  consumer = op_operand_use.owner
+  op_user = consumer.operands[op_operand_use.operand_number]
+  out_transforms = inference_utils.in_transforms_for_operand(consumer, op_user)
+
+  in_transforms = []
+  if not transpose:
+    in_transforms = out_transforms
+  else:
+    tile_transform, swizzle_transform = _get_tile_and_swizzle_transforms(
+        out_transforms
+    )
+    transposed_tiling = mgpu.TileTransformAttr(tile_transform).tiling[::-1]
+    in_transforms.append(mgpu.TileTransformAttr.get(transposed_tiling))
+    in_transforms.append(swizzle_transform)
+
+  return [ir.ArrayAttr.get(in_transforms)], [out_transforms]
+
+
+# `memref.load` is used to load barrier phases---the rule needn't do anything
+# interesting, but we need to have it in order to avoid crashing on it.
+@partial(_add_transform_inference_rule, memref.LoadOp)
+def _infer_memref_load_transforms(op: memref.LoadOp) -> OptionalTransforms:
+  if not ir.MemRefType(op.memref.type).shape:
+    # memref.load returns a scalar, so there is nothing interesting to do here.
+    return None
+  raise NotImplementedError("Non-scalar memref.load transforms")
 
 
 def _should_have_transforms(op: ir.OpView) -> bool:

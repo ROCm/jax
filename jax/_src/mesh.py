@@ -111,12 +111,16 @@ class AxisType(enum.Enum):
   def __repr__(self):
     return self.name
 
-def _normalize_axis_types(axis_names, axis_types):
+def _normalize_axis_types(axis_names, axis_types, name):
   axis_types = ((AxisType.Auto,) * len(axis_names)
                 if axis_types is None else axis_types)
   if not isinstance(axis_types, tuple):
-    assert isinstance(axis_types, AxisType), axis_types
     axis_types = (axis_types,)
+
+  if not all(isinstance(a, AxisType) for a in axis_types):
+    raise TypeError(
+        f"axis_types passed to {name} must be of type `jax.sharding.AxisType`."
+        f" Got {axis_types} of type {tuple(type(a) for a in axis_types)}")
   if len(axis_names) != len(axis_types):
     raise ValueError(
         "Number of axis names should match the number of axis_types. Got"
@@ -175,6 +179,21 @@ class _BaseMesh:
     return any_axis_types_match(self._axis_types, AxisType.Explicit)
 
   @functools.cached_property
+  def auto_axes(self):
+    return tuple(n for n, t in safe_zip(self.axis_names, self._axis_types)
+                 if t == AxisType.Auto)
+
+  @functools.cached_property
+  def explicit_axes(self):
+    return tuple(n for n, t in safe_zip(self.axis_names, self._axis_types)
+                 if t == AxisType.Explicit)
+
+  @functools.cached_property
+  def manual_axes(self):
+    return tuple(n for n, t in safe_zip(self.axis_names, self._axis_types)
+                 if t == AxisType.Manual)
+
+  @functools.cached_property
   def _axis_types_dict(self):
     if not self.axis_names:
       return {}
@@ -194,16 +213,9 @@ _mesh_object_dict = {}  # type: ignore
 class Mesh(_BaseMesh, contextlib.ContextDecorator):
   """Declare the hardware resources available in the scope of this manager.
 
-  In particular, all ``axis_names`` become valid resource names inside the
-  managed block and can be used e.g. in the ``in_axis_resources`` argument of
-  :py:func:`jax.experimental.pjit.pjit`. Also see JAX's multi-process programming
-  model (https://jax.readthedocs.io/en/latest/multi_process.html)
-  and the Distributed arrays and automatic parallelization tutorial
-  (https://jax.readthedocs.io/en/latest/notebooks/Distributed_arrays_and_automatic_parallelization.html)
-
-  If you are compiling in multiple threads, make sure that the
-  ``with Mesh`` context manager is inside the function that the threads will
-  execute.
+  See the Distributed arrays and automatic parallelization tutorial
+  (https://docs.jax.dev/en/latest/notebooks/Distributed_arrays_and_automatic_parallelization.html)
+  and Explicit sharding tutorial (https://docs.jax.dev/en/latest/notebooks/explicit-sharding.html)
 
   Args:
     devices: A NumPy ndarray object containing JAX device objects (as
@@ -214,32 +226,17 @@ class Mesh(_BaseMesh, contextlib.ContextDecorator):
 
   Examples:
 
-    >>> from jax.experimental.pjit import pjit
     >>> from jax.sharding import Mesh
-    >>> from jax.sharding import PartitionSpec as P
+    >>> from jax.sharding import PartitionSpec as P, NamedSharding
     >>> import numpy as np
     ...
-    >>> inp = np.arange(16).reshape((8, 2))
-    >>> devices = np.array(jax.devices()).reshape(4, 2)
-    ...
     >>> # Declare a 2D mesh with axes `x` and `y`.
-    >>> global_mesh = Mesh(devices, ('x', 'y'))
-    >>> # Use the mesh object directly as a context manager.
-    >>> with global_mesh:
-    ...   out = pjit(lambda x: x, in_shardings=None, out_shardings=None)(inp)
-
-    >>> # Initialize the Mesh and use the mesh as the context manager.
-    >>> with Mesh(devices, ('x', 'y')) as global_mesh:
-    ...   out = pjit(lambda x: x, in_shardings=None, out_shardings=None)(inp)
-
-    >>> # Also you can use it as `with ... as ...`.
-    >>> global_mesh = Mesh(devices, ('x', 'y'))
-    >>> with global_mesh as m:
-    ...   out = pjit(lambda x: x, in_shardings=None, out_shardings=None)(inp)
-
-    >>> # You can also use it as `with Mesh(...)`.
-    >>> with Mesh(devices, ('x', 'y')):
-    ...   out = pjit(lambda x: x, in_shardings=None, out_shardings=None)(inp)
+    >>> devices = np.array(jax.devices()).reshape(4, 2)
+    >>> mesh = Mesh(devices, ('x', 'y'))
+    >>> inp = np.arange(16).reshape(8, 2)
+    >>> arr = jax.device_put(inp, NamedSharding(mesh, P('x', 'y')))
+    >>> out = jax.jit(lambda x: x * 2)(arr)
+    >>> assert out.sharding == NamedSharding(mesh, P('x', 'y'))
   """
 
   devices: np.ndarray
@@ -263,7 +260,7 @@ class Mesh(_BaseMesh, contextlib.ContextDecorator):
           f"devices.ndim == {devices.ndim} and "
           f"len(axis_names) == {len(axis_names)}.")
 
-    axis_types = _normalize_axis_types(axis_names, axis_types)
+    axis_types = _normalize_axis_types(axis_names, axis_types, 'Mesh')
 
     key = (axis_names, devices.shape, tuple(devices.flat), axis_types)
     val = _mesh_object_dict.get(key, None)
@@ -447,7 +444,8 @@ class AbstractMesh(_BaseMesh):
     self.axis_sizes = axis_sizes
     self.axis_names = axis_names
     self._size = math.prod(self.axis_sizes) if self.axis_sizes else 0
-    self._axis_types = _normalize_axis_types(self.axis_names, axis_types)
+    self._axis_types = _normalize_axis_types(
+        self.axis_names, axis_types, 'AbstractMesh')
     self._hash = hash((self.axis_sizes, self.axis_names, self._axis_types))
 
   def __hash__(self):

@@ -3120,7 +3120,6 @@ class APITest(jtu.JaxTestCase):
   def test_vmap_preserves_docstr(self):
     def superfun(a):
       """Does things with stuff."""
-      pass
 
     self.assertRegex(api.vmap(superfun).__doc__, "\n".join([
         "Vectorized version of superfun.*",
@@ -4424,6 +4423,7 @@ class APITest(jtu.JaxTestCase):
     out = jax.grad(f)(3.0)  # doesn't crash
     self.assertAllClose(out, 1., check_dtypes=False)
 
+  @jtu.thread_unsafe_test()
   def test_cache_clear_pmap(self):
     @jax.pmap
     def f(i):
@@ -4505,7 +4505,7 @@ class APITest(jtu.JaxTestCase):
       self.assertLen(cm.output, expected_log_len)
       msg = cm.output[0]
       self.assertIn('weak_type=True', msg)
-      self.assertIn('https://jax.readthedocs.io/en/latest/type_promotion.html#weak-types', msg)
+      self.assertIn('https://docs.jax.dev/en/latest/type_promotion.html#weak-types', msg)
 
     # kwarg change
     with config.explain_cache_misses(True):
@@ -4687,6 +4687,8 @@ class APITest(jtu.JaxTestCase):
 
   @jtu.run_on_devices("cpu")
   def test_inner_jit_forwarding_happens(self):
+    if not config.dynamic_shapes.value:
+      self.skipTest("Only works for dynamic shapes")
     jaxpr = jax.make_jaxpr(lambda: jax.jit(lambda x: x)(3))()
     self.assertLen(jaxpr.jaxpr.outvars, 1)
     self.assertIsInstance(jaxpr.jaxpr.outvars[0], core.Literal)
@@ -4695,6 +4697,8 @@ class APITest(jtu.JaxTestCase):
   @parameterized.parameters(range(8))
   @jtu.run_on_devices("cpu")
   def test_inner_jit_forwarding_correctness(self, num_input_fwd):
+    if not config.dynamic_shapes.value:
+      self.skipTest("Only works for dynamic shapes")
     num_args = 8
     rng = np.random.RandomState(0)
 
@@ -4776,7 +4780,7 @@ class APITest(jtu.JaxTestCase):
   def test_deferred_primal_with_direct_linearize(self):
     def my_sin_lin(nzs, x):
       nz, = nzs
-      return (my_sin_p.bind(x), nz, x, lambda x, t: lax.mul(t, lax.cos(x)))
+      return (my_sin_p.bind(x, accuracy=None), nz, x, lambda x, t: lax.mul(t, lax.cos(x)))
 
     my_sin_p = core.Primitive("my_sin_p")
     my_sin_p.def_impl(lax.sin)
@@ -4823,8 +4827,8 @@ class RematTest(jtu.JaxTestCase):
     sin_impl = lax.sin_p.impl
     cos_impl = lax.cos_p.impl
     try:
-      lax.sin_p.def_impl(lambda x: sin_calls.append(1) or sin_impl(x))
-      lax.cos_p.def_impl(lambda x: cos_calls.append(1) or cos_impl(x))
+      lax.sin_p.def_impl(lambda x, **kwargs: sin_calls.append(1) or sin_impl(x, **kwargs))
+      lax.cos_p.def_impl(lambda x, **kwargs: cos_calls.append(1) or cos_impl(x, **kwargs))
       f_lin(3.)
     finally:
       lax.sin_p.def_impl(sin_impl)
@@ -5019,7 +5023,7 @@ class RematTest(jtu.JaxTestCase):
 
     # Make sure that introducing constants in vmap works.
     constant_introducing_p = core.Primitive('introduce_constant')
-    constant_introducing_p.def_abstract_eval(core.raise_to_shaped)
+    constant_introducing_p.def_abstract_eval(lambda x: x)
     def _constant_introducing_batcher(xs, ds):
       (x,), (d,) = xs, ds
       return (x + np.arange(x.size, dtype=x.dtype).reshape(x.shape)), d
@@ -5117,7 +5121,7 @@ class RematTest(jtu.JaxTestCase):
     called = []
     sin_impl = lax.sin_p.impl
     try:
-      lax.sin_p.def_impl(lambda x: called.append(1) or sin_impl(x))
+      lax.sin_p.def_impl(lambda x, **kwargs: called.append(1) or sin_impl(x, **kwargs))
       api.grad(g)(3.)
     finally:
       lax.sin_p.def_impl(sin_impl)
@@ -5901,6 +5905,7 @@ class RematTest(jtu.JaxTestCase):
     jtu.check_grads(remat(f), (3.,), order=2, modes=['rev'])
 
     jaxpr = api.make_jaxpr(api.linearize(remat(f), 4.)[1])(1.)
+    print("debug jaxpr: ", str(jaxpr))
     self.assertIn(' sin ', str(jaxpr))
     self.assertIn(' cos ', str(jaxpr))
 
@@ -10382,6 +10387,28 @@ class CustomTransposeTest(jtu.JaxTestCase):
     self.assertAllClose(f_(x), g_(x))
     self.assertAllClose(f_t(x), g_t(x))
 
+  def test_compose_custom_jvp(self):
+    @jax.custom_jvp
+    def f(x):
+      return jnp.sin(x)
+
+    @f.defjvp
+    def f_jvp(primals, tangents):
+      x, = primals
+      dx, = tangents
+      return f(x), g(x, dx)
+
+    @custom_transpose
+    def g(x, dx):
+      return jnp.cos(x) * dx
+
+    @g.def_transpose
+    def gt(x, t):
+      return jnp.cos(x) * t
+
+    with config.use_direct_linearize(True):
+      self.assertAllClose(jax.grad(f)(0.5), jnp.cos(0.5))
+
 
 class CustomDceTest(jtu.JaxTestCase):
 
@@ -11502,6 +11529,83 @@ class OverrideLoweringTest(jtu.JaxTestCase):
         .as_text()
     )
     self.assertNotIn("stablehlo.custom_call @Sharding", lowered_ir)
+
+
+class InputSavedVJPTest(jtu.JaxTestCase):
+
+  def test_basic(self):
+    def f(x, y):
+      return x * y
+
+    primals = 2., 3.
+    y, f_vjp = api.si_vjp(f, [True, True], *primals)
+    arg_cts = f_vjp(1., *primals)
+    self.assertAllClose(y, 6.)
+    self.assertAllClose(arg_cts, (3., 2.))
+
+  def test_basic_pass_through_jit(self):
+    def f(x, y):
+      return x * y
+
+    @jax.jit
+    def g():
+      primals = 2., 3.
+      y, f_vjp = api.si_vjp(f, [True, True], *primals)
+      return y, f_vjp
+
+    @jax.jit
+    def h(f_vjp):
+      return f_vjp(1., 2., 3.)
+
+    y, f_vjp = g()
+    arg_cts = h(f_vjp)
+    self.assertAllClose(y, 6.)
+    self.assertAllClose(arg_cts, (3., 2.))
+
+  def test_basic_unused(self):
+    f = jnp.sin
+    primals = 3.,
+    y, f_vjp = api.si_vjp(f, [True], *primals)
+    x_ct, = f_vjp(1., *primals)
+    self.assertAllClose(y, jnp.sin(3.))
+    self.assertAllClose(x_ct, jnp.cos(3.))
+
+    with self.assertRaisesRegex(Exception, "not used by the backward pass: x"):
+      _ = api.si_vjp(f, [True], *primals, allow_unused=False)
+
+  def test_basic_opaque(self):
+    f = jnp.sin
+    primals = 3.,
+    with self.assertRaisesRegex(Exception, "the backward pass requires opaque"):
+      _ = api.si_vjp(f, [True], *primals, allow_opaque=False)
+
+  def test_basic_pytree_error(self):
+    def f(x):
+      return [x['hi'] * x['bye']]
+
+    y, f_vjp = api.si_vjp(f, [True], {'hi': 2., 'bye': 3.})
+    arg_ct, = f_vjp([1.], {'hi': 2., 'bye': 3.})
+    self.assertAllClose(y, [6.])
+    self.assertAllClose(arg_ct, {'hi': 3., 'bye': 2.})
+
+    with self.assertRaisesRegex(ValueError, "but the structures differ"):
+      f_vjp(1., {'hi': 2.})
+
+  def test_fsdp(self):
+    # see https://github.com/jax-ml/jax/pull/27017 for why this is called "fsdp"
+    def f2(x, w):
+      x = 1. * x
+      x = x @ w
+      x = 2. * x
+      return x
+
+    x = jnp.ones((3, 4))
+    w = jnp.ones((4, 4))
+    y, f2_sivjp = api.si_vjp(f2, [False, True], x, w)
+    y_grad = jnp.ones_like(y)
+    x_grad, w_grad = f2_sivjp(y_grad, w)
+    self.assertAllClose(x_grad, 2. * y_grad @ w.T)
+    self.assertAllClose(w_grad, 2. * x.T @ y_grad)
 
 
 if __name__ == '__main__':

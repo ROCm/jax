@@ -119,6 +119,7 @@ cc_library(
         "@llvm-project//llvm:Support",
         "@llvm-project//mlir:ArithDialect",
         "@llvm-project//mlir:FuncDialect",
+        "@llvm-project//mlir:GPUDialect",
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:InferTypeOpInterface",
         "@llvm-project//mlir:LLVMCommonConversion",
@@ -127,7 +128,7 @@ cc_library(
         "@llvm-project//mlir:MemRefUtils",
         "@llvm-project//mlir:SCFUtils",
         "@llvm-project//mlir:Support",
-        "@tsl//tsl/platform:statusor",
+        "@xla//xla/tsl/platform:statusor",
     ],
 )
 
@@ -151,7 +152,7 @@ cc_test(
         "@llvm-project//mlir:MemRefDialect",
         "@llvm-project//mlir:SCFUtils",
         "@llvm-project//mlir:Support",
-        "@tsl//tsl/platform:errors",
+        "@xla//xla/tsl/platform:errors",
     ],
 )
 

@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from collections import namedtuple
 from collections.abc import Callable, Sequence, Hashable
-from contextlib import contextmanager
+import contextlib
 from functools import partial
 import itertools as it
 import operator as op
@@ -42,8 +42,8 @@ from jax._src.core import (Trace, Tracer, TraceTag, Jaxpr, Literal, get_aval,
                            mapped_aval, unmapped_aval, DBIdx, InDBIdx, OutDBIdx,
                            InputType, OutputType, get_referent, JaxprEqnContext)
 from jax._src.state.types import AbstractRef, ReadEffect
-from jax._src.tree_util import (PyTreeDef, treedef_tuple,
-                                tree_flatten, tree_structure)
+from jax._src.tree_util import (PyTreeDef, treedef_tuple, tree_flatten,
+                                tree_structure, register_static)
 from jax._src.util import (unzip2, safe_zip, safe_map, toposort, split_list,
                            merge_lists, partition_list, OrderedSet,
                            as_hashable_function, weakref_lru_cache, subs_list,
@@ -57,6 +57,13 @@ def identity(x): return x
 TracerId = int
 AvalId = int
 ConstId = int
+
+AttrKind = Any
+PyTree = Any
+
+# Attrs flavors, see jax/experimental/attrs.py
+ReadWrite = type('ReadWrite', (), {})()
+Append = type('Append', (), {})()
 
 def _update_annotation_known(
     f: lu.WrappedFun,
@@ -492,6 +499,24 @@ def partial_eval_wrapper_nounits(
   jaxpr, (*maybe_fwds, out_pvals, res, env) = f(in_pvals)
   out_knowns, out_avals, out_consts = partition_pvals(out_pvals)
   store.store((*maybe_fwds, out_knowns, out_avals, jaxpr, env))
+  return (*out_consts, *res)
+
+@lu.transformation_with_aux2
+def partial_eval_wrapper_nounits2(
+    f: Callable,
+    store: lu.Store,
+    in_knowns: Sequence[bool],
+    in_avals: Sequence[AbstractValue],
+    *in_consts: Any):
+  in_avals_, in_consts_ = iter(in_avals), iter(in_consts)
+  in_pvals = [PartialVal.known(next(in_consts_)) if known else
+              PartialVal.unknown(next(in_avals_)) for known in in_knowns]
+  sentinel = object()
+  assert next(in_avals_, sentinel) is next(in_consts_, sentinel) is sentinel
+  jaxpr, (*maybe_fwds, out_pvals, res, env) = f(in_pvals)
+  out_knowns, _, out_consts = partition_pvals(out_pvals)
+  res_avals = [core.typeof(r) for r in res]
+  store.store((*maybe_fwds, out_knowns, res_avals, jaxpr, env))
   return (*out_consts, *res)
 
 custom_partial_eval_rules: dict[Primitive, Callable] = {}
@@ -1229,14 +1254,12 @@ def _default_res_aval_updater(
     params: dict[str, Any], aval: AbstractValue) -> AbstractValue:
   return aval
 
-@contextmanager
-def trivial_ctx(_): yield
 
 def call_partial_eval_custom_rule(
     jaxpr_param_name: str, params_updater: ParamsUpdater,
     saveable: Callable[..., RematCases_], unks_in: list[bool], inst_in: list[bool],
     eqn: JaxprEqn, *, res_aval: ResAvalUpdater = _default_res_aval_updater,
-    ctx = trivial_ctx,
+    ctx = contextlib.nullcontext,
   ) -> tuple[JaxprEqn, JaxprEqn, Sequence[bool], Sequence[bool], list[Var]]:
   jaxpr = eqn.params[jaxpr_param_name]
   with ctx(eqn.params):
@@ -1553,6 +1576,17 @@ def move_binders_to_back(closed_jaxpr: ClosedJaxpr, to_move: Sequence[bool]
   """Reorder `invars` by moving those indicated in `to_move` to the back."""
   return move_binders_to_front(closed_jaxpr, map(op.not_, to_move))
 
+def move_outvars_to_back(jaxpr: ClosedJaxpr, to_move: Sequence[bool]) -> ClosedJaxpr:
+  return _move_outvars_to_back(jaxpr, tuple(to_move))
+
+@weakref_lru_cache
+def _move_outvars_to_back(jaxpr, to_move):
+  new_outvars = ([e for e, m in zip(jaxpr.jaxpr.outvars, to_move) if not m] +
+                 [e for e, m in zip(jaxpr.jaxpr.outvars, to_move) if     m])
+  return jaxpr.replace(jaxpr=jaxpr.jaxpr.replace(outvars=new_outvars))
+
+
+
 class DynamicJaxprTracer(core.Tracer):
   __slots__ = ['aval', '_debug_info']
 
@@ -1657,7 +1691,7 @@ class JaxprStackFrame:
   eqns: list[JaxprEqn]
   invars: list[Var]
   effects: core.Effects
-  attrs_tracked: list[tuple[Any, str]]
+  attrs_tracked: list[tuple[Any, str, AttrKind]]
   attrs_inits: list
   attrs_vars: list[Var]
   debug_info: core.DebugInfo
@@ -1679,10 +1713,14 @@ class JaxprStackFrame:
   def add_eqn(self, eqn: core.JaxprEqn):
     self.eqns.append(eqn)
 
-  def to_jaxpr(self, trace: DynamicJaxprTrace,
-               out_tracers: Sequence[Tracer],
-               debug_info: core.DebugInfo,
-               ) -> tuple[Jaxpr, list[Any], list[tuple[PyTreeDef, PyTreeDef, tuple[Any, str]]]]:
+  def reset_states(self):
+    reset_states(self.attrs_tracked, self.attrs_inits)
+
+  def to_jaxpr(
+      self, trace: DynamicJaxprTrace,
+      out_tracers: Sequence[Tracer],
+      debug_info: core.DebugInfo,
+    ) -> tuple[Jaxpr, list[Any], list[tuple[PyTreeDef, PyTreeDef, tuple[Any, str, AttrKind]]]]:
     # It's not necessary, but we keep the tracer-to-var mapping injective:
     assert len(self.tracer_to_var) == len(set(self.tracer_to_var.values()))
     invars = self.attrs_vars + self.invars
@@ -1699,7 +1737,6 @@ class JaxprStackFrame:
     jaxpr, constvals = _const_folding_and_forwarding(jaxpr, constvals)
     jaxpr, constvals = _inline_literals(jaxpr, constvals)
     init_trees = [tree_structure(init_val) for init_val in self.attrs_inits]
-    set_states(self.attrs_tracked, self.attrs_inits)
     return jaxpr, list(constvals), zip(init_trees, end_trees, self.attrs_tracked)
 
   def to_jaxpr2(self, out_tracers: Sequence[core.Tracer],
@@ -1840,10 +1877,9 @@ def _inline_literals(
     outvars = [var(v) if v in used else dropvar(v.aval) for v in eqn.outvars]
     new_eqns.append(eqn.replace(invars=invars, outvars=outvars))
   new_outvars = [lit_or_var(v) for v in jaxpr.outvars]
-  jaxpr_effects = make_jaxpr_effects(new_constvars, new_invars, new_outvars,
-                                      new_eqns)
-  new_jaxpr = Jaxpr(new_constvars, new_invars, new_outvars, new_eqns,
-                    jaxpr_effects, jaxpr.debug_info)
+  effs = make_jaxpr_effects(new_constvars, new_invars, new_outvars, new_eqns)
+  new_jaxpr = Jaxpr(new_constvars, new_invars, new_outvars, new_eqns, effs,
+                    jaxpr.debug_info)
   return new_jaxpr, new_constvals
 
 
@@ -1858,6 +1894,7 @@ class DynamicJaxprTrace(core.Trace):
     # avoid cyclic refs
     self.frame.tracers = []
     self.frame.constid_to_tracer = {}
+    self.frame.constvar_to_val = {}
 
   def to_jaxpr_tracer(self, x):
     as_local_var = self.frame.tracer_to_var.get(id(x))
@@ -2172,19 +2209,23 @@ def trace_to_jaxpr_dynamic(
     *,
     keep_inputs: list[bool] | None = None,
 ) -> tuple[Jaxpr, list[AbstractValue], list[Any],
-           list[tuple[PyTreeDef, PyTreeDef, tuple[Any, str]]]]:
+           list[tuple[PyTreeDef, PyTreeDef, tuple[Any, str, AttrKind]]]]:
   keep_inputs = [True] * len(in_avals) if keep_inputs is None else keep_inputs
   trace = DynamicJaxprTrace(fun.debug_info)
   with core.ensure_no_leaks(trace), source_info_util.reset_name_stack():
     in_tracers = _input_type_to_tracers(trace.new_arg, in_avals)
     in_tracers = [t for t, keep in zip(in_tracers, keep_inputs) if keep]
-    with core.set_current_trace(trace):
-      ans = fun.call_wrapped(*in_tracers)
+    try:
+      with core.set_current_trace(trace):
+        ans = fun.call_wrapped(*in_tracers)
 
-    out_tracers = map(trace.to_jaxpr_tracer, ans)
-    _check_no_returned_refs(fun.debug_info, out_tracers)
-    jaxpr, consts, attrs_tracked = trace.to_jaxpr(out_tracers, fun.debug_info)
-    del trace, fun, in_tracers, out_tracers, ans
+      out_tracers = map(trace.to_jaxpr_tracer, ans)
+      _check_no_returned_refs(fun.debug_info, out_tracers)
+      jaxpr, consts, attrs_tracked = trace.to_jaxpr(out_tracers, fun.debug_info)
+      del fun, in_tracers, out_tracers, ans
+    finally:
+      trace.frame.reset_states()
+      del trace
 
   config.enable_checks.value and core.check_jaxpr(jaxpr)
   return jaxpr, [v.aval for v in jaxpr.outvars], consts, attrs_tracked
@@ -2242,14 +2283,18 @@ AbstractedAxesSpec = Union[
     tuple[AbstractedAxisName, ...],
 ]
 
-AttrsTracked = list[tuple[Any, str]]
+AttrsTracked = list[tuple[Any, str, AttrKind]]
 AttrStates = list
-def set_states(attrs_tracked: AttrsTracked, vals: AttrStates):
-  for ((obj, attr), val) in zip(attrs_tracked, vals):
-    setattr(obj, attr, val)
+def reset_states(attrs_tracked: AttrsTracked, init_vals: AttrStates) -> None:
+  for ((obj, attr, _), val) in zip(attrs_tracked, init_vals):
+    setattr(obj, attr, val) if val is not dne_sentinel else delattr(obj, attr)
 
-def get_states(attrs_tracked: AttrsTracked):
-  return [getattr(obj, attr) for (obj, attr) in attrs_tracked]
+def get_states(attrs_tracked: AttrsTracked) -> list[PyTree]:
+  return [getattr(obj, attr) for (obj, attr, kind) in attrs_tracked]
+
+@register_static
+class DoesNotExist: ...
+dne_sentinel = DoesNotExist()
 
 
 def infer_lambda_input_type(

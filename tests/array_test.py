@@ -29,9 +29,10 @@ from jax._src import op_shardings
 from jax._src import test_util as jtu
 from jax._src import xla_bridge as xb
 from jax._src.lib import xla_client as xc
+from jax._src.lib import jaxlib_extension_version
 from jax._src.lib.mlir import dialects, ir
 from jax._src.util import safe_zip
-from jax._src.mesh import AxisType
+from jax._src.mesh import AxisType, AbstractMesh
 from jax._src.sharding import common_devices_indices_map
 from jax._src.sharding_impls import (
     _op_sharding_to_pos_sharding, pmap_sharding_devices_indices_map,
@@ -368,8 +369,6 @@ class JaxArrayTest(jtu.JaxTestCase):
       array.ArrayImpl(core.ShapedArray(shape, np.float32), s, bufs, committed=True)
 
   def test_duplicated_devices_in_arrays(self):
-    if xc._version <= 274:
-      self.skipTest('Test requires jaxlib version 275')
     shape = (8, 2)
     mesh = jtu.create_mesh((1, 2), ('x', 'y'))
     # Sharding device ids = {0, 1}
@@ -657,12 +656,15 @@ class JaxArrayTest(jtu.JaxTestCase):
             output_shardings._to_xla_hlo_sharding(x_dummy.ndim),
             s._to_xla_hlo_sharding(x_dummy.ndim)))
 
-  # TODO(skyewm): remove this test when we can remove the workaround manual
-  # defragment API
-  @jtu.skip_on_devices('cpu')  # defragment not implemented for TFRT CPU
+  # TODO(b/399879011): GPU is the only platform that has an implementation for
+  # this, which exists in py_client.cc. Ideally, this would be replaced with
+  # some kind of auto-defrag-on-OOM.
+  @jtu.run_on_devices('gpu')
   def test_defragment(self):
+    # Since the GPU implementation is in py_client.cc, it cannot be exposed via
+    # the PjRt C API.
     if xb.using_pjrt_c_api():
-      self.skipTest("Manual defragment not exposed via PJRT C API")
+      self.skipTest('Manual defragment not exposed via PJRT C API')
 
     # Create a few arrays
     global_mesh = jtu.create_mesh((jax.local_device_count(),), ('x',))
@@ -675,7 +677,7 @@ class JaxArrayTest(jtu.JaxTestCase):
     # Delete one of them
     arr2.delete()
 
-    # Defragment
+    # Defragment.
     xb.get_backend().defragment()
 
     # Sanity check remaining arrays
@@ -1301,6 +1303,18 @@ class ShardingTest(jtu.JaxTestCase):
     with self.assertRaisesRegex(TypeError, msg):
       jax.jit(f)(x)
 
+  def test_make_array_from_single_device_arrays_tuple(self):
+    mesh = jtu.create_mesh((2, 2), ('x', 'y'))
+    shape = (8, 8)
+    s = jax.sharding.NamedSharding(mesh, P('x', 'y'))
+    inp_data = np.arange(math.prod(shape)).reshape(shape)
+
+    arrays = tuple(
+        jax.device_put(inp_data[index], d)
+        for d, index in s.addressable_devices_indices_map(shape).items())
+
+    jax.make_array_from_single_device_arrays(shape, s, arrays)  # doesn't crash
+
   def test_make_array_from_single_device_arrays_bad_inputs(self):
     x = jnp.arange(10)
     mesh = jtu.create_mesh((2,), ('x',))
@@ -1363,6 +1377,16 @@ class ShardingTest(jtu.JaxTestCase):
       jax.sharding.AbstractMesh((2, 1), ('x', 'y'),
                                 axis_types=jax.sharding.AxisType.Auto)
 
+    with self.assertRaisesRegex(TypeError, "axis_types.*must be of type"):
+      AbstractMesh((2,), ('x',), axis_types=("explicit",))
+
+    with self.assertRaisesRegex(TypeError, "axis_types.*must be of type"):
+      AbstractMesh((2,), ('x',), axis_types="explicit")
+
+    with self.assertRaisesRegex(TypeError, "axis_types.*must be of type"):
+      AbstractMesh((2, 2), ('x', 'y'),
+                   axis_types=("explicit", AxisType.Explicit))
+
   def test_make_mesh_axis_types(self):
     Auto, Explicit, Manual = AxisType.Auto, AxisType.Explicit, AxisType.Manual
 
@@ -1378,6 +1402,9 @@ class ShardingTest(jtu.JaxTestCase):
     self.assertDictEqual(
         mesh._axis_types_dict, {AxisType.Auto: ('y',), AxisType.Explicit: ('x',),
                           AxisType.Manual: ('z',)})
+    self.assertEqual(mesh.explicit_axes, ('x',))
+    self.assertEqual(mesh.auto_axes, ('y',))
+    self.assertEqual(mesh.manual_axes, ('z',))
 
     mesh = jax.make_mesh((1, 1, 1), ('x', 'y', 'z'),
                          axis_types=(Explicit, Explicit, Manual))
@@ -1401,6 +1428,21 @@ class ShardingTest(jtu.JaxTestCase):
                           axis_types=(Explicit, Auto, Auto, Explicit, Auto))
     self.assertNotEqual(mesh1, mesh2)
     self.assertNotEqual(hash(mesh1), hash(mesh2))
+
+  def test_memory_kind_with_abstract_mesh(self):
+    if jaxlib_extension_version < 326:
+      self.skipTest('Requires jaxlib_extension_version >= 326')
+
+    abstract_mesh = AbstractMesh((2,), ('x',))
+    ns = NamedSharding(abstract_mesh, P(), memory_kind='pinned_host')
+    self.assertEqual(ns.memory_kind, 'pinned_host')
+
+    ns = NamedSharding(abstract_mesh, P())
+    self.assertIsNone(ns.memory_kind)
+
+    with self.assertRaisesRegex(
+        ValueError, 'Got invalid memory kind'):
+      NamedSharding(abstract_mesh, P(), memory_kind='weird_device')
 
 
 @jtu.with_config(jax_use_shardy_partitioner=True)
