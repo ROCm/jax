@@ -19,35 +19,29 @@ limitations under the License.
 #include <functional>
 #include <memory>
 #include <optional>
-#include <ostream>
-#include <string>
 #include <utility>
 
+#include "absl/log/check.h"
+#include "absl/log/log.h"
+#include "absl/types/span.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVectorExtras.h"
-#include "llvm/Support/raw_ostream.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlowOps.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
+#include "mlir/IR/Attributes.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/ImplicitLocOpBuilder.h"
+#include "mlir/IR/OpDefinition.h"
 #include "mlir/IR/Value.h"
+#include "mlir/IR/Visitors.h"
+#include "mlir/Pass/Pass.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Support/LogicalResult.h"
-#include "absl/log/check.h"
-#include "absl/log/log.h"
-#include "absl/types/span.h"
-#include "mlir/include/mlir/Dialect/Arith/IR/Arith.h"
-#include "mlir/include/mlir/Dialect/SCF/IR/SCF.h"
-#include "mlir/include/mlir/Dialect/Vector/IR/VectorOps.h"
-#include "mlir/include/mlir/IR/Attributes.h"
-#include "mlir/include/mlir/IR/ImplicitLocOpBuilder.h"
-#include "mlir/include/mlir/IR/OpDefinition.h"
-#include "mlir/include/mlir/IR/Visitors.h"
-#include "mlir/include/mlir/Pass/Pass.h"
 #include "jaxlib/mosaic/dialect/tpu/layout.h"
 #include "jaxlib/mosaic/dialect/tpu/tpu_dialect.h"
 #include "jaxlib/mosaic/dialect/tpu/transforms/infer_vector_layout_extensions.h"
@@ -1095,13 +1089,11 @@ class VectorLayoutInferer {
       }
       auto src_tiled_ishape = layout.getImplicitTiledDims(src_ty.getShape(), 1);
       auto dst_tiled_ishape = layout.getImplicitTiledDims(res_ty.getShape(), 1);
-      // Since we can only do sublane broadcasts in the (8, 128) tiling, we
-      // should always use that when sublane broadcasting is required.
       if (src_tiled_ishape[0] != dst_tiled_ishape[0] &&
           layout.offsets()[0] != std::nullopt) {
+        // TODO(tlongeri): Remove this. We support non-native tiling now, but
+        // things may still break downstream due to missing relayouts.
         LayoutOffsets offsets = layout.offsets();
-        // At the moment relayout can only produce replicated sublanes when
-        // converting to (8, 128) if the input was in (1, 128) tiling
         if (layout.tiling()[0] == 1 && layout.bitwidth() == kNativeBitwidth) {
           offsets[0] = std::nullopt;
         }

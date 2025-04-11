@@ -194,6 +194,11 @@ def _linearize_jaxpr(
   tangent_trace.invalidate()
   if attrs_tracked:
     raise NotImplementedError("TODO: attrs")
+  tangent_jaxpr, used_consts, _ = pe.dce_jaxpr_consts(
+        tangent_jaxpr, [True] * len(tangent_jaxpr.outvars),
+        [False] * len(tangent_jaxpr.constvars) + [True] * len(tangent_jaxpr.invars))
+  tangent_consts = [c for c, used in zip(tangent_consts, used_consts) if used]
+
   residuals_and_primals = (*tangent_consts, *out_primals)
   residuals_and_primals = map(primal_trace.to_jaxpr_tracer, residuals_and_primals)
   primal_jaxpr, primal_consts, attrs_tracked = primal_trace.to_jaxpr(residuals_and_primals, debug_info)
@@ -407,6 +412,12 @@ def backward_pass(jaxpr: core.Jaxpr, transform_stack,
           try:
             cts_out = get_primitive_transpose(eqn.primitive)(
                 cts_in, *invals, **eqn.params)
+          except core.ShardingTypeError as e:
+            extra_msg = ("This is a potential JAX bug. Please file an issue at"
+                         " https://github.com/jax-ml/jax/issues")
+            if extra_msg in str(e):
+              raise
+            raise core.ShardingTypeError(f"{str(e)}\n{extra_msg}")
           except (FloatingPointError, ZeroDivisionError) as e:
             msg = "When differentiating the code at the top of the callstack:"
             if msg not in e.args[0]:
@@ -865,6 +876,10 @@ def linearize_from_jvp(jvp: lu.WrappedFun,
                       for (r, nz) in zip(out_tangents, out_nzs) if nz]
     in_tracers = [t for t, nz in zip(tangent_args, nonzeros) if nz]
     jaxpr, out_consts, _ = pe.tracers_to_jaxpr(in_tracers, out_nz_tracers, jvp.debug_info)
+    jaxpr, used_consts, _ = pe.dce_jaxpr_consts(
+        jaxpr, [True] * len(jaxpr.outvars),
+        [False] * len(jaxpr.constvars) + [True] * len(jaxpr.invars))
+    out_consts = [c for used, c in zip(used_consts, out_consts) if used]
 
     def linearized(residuals, *tangents):
       nz_tangents_in = [t for (t, nz) in zip(tangents, nonzeros) if nz]
@@ -1238,3 +1253,11 @@ class CustomVJPException(Exception):
 
 # TODO(mattjj): remove this vestigial dict
 reducing_transposes: dict[core.Primitive, Callable] = {}
+
+########################### pvary ##################################
+
+def _pvary_transpose_rule(cts, *_, axes, axis_index_groups):
+  from jax._src.lax import parallel as lax_parallel
+  return lax_parallel.psum_invariant_p.bind(
+      *cts, axes=axes, axis_index_groups=axis_index_groups)
+deflinear2(core.pvary_p, _pvary_transpose_rule)

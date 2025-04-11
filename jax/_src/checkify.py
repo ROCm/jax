@@ -600,7 +600,7 @@ nan_primitives = [lax.acos_p, lax.acosh_p, lax.add_p, lax.asin_p, lax.asinh_p,
                   lax.igamma_p, lax.igammac_p, lax.integer_pow_p, lax.lgamma_p,
                   lax.linear_solve_p, lax.log1p_p, lax.log_p, lax.logistic_p,
                   lax.mul_p, lax.pad_p, lax.pow_p, lax.psum_p,
-                  lax.random_gamma_grad_p, lax.reduce_p, lax.reduce_prod_p,
+                  lax.reduce_p, lax.reduce_prod_p,
                   lax.reduce_sum_p, lax.reduce_window_p,
                   lax.reduce_window_sum_p, lax.regularized_incomplete_beta_p,
                   lax.rem_p, lax.rng_uniform_p, lax.rsqrt_p, lax.sin_p,
@@ -913,13 +913,13 @@ def pjit_error_check(error, enabled_errors, *vals_in, jaxpr,
   # Update pjit params to account for extra error values.
   num_error_vals = len(err_vals)
   num_out_error_vals = out_tree.num_leaves - len(out_shardings)
-
   sharding = sharding_impls.UNSPECIFIED
   new_in_shardings = (*[sharding] * num_error_vals, *in_shardings)
-  new_out_shardings = (*[sharding] * num_out_error_vals, *out_shardings)
   new_in_layouts = (*[None] * num_error_vals, *in_layouts)
-  new_out_layouts = (*[None] * num_out_error_vals, *out_layouts)
   new_donated_invars = (*[False] * num_error_vals, *donated_invars)
+
+  new_out_shardings = (*[sharding] * num_out_error_vals, *out_shardings)
+  new_out_layouts = (*[None] * num_out_error_vals, *out_layouts)
 
   err_and_out = pjit.pjit_p.bind(
       *new_vals_in,
@@ -966,13 +966,15 @@ def shard_map_error_check(
   new_vals_in = [*err_vals, *vals_in]
   in_avals = list(map(core.get_aval, new_vals_in))
   auto = kwargs.get('auto')
+  check_rep = kwargs.get('check_rep')
   for i, v in enumerate(in_avals):
     if not (sharder := core.shard_aval_handlers.get(type(v))):
       raise ValueError(f'Unsupported aval type: {type(v)}')
-    in_avals[i] = sharder(mesh, auto, new_in_names[i], v)
+    in_avals[i] = sharder(mesh, auto, check_rep, new_in_names[i], v)
 
   with (shard_map._extend_axis_env(mesh, auto),
-        mesh_lib.use_abstract_mesh(shard_map._as_manual_mesh(mesh, auto))):
+        mesh_lib.use_abstract_mesh(shard_map._as_manual_mesh(mesh, auto)),
+        config._check_rep(check_rep)):
     # jaxpr to checked_jaxpr
     checked_jaxpr, out_tree, _ = jaxpr_to_checkify_jaxpr(
         pe.close_jaxpr(jaxpr), enabled_errors, err_tree, *in_avals
@@ -985,7 +987,7 @@ def shard_map_error_check(
     errs = [lax.expand_dims(e, [0]) for e in errs]
     return *errs, *outs
 
-  with core.extend_axis_env_nd(mesh.shape.items()):
+  with core.extend_axis_env_nd(mesh.shape.items()), config._check_rep(check_rep):
     jaxpr, _, consts, () = pe.trace_to_jaxpr_dynamic(
         lu.wrap_init(expand_errors_leading_dim,
                      debug_info=checked_jaxpr.jaxpr.debug_info),
