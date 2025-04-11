@@ -98,7 +98,14 @@ def dist_wheels(
 
     bw_cmd.append("/jax")
 
-    cmd = ["docker", "run"]
+    cmd = [
+        "docker",
+        "run",
+        "-e",
+        "HIPCC_COMPILE_FLAGS_APPEND=--gcc-toolchain=/opt/rh/gcc-toolset-14/root/usr/", 
+        "-e",
+        "HIPCC_LINK_FLAGS_APPEND=--gcc-toolchain=/opt/rh/gcc-toolset-14/root/usr/"
+    ]
 
     mounts = [
         "-v",
