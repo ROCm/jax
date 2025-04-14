@@ -281,12 +281,11 @@ def MosaicGPU_AsyncLoadOp : Op<MosaicGPU_Dialect, "async_load",
     grouped together in a cluster and need to load the same data. Each block in
     a cluster will first load a slice from GMEM to SMEM and then the slices will
     be multicast to all other blocks in the cluster. In this way TMA multicast
-    guarnatees L2 cache hits. The `collective` attribute is the list of
+    guarantees L2 cache hits. The `collective` attribute is the list of
     cluster dimensions along which to partition the input data loads.
 
-    The `predicate` input should be set to `true` by a single thread in the
-    warpgroup so that it schedules the load operation. All other threads in the
-    warpgroup should set the `predicate` to `false`.
+    The `predicate` allows scheduling the transfer conditionally. The async copy
+   is always scheduled by at most a single lane in the warpgroup.
   }];
 
   let arguments = (ins
@@ -338,9 +337,8 @@ def MosaicGPU_AsyncStoreOp : Op<MosaicGPU_Dialect, "async_store",
     contiguous and the transformed data is written to the `destination` GMEM
     which does not need to be contiguous.
 
-    The `predicate` input should be set to `true` by a single thread in the
-    warpgroup so that it schedules the store operation. All other threads in the
-    warpgroup should set the `predicate` to `false`.
+    The `predicate` allows scheduling the transfer conditionally. The async copy
+    is always scheduled by at most a single lane in the warpgroup.
   }];
 
   let arguments = (ins
@@ -394,19 +392,14 @@ def MosaicGPU_WGMMAOp : Op<MosaicGPU_Dialect, "wgmma", [InferTypeOpInterface]> {
 
     This operation supports larger inputs than the PTX-level WGMMA operation
     and will schedule as many PTX-level WGMMA operations as needed to
-    accomplish the calculation. The `b` matrix, and optionally `a`, needs to be
-    provided as a 2-dimensional memref. All memrefs may have transforms that
-    define swizzling, tiling, and transposition.
+    accomplish the calculation. The `b` matrix, and optionally `a`, need to be
+    provided as a 2-dimensional memref.
 
     The inputs should have the following shapes:
       - a: [groups_m * 64, groups_k * s]
       - b: [groups_k * s, groups_n * s]
       - accumulator: [groups_m * 64, groups_n * s]
-    Where:
-      - `s == swizzle/element_bytediwth` (for `kNoSwizzle`, `swizzle` is 16.)
-        and the tilings are [64, s] for `a` and [s, s] for `b`.
-      - `a` and/or `b` may be transposed if the corresponding attribute is set
-        to `true`.
+    where `s == swizzle / element_bytewidth`.
 
     The output has an identical shape and type as the input accumulator.
 
@@ -429,10 +422,7 @@ def MosaicGPU_WGMMAOp : Op<MosaicGPU_Dialect, "wgmma", [InferTypeOpInterface]> {
     AnyTypeOf<[
       MemRefOf<[MosaicGPU_WGMMASupportedType]>,
       VectorOfAnyRankOf<[MosaicGPU_WGMMASupportedType]>]>:$a,
-    MemRefOf<[MosaicGPU_WGMMASupportedType]>:$b,
-
-    DefaultValuedOptionalAttr<BoolAttr, "false">:$transpose_a,
-    DefaultValuedOptionalAttr<BoolAttr, "false">:$transpose_b
+    MemRefOf<[MosaicGPU_WGMMASupportedType]>:$b
   );
   let results = (outs VectorOfAnyRankOf<[MosaicGPU_WGMMASupportedType]>);
 
@@ -463,6 +453,35 @@ def MosaicGPU_WGMMAOp : Op<MosaicGPU_Dialect, "wgmma", [InferTypeOpInterface]> {
   }];
 
   let hasVerifier = 1;
+}
+
+def MosaicGPU_OptimizationBarrierOp : Op<MosaicGPU_Dialect, "optimization_barrier",
+    [InferTypeOpInterface]> {
+  let summary = "Prevents MLIR from moving operations across the barrier.";
+
+  let arguments = (ins
+    Variadic<AnyType>:$operands
+  );
+  let results = (outs Variadic<AnyType>);
+
+  let extraClassDeclaration = [{
+    static llvm::LogicalResult inferReturnTypes(
+        mlir::MLIRContext *,
+        std::optional<mlir::Location> location,
+        mlir::ValueRange operands,
+        mlir::DictionaryAttr attributes,
+        mlir::OpaqueProperties properties,
+        mlir::RegionRange regions,
+        llvm::SmallVectorImpl<mlir::Type> &inferredReturnTypes) {
+      if (operands.empty()) {
+        return ::mlir::emitOptionalError(
+          location, "expected non-empty operands");
+      }
+      ::mlir::TypeRange operand_types = operands.getTypes();
+      inferredReturnTypes.assign(operand_types.begin(), operand_types.end());
+      return ::mlir::success();
+    }
+  }];
 }
 
 #endif // THIRD_PARTY_PY_JAX_JAXLIB_MOSAIC_DIALECT_GPU_MOSAIC_GPU_TD_
