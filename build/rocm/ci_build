@@ -101,10 +101,6 @@ def dist_wheels(
     cmd = [
         "docker",
         "run",
-        "-e",
-        "HIPCC_COMPILE_FLAGS_APPEND=--gcc-toolchain=/opt/rh/gcc-toolset-14/root/usr/", 
-        "-e",
-        "HIPCC_LINK_FLAGS_APPEND=--gcc-toolchain=/opt/rh/gcc-toolset-14/root/usr/"
     ]
 
     mounts = [

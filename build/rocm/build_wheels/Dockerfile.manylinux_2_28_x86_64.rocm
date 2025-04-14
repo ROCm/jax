@@ -25,5 +25,11 @@ RUN mkdir /tmp/llvm-project && wget -qO - https://github.com/llvm/llvm-project/a
     mkdir /tmp/llvm-project/build && cd /tmp/llvm-project/build && cmake -DLLVM_ENABLE_PROJECTS='clang;lld' -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/lib/llvm-18/ ../llvm && \
     make -j$(nproc) && make -j$(nproc) install && rm -rf /tmp/llvm-project
 
+# Set some clang config
+ADD ./build/rocm/build_wheels/clang.cfg /usr/lib/llvm-18/bin/clang++.cfg
+ADD ./build/rocm/build_wheels/clang.cfg /usr/lib/llvm-18/bin/clang.cfg
+ADD ./build/rocm/build_wheels/clang.cfg /opt/rocm/llvm/bin/clang++.cfg
+ADD ./build/rocm/build_wheels/clang.cfg /opt/rocm/llvm/bin/clang.cfg
+
 # Stop git from erroring out when we don't own the repo
 RUN git config --global --add safe.directory '*'
