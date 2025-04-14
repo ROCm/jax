@@ -47,6 +47,8 @@ class SpmmTest(jtu.JaxTestCase):
   )
   @jtu.run_on_devices("gpu")
   def test_shapes(self, tile_m, tile_n, tile_k, batch, sparse_idx):
+    if jtu.is_device_rocm():
+        self.skipTest("There is no spmm lowering support for ROCm platform")
     # Build keyword arguments
     kwargs = {
         "dimension_numbers": (((1,), (1,)), (tuple(), tuple())),
@@ -93,6 +95,8 @@ class SpmmTest(jtu.JaxTestCase):
   )
   @jtu.run_on_devices("gpu")
   def test_types(self, lhs_type, rhs_type, output_type):
+    if jtu.is_device_rocm():
+        self.skipTest("There is no spmm lowering support for ROCm platform")
     tile_m, tile_n, tile_k = 64, 32, 128
 
     # Build input data
