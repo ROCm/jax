@@ -193,7 +193,7 @@ def attention(q, k, v, config: TuningConfig):
 
   def entry(q_ref, k_ref, v_ref, out_ref):
     compute_wgs = 2
-    tiling = plgpu.TilingTransform((64, 64))
+    tiling = plgpu.TilingTransform((8, 64))
     swizzle = plgpu.SwizzleTransform(128)
     qo_scratch = plgpu.SMEM(
         (compute_wgs, block_q, head_dim), jnp.float16,
@@ -201,7 +201,7 @@ def attention(q, k, v, config: TuningConfig):
     )
     k_scratch = plgpu.SMEM(
         (max_concurrent_steps, block_kv, head_dim), jnp.float16,
-        transforms=(tiling, plgpu.TransposeTransform((0, 2, 1, 3, 4)), swizzle),
+        transforms=(tiling, swizzle),
     )
     v_scratch = plgpu.SMEM(
         (max_concurrent_steps, block_kv, head_dim), jnp.float16,
@@ -227,8 +227,9 @@ def attention(q, k, v, config: TuningConfig):
       entry,
       out_shape=q,
       grid=(batch_size, num_q_tiles, num_q_heads),
+      grid_names=("batch", "q_seq", "heads"),
       num_threads=3,
-      axis_names=("batch", "q_seq", "heads", "wg"),
+      thread_name="wg",
       compiler_params=plgpu.GPUCompilerParams(approx_math=True),
   )(q, k, v)
 
@@ -262,9 +263,8 @@ def attention_with_pipeline_emitter(q, k, v, config: TuningConfig):
   if rem:
     raise NotImplementedError(f"{q_seq_len=} must be a multiple of {block_q * 2=}")
 
-  tiling = plgpu.TilingTransform((64, 64))
+  tiling = plgpu.TilingTransform((8, 64))
   swizzle = plgpu.SwizzleTransform(128)
-  transpose = plgpu.TransposeTransform((0, 2, 1, 3, 4))
 
   def fa3_kernel(q_ref, k_ref, v_ref, out_ref, scoped):
     batch = lax.axis_index("batch")
@@ -353,7 +353,7 @@ def attention_with_pipeline_emitter(q, k, v, config: TuningConfig):
             plgpu.GPUBlockSpec(  # k
                 block_shape=(block_kv, head_dim),
                 index_map=lambda i: (i, 0),
-                transforms=[tiling, transpose, swizzle]),
+                transforms=[tiling, swizzle]),
             plgpu.GPUBlockSpec(  # v
                 block_shape=(block_kv, head_dim),
                 index_map=lambda i: (i, 0),
@@ -366,8 +366,9 @@ def attention_with_pipeline_emitter(q, k, v, config: TuningConfig):
     pipeline(k_ref, v_ref)
   mesh = plgpu.GPUMesh(
       grid=(batch_size, num_q_tiles, num_q_heads),
+      grid_names=("batch", "q_seq", "heads"),
       num_threads=3,
-      axis_names=("batch", "q_seq", "heads", "wg"),
+      thread_name="wg",
   )
   def run(refs):
     q_ref, k_ref, v_ref, out_ref = refs

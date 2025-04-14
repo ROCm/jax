@@ -14,10 +14,11 @@
 
 """Lowering rules and pass for the MLIR Mosaic GPU dialect."""
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 import dataclasses
 import functools
 import itertools
+import math
 import operator
 from typing import Any, Sequence, Type, cast
 
@@ -34,6 +35,8 @@ from jax._src.lib.mlir.dialects import memref
 from jax._src.lib.mlir.dialects import nvvm
 from jax._src.lib.mlir.dialects import scf
 from jax._src.lib.mlir.dialects import vector
+from jax._src.util import safe_zip
+from jax.experimental.mosaic.gpu import layouts as layouts_lib
 import numpy as np
 
 from . import fragmented_array as fa
@@ -199,6 +202,38 @@ def _initialize_barrier_op_lowering_rule(
 
   return utils.ptr_as_memref(
       barrier_base_ptr, initialize_barrier_op.barriers_ref.type),
+
+
+# TODO(bchetioui): remove once minimum jaxlib >= 0.5.3.
+OptimizationBarrierOp = getattr(mgpu, "OptimizationBarrierOp", None)
+
+
+@_register_lowering(OptimizationBarrierOp)
+def _optimization_barrier_op_lowering_rule(
+    _: LoweringContext,
+    op: OptimizationBarrierOp,
+) -> Sequence[ir.Value]:
+  if not all(ir.VectorType.isinstance(operand.type) for operand in op.operands):
+    raise NotImplementedError(
+        f"Optimization barrier op {op} has non-vector operands."
+    )
+
+  fragmented_arrays = []
+  for operand, layout in safe_zip(op.operands, inference_utils.in_layouts(op)):
+    ty = ir.VectorType(operand.type)
+    is_signed = False if ir.IntegerType.isinstance(ty.element_type) else None
+    fragmented_arrays.append(
+        _fragmented_array_from_ir(operand, layout, is_signed=is_signed)
+    )
+
+  lowered_fragmented_arrays = fa.optimization_barrier(*fragmented_arrays)
+  if isinstance(lowered_fragmented_arrays, fa.FragmentedArray):
+    lowered_fragmented_arrays = [lowered_fragmented_arrays]
+
+  return [
+      _fragmented_array_to_ir(arr, result.type)
+      for arr, result in safe_zip(lowered_fragmented_arrays, op.results)
+  ]
 
 
 @_register_lowering(arith.ConstantOp)
@@ -525,6 +560,12 @@ def _mgpu_async_load_op_lowering_rule(
     v = idx if size < 0 else utils.DynamicSlice(idx, size)
     gmem_slice.append(v)
 
+  # TODO(dasenov): async_copy requires all GMEM strides except the last one
+  # to be a multiple of 16 bytes. This restriction could be loosned with
+  # strided layouts when they are contiguous in GMEM. In that case, we could do:
+  # flatten -> async_copy -> unflatted here, as long as flattened size is a
+  # multiple of 16.
+
   # TODO(dasenov): Add support for the remaining op properties.
   ctx.launch_context.async_copy(
       src_ref=load_op.source,
@@ -560,6 +601,12 @@ def _mgpu_async_store_op_lowering_rule(
     idx = arith.index_cast(ir.IndexType.get(), idx_i32)
     v = idx if size < 0 else utils.DynamicSlice(idx, size)
     gmem_slice.append(v)
+
+  # TODO(dasenov): async_copy requires all GMEM strides except the last one
+  # to be a multiple of 16 bytes. This restriction could be loosned with
+  # strided layouts when they are contiguous in GMEM. In that case, we could do:
+  # flatten -> async_copy -> unflatted here, as long as flattened size is a
+  # multiple of 16.
 
   # TODO(dasenov): Add support for the remaining op properties.
   ctx.launch_context.async_copy(
@@ -761,9 +808,6 @@ def _bitcast_op_lowering_rule(
 def _mgpu_wgmma_op_lowering_rule(
     _: LoweringContext, wgmma_op: mgpu.WGMMAOp
 ) -> Sequence[ir.Value]:
-  if wgmma_op.transpose_a or wgmma_op.transpose_b:
-    raise ValueError("Transpose arguments are to be deleted.")
-
   fa_layouts = (
       *inference_utils.in_layouts(wgmma_op),
       *inference_utils.out_layouts(wgmma_op),
@@ -850,13 +894,9 @@ def _mgpu_wait_op_lowering_rule(
   return []
 
 
-# TODO(bchetioui): remove this once jaxlib minimum version >= 0.5.2.
-SliceSMEMOp = getattr(mgpu, "SliceSMEMOp", None)
-
-
-@_register_lowering(SliceSMEMOp)
+@_register_lowering(mgpu.SliceSMEMOp)
 def _mgpu_slice_smem_op_lowering_rule(
-    ctx: LoweringContext, op: SliceSMEMOp
+    ctx: LoweringContext, op: mgpu.SliceSMEMOp
 ) -> Sequence[ir.Value]:
   del ctx
   return [_slice_smem(op.result.type, op.offset)]
@@ -872,6 +912,66 @@ def _slice_smem(result: ir.Type, offset: ir.Value):
   return memref.view(result, smem_base, offset, [])
 
 
+# The metadata needed to recostruct a vector from its flattened representation.
+_VectorTemplate = tuple[Sequence[int], fa.FragmentedLayout, ir.VectorType]
+
+
+def _flatten_ir_values(
+    values: Sequence[ir.Value], fa_layouts: Iterable[ir.Attribute]
+) -> tuple[Sequence[ir.Value], Sequence[_VectorTemplate | None]]:
+  """Flattens a sequence of values.
+
+  Non-vector values are preserved as is. Vectors are mapped to fragmented
+  arrays and then flattened into per-register values.
+
+  Args:
+    values: The sequence of values to flatten.
+    fa_layouts: The layouts of vectors in ``values``.
+
+  Returns:
+    A tuple of (flattened values, templates). The templates are used to
+    reconstruct the vectors from the per-register  values.
+  """
+  fa_layouts_it = iter(fa_layouts)
+  result = []
+  templates = []
+  for v in values:
+    if ir.VectorType.isinstance(v.type):
+      fa = _fragmented_array_from_ir(v, next(fa_layouts_it))
+      result.extend(fa.registers.flat)
+      templates.append((fa.registers.shape, fa.layout, ir.VectorType(v.type)))
+    else:
+      result.append(v)
+      templates.append(None)
+  return result, templates
+
+
+def _unflatten_ir_values(
+    flat_values: Sequence[ir.Value], templates: Sequence[_VectorTemplate | None]
+) -> Sequence[ir.Value]:
+  """The inverse of ``_flatten_ir_values``."""
+  result = []
+  flat_values_it = iter(flat_values)
+  for template in templates:
+    if template is None:
+      result.append(next(flat_values_it))
+      continue
+    registers_shape, layout, vec_type = template
+    value_registers = np.asarray(
+        [next(flat_values_it) for _ in range(math.prod(registers_shape))],
+        dtype=object,
+    )
+    value = fa.FragmentedArray(
+        _registers=value_registers.reshape(registers_shape),
+        _layout=layout,
+        _is_signed=False
+        if ir.IntegerType.isinstance(vec_type.element_type)
+        else None,
+    )
+    result.append(_fragmented_array_to_ir(value, vec_type))
+  return result
+
+
 @_register_lowering(scf.ForOp)
 def _for_op_lowering_rule(
     ctx: LoweringContext, for_op: scf.ForOp
@@ -884,60 +984,22 @@ def _for_op_lowering_rule(
   yield_layouts = inference_utils.in_layouts(yield_op)
   if in_layouts != out_layouts or in_layouts != yield_layouts:
     raise ValueError("Layout mismatch")
-  fa_layouts = in_layouts
 
-  fa_layouts_it = iter(fa_layouts)
-  arg_template = [
-      (_fragmented_array_from_ir(arg, next(fa_layouts_it)), arg.type)
-      if ir.VectorType.isinstance(arg.type)
-      else (arg, arg.type)
-      for arg in for_op.initArgs
-  ]
-  def lower_carry(carry):
-    fa_layouts_it = iter(fa_layouts)
-    carry_with_fas = [
-        _fragmented_array_from_ir(arg, next(fa_layouts_it))
-        if ir.VectorType.isinstance(arg.type)
-        else arg
-        for arg in carry
-    ]
-    lowered_carry = []
-    for c in carry_with_fas:
-      if isinstance(c, fa.FragmentedArray):
-        lowered_carry.extend(c.registers.flat)
-      else:
-        lowered_carry.append(c)
-    return lowered_carry
-
-  def recreate_carry(lowered_carry):
-    recreated_carry = []
-    arg_it = iter(lowered_carry)
-    for arg_value, arg_type in arg_template:
-      if isinstance(arg_value, fa.FragmentedArray):
-        carry_registers = np.asarray(
-            [next(arg_it) for _ in arg_value.registers.flat], dtype=object
-        )
-        carry_registers = carry_registers.reshape(arg_value.registers.shape)
-        carry = fa.FragmentedArray(
-            _registers=carry_registers,
-            _layout=arg_value.layout,
-            _is_signed=arg_value.is_signed,
-        )
-        recreated_carry.append(_fragmented_array_to_ir(carry, arg_type))
-      else:
-        recreated_carry.append(next(arg_it))
-    return recreated_carry
-
+  flat_init_args, args_template = _flatten_ir_values(
+      for_op.initArgs, in_layouts
+  )
   new_for_op = scf.ForOp(
       for_op.lowerBound,
       for_op.upperBound,
       for_op.step,
-      lower_carry(for_op.initArgs),
+      flat_init_args,
   )
   with ir.InsertionPoint(new_for_op.body):
-    recreated_carry = recreate_carry(new_for_op.body.arguments[1:])
+    recreated_carry = _unflatten_ir_values(
+        new_for_op.body.arguments[1:], args_template
+    )
     ops_to_lower = []
-    for op in for_op.body:
+    for op in [*for_op.body]:
       if op == yield_op:
         continue
       mgpu.private_operation_remove_from_parent(op)
@@ -952,16 +1014,80 @@ def _for_op_lowering_rule(
       ctx.lower_op(op)
 
   with ir.InsertionPoint(new_for_op.body):
-    new_yield_operands = lower_carry(yield_op.operands)
+    flat_operands, _ = _flatten_ir_values(yield_op.operands, in_layouts)
     yield_op.erase()
-    scf.yield_(new_yield_operands)
-  return recreate_carry(new_for_op.results)
+    scf.yield_(flat_operands)
+
+  return _unflatten_ir_values(new_for_op.results, args_template)
+
+
+def _infer_flat_result_types(
+    op: ir.OpView, out_layouts: Sequence[ir.Attribute]
+) -> Sequence[ir.Type]:
+  result_types: list[ir.Type] = []
+  out_layouts_it = iter(out_layouts)
+  for r in op.results:
+    if not ir.VectorType.isinstance(r.type):
+      result_types.append(r.type)
+      continue
+    vec_type = ir.VectorType(r.type)
+    layout = layouts_lib.from_layout_attr(next(out_layouts_it))
+    result_types.extend(
+        [layout.registers_element_type(vec_type.element_type)]
+        * math.prod(layout.registers_shape(tuple(vec_type.shape)))
+    )
+  return result_types
+
+
+@_register_lowering(scf.IfOp)
+def _if_op_lowering_rule(
+    ctx: LoweringContext, if_op: scf.IfOp
+) -> MlirLoweringRuleResult:
+  if not inference_utils.should_have_layout(if_op):
+    return _traverse_op_lowering_rule(ctx, if_op)
+
+  raise NotImplementedError
+
+
+@_register_lowering(scf.IndexSwitchOp)
+def _index_switch_op_lowering_rule(
+    ctx: LoweringContext, switch_op: scf.IndexSwitchOp
+) -> MlirLoweringRuleResult:
+  if not inference_utils.should_have_layout(switch_op):
+    return _traverse_op_lowering_rule(ctx, switch_op)
+
+  out_layouts = inference_utils.out_layouts(switch_op)
+  new_switch_op = scf.IndexSwitchOp(
+      _infer_flat_result_types(switch_op, out_layouts),
+      switch_op.arg,
+      switch_op.cases,
+      len(switch_op.regions) - 1,
+  )
+
+  results_template: Sequence[_VectorTemplate | None] = []
+  for region, new_region in zip(
+      switch_op.regions, new_switch_op.regions, strict=True
+  ):
+    [block] = region.blocks
+    new_block = new_region.blocks.append()
+    with ir.InsertionPoint(new_block):
+      for op in [*block]:
+        if not isinstance(op, scf.YieldOp):
+          mgpu.private_operation_remove_from_parent(op)
+          mgpu.private_block_append_owned_operation(new_block, op)
+          ctx.lower_op(op)
+          continue
+        if inference_utils.in_layouts(op) != out_layouts:
+          raise ValueError("Layout mismatch")
+        flat_results, results_template = _flatten_ir_values(
+            op.operands, out_layouts
+        )
+        scf.yield_(flat_results)
+  return _unflatten_ir_values(new_switch_op.results, results_template)
 
 
 @_register_lowering(func.FuncOp)
 @_register_lowering(gpu.LaunchOp)
-@_register_lowering(scf.IfOp)  # TODO(apaszke,bchetioui): Add a proper rule.
-@_register_lowering(scf.IndexSwitchOp)  # TODO(apaszke,bchetioui): Add a proper rule.
 def _traverse_op_lowering_rule(
     ctx: LoweringContext, op: ir.OpView
 ) -> MlirLoweringRuleResult:

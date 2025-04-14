@@ -33,14 +33,12 @@ from jax._src import source_info_util
 from jax._src import xla_bridge as xb
 from jax._src import mesh_utils
 from jax._src.lib import xla_client as xc
-from jax._src.lib import xla_extension_version
 from jax._src.lib.mlir.dialects import sdy
 from jax._src.named_sharding import (  # noqa: F401
     SdyArraySharding, SdyDimSharding, UnspecifiedValue, AUTO,
-    ParsedPartitionSpec, _check_unique_resources, NamedSharding, UNSPECIFIED,
+    _check_unique_resources, NamedSharding, UNSPECIFIED,
     ArrayMapping, ArrayMappingOrAutoOrUnspecified, get_array_mapping,
-    array_mapping_to_axis_resources, get_single_pspec, preprocess,
-    named_sharding_to_xla_hlo_sharding)
+    array_mapping_to_axis_resources, named_sharding_to_xla_hlo_sharding)
 from jax._src.op_shardings import (
     are_op_shardings_equal, get_num_ways_dim_sharded, is_op_sharding_replicated)
 from jax._src.partition_spec import PartitionSpec
@@ -107,6 +105,9 @@ def modify_sdy_sharding_wrt_axis_types(sdy_sharding: SdyArraySharding, mesh):
                            if not d.axes and d.is_closed else d)
       used_axes.extend(d.axes)
     remaining_axes = set(mesh.axis_names) - set(used_axes)
+    # Sort wrt mesh axis names so order is deterministic and doesn't hang in
+    # McJAX.
+    remaining_axes = [n for n in mesh.axis_names if n in remaining_axes]
     replicated_axes = tuple(r for r in remaining_axes
                             if mesh._name_to_type[r] == mesh_lib.AxisType.Explicit)
     return SdyArraySharding(sdy_sharding.mesh_shape, dim_shardings,
@@ -882,8 +883,7 @@ def parse_flatten_op_sharding(
     return out
   elif hlo_sharding.is_replicated():
     return [PartitionSpec()]
-  elif (xla_extension_version >= 319 and hlo_sharding.is_maximal()
-        and mesh.size == 1):
+  elif hlo_sharding.is_maximal() and mesh.size == 1:
     return [PartitionSpec()]
   elif hlo_sharding.is_tiled():
     mesh_shape = mesh.shape
@@ -1382,10 +1382,8 @@ def use_mesh(mesh: mesh_lib.Mesh):
   if not isinstance(mesh, mesh_lib.Mesh):
     raise ValueError(
         f"Expected mesh of type `jax.sharding.Mesh`. Got {type(mesh)}")
-
-  # TODO(yashkatariya): Enable this.
-  # if not core.trace_state_clean():
-  #   raise ValueError('`use_mesh` can only be used outside of `jax.jit`')
+  if not core.trace_state_clean():
+    raise ValueError('`use_mesh` can only be used outside of `jax.jit`')
 
   with mesh_lib.use_abstract_mesh(mesh.abstract_mesh), use_concrete_mesh(mesh):
     yield
@@ -1410,13 +1408,16 @@ def set_mesh(mesh: mesh_lib.Mesh | None) -> mesh_lib.Mesh | None:
 
 @contextlib.contextmanager
 def use_concrete_mesh(mesh: mesh_lib.Mesh | None):
+  if not core.trace_state_clean():
+    raise ValueError('`use_concrete_mesh` can only be used outside of `jax.jit`.')
+  with _internal_use_concrete_mesh(mesh):
+    yield
+
+@contextlib.contextmanager
+def _internal_use_concrete_mesh(mesh: mesh_lib.Mesh | None):
   if mesh is not None and not isinstance(mesh, mesh_lib.Mesh):
     raise ValueError(
         f"Expected mesh of type `jax.sharding.Mesh`. Got {type(mesh)}")
-  # TODO(yashkatariya): Enable this.
-  # if not core.trace_state_clean():
-  #   raise ValueError('`use_concrete_mesh` can only be used outside of `jax.jit`.')
-
   prev_val = config.device_context.swap_local(mesh)
   try:
     yield
