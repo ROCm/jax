@@ -1,3 +1,0 @@
-CompileFlags:
-  Add: ["--gcc-toolchain=/opt/rh/gcc-toolset-14/root/usr/"]
-
