@@ -272,8 +272,9 @@ def setup_repos_ubuntu(rocm_version_str):
     if rv.rev == 0:
         rocm_version_str = "%d.%d" % (rv.major, rv.minor)
 
-    # Update indexes.
+    # update indexes before prereq install, for fresh docker images
     subprocess.check_call(["apt-get", "update"])
+
     s = get_system()
     s.install_packages(["wget", "sudo", "gnupg"])
 
@@ -300,11 +301,17 @@ def setup_repos_ubuntu(rocm_version_str):
     with open("/etc/apt/preferences.d/rocm-pin-600", "w") as fd:
         fd.write(APT_RADEON_PIN_CONTENT)
 
-    # update indexes
+    # update indexes after new repo install
     subprocess.check_call(["apt-get", "update"])
 
 
 def setup_repos_el8(rocm_version_str):
+
+    rv = parse_version(rocm_version_str)
+
+    # if X.Y.0 -> repo url version should be X.Y
+    if rv.rev == 0:
+        rocm_version_str = "%d.%d" % (rv.major, rv.minor)
 
     with open("/etc/yum.repos.d/rocm.repo", "w") as rfd:
         rfd.write(
