@@ -240,12 +240,16 @@ def trace_context():
           disable_jit.value,
           debug_key_reuse.value,
           jax_xla_profile_version.value,
+          _check_rep.value,
           # Technically this affects jaxpr->stablehlo lowering, not tracing.
           hlo_source_file_canonicalization_regex.value,
           pgle_profiling_runs.value,
           enable_pgle.value,
           use_shardy_partitioner.value,
-          use_high_dynamic_range_gumbel.value)
+          use_high_dynamic_range_gumbel.value,
+          error_checking_behavior_nan.value,
+          error_checking_behavior_divide.value,
+          error_checking_behavior_oob.value)
 
 config = Config()
 
@@ -356,7 +360,7 @@ UPGRADE_BOOL_HELP = (
     " This will be enabled by default in future versions of JAX, at which "
     "point all uses of the flag will be considered deprecated (following "
     "the `API compatibility policy "
-    "<https://jax.readthedocs.io/en/latest/api_compatibility.html>`_).")
+    "<https://docs.jax.dev/en/latest/api_compatibility.html>`_).")
 
 UPGRADE_BOOL_EXTRA_DESC = " (transient)"
 
@@ -908,7 +912,7 @@ jax_export_calling_convention_version = int_state(
         'The calling convention version number to use for exporting. This must be '
         'within the range of versions supported by the tf.XlaCallModule '
         'used in your deployment environment. '
-        'See https://jax.readthedocs.io/en/latest/export/shape_poly.html#calling-convention-versions.'
+        'See https://docs.jax.dev/en/latest/export/shape_poly.html#calling-convention-versions.'
     )
 )
 
@@ -917,7 +921,7 @@ export_ignore_forward_compatibility = bool_state(
     default=bool_env('JAX_EXPORT_IGNORE_FORWARD_COMPATIBILIY', False),
     help=(
         'Whether to ignore the forward compatibility lowering rules. '
-        'See https://jax.readthedocs.io/en/latest/export/export.html#compatibility-guarantees-for-custom-calls.'
+        'See https://docs.jax.dev/en/latest/export/export.html#compatibility-guarantees-for-custom-calls.'
     )
 )
 
@@ -995,7 +999,7 @@ explain_cache_misses = bool_state(
     name='jax_explain_cache_misses',
     default=False,
     help=('Each time there is a miss on one of the main caches (e.g. the '
-          'tracing cache), log an explanation.. Logging is performed with '
+          'tracing cache), log an explanation. Logging is performed with '
           '`logging`. When this option is set, the log level is WARNING; '
           'otherwise the level is DEBUG.'))
 
@@ -1096,11 +1100,12 @@ varying_axes_in_types = bool_state(
           ' transpose rewrite machinery in shard_map'),
     include_in_jit_key=True)
 
-data_dependent_tracing_fallback = bool_state(
-    name='jax_data_dependent_tracing_fallback',
+# TODO make it so people don't use this, this is internal...
+_check_rep = bool_state(
+    name='check_rep',
     default=False,
-    help=('When True, falls back to trace dispatch based on data dependence '
-          'instead of throwing an escaped tracer error.'))
+    help='internal implementation detail of shard_map, DO NOT USE',
+    include_in_jit_key=True)
 
 softmax_custom_jvp = bool_state(
     name='jax_softmax_custom_jvp',
@@ -1317,6 +1322,41 @@ disallow_mesh_context_manager = bool_state(
     ),
 )
 
+# TODO(ayx): Move these 3 flags out of config once we have a user-level
+# extension mechanism for adding contexts to which the jit cache is sensitive.
+error_checking_behavior_nan = enum_state(
+    name='jax_error_checking_behavior_nan',
+    enum_values=['ignore', 'raise'],
+    default='ignore',
+    help=(
+        'Specify the behavior when a NaN is encountered. Options are "ignore"'
+        ' or "raise".'
+    ),
+    include_in_jit_key=True,
+)
+
+error_checking_behavior_divide = enum_state(
+    name='jax_error_checking_behavior_divide',
+    enum_values=['ignore', 'raise'],
+    default='ignore',
+    help=(
+        'Specify the behavior when a divide by zero is encountered. Options are'
+        ' "ignore" or "raise".'
+    ),
+    include_in_jit_key=True,
+)
+
+error_checking_behavior_oob = enum_state(
+    name='jax_error_checking_behavior_oob',
+    enum_values=['ignore', 'raise'],
+    default='ignore',
+    help=(
+        'Specify the behavior when an out of bounds access is encountered.'
+        ' Options are "ignore" or "raise".'
+    ),
+    include_in_jit_key=True,
+)
+
 def _update_x64_global(val):
   jax_jit.global_state().enable_x64 = val
 
@@ -1474,13 +1514,6 @@ eager_constant_folding = bool_state(
     help=('Attempt constant folding during staging.'),
     include_in_jit_key=True)
 
-# This flag is temporary during rollout of the remat barrier.
-# TODO(parkers): Remove if there are no complaints.
-remat_opt_barrier = bool_state(
-    name='jax_remat_opt_barrier',
-    default=True,
-    help=('Enables using optimization-barrier op for lowering remat.'))
-
 enable_remat_opt_pass = bool_state(
     name='jax_compiler_enable_remat_pass',
     default=True,
@@ -1488,13 +1521,6 @@ enable_remat_opt_pass = bool_state(
           'Useful to allow XLA to automatically trade off memory and '
           'compute when encountering OOM errors. However, you are '
           'likely to get better results manually with jax.checkpoint'))
-
-# TODO(sharadmv,mattjj): set default to True, then remove
-eager_pmap = bool_state(
-    name='jax_eager_pmap',
-    default=True,
-    upgrade=True,
-    help='Enable eager-mode pmap when jax_disable_jit is activated.')
 
 no_tracing = bool_state(
     name='jax_no_tracing',
@@ -1650,7 +1676,7 @@ def transfer_guard(new_val: str) -> Iterator[None]:
   """A contextmanager to control the transfer guard level for all transfers.
 
   For more information, see
-  https://jax.readthedocs.io/en/latest/transfer_guard.html
+  https://docs.jax.dev/en/latest/transfer_guard.html
 
   Args:
     new_val: The new thread-local transfer guard level for all transfers.
