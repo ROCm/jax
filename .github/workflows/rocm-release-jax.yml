@@ -31,6 +31,11 @@ on:
         required: false
         default: "ubuntu:22.04"
         type: string
+      publish_wheels:
+        description: "Should this job publish wheels to PyPI at the end of its run?"
+        required: true
+        type: boolean
+        default: false
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
@@ -73,24 +78,15 @@ jobs:
         run: |
           pushd $WORKSPACE_DIR
           # Let ci_build script do the build
-          python3 ./build/rocm/ci_build \
+            python3 ./build/rocm/ci_build \
             --compiler clang \
-            --base-docker "ubuntu:22.04" \
-            --python-versions 3.10.12 \
-            --rocm-version 6.3.3 \
-            --rocm-build-job "" \
-            --rocm-build-num "" \
+            --base-docker ${{ inputs.base_docker }}
+            --python-versions ${{ inputs.python_version }} \
+            --rocm-version ${{ inputs.rocm_version }} \
+            --rocm-build-job ${{ inputs.rocm_build_job_name }} \
+            --rocm-build-num ${{ inputs.rocm_build_job_num }} \
             dist_docker \
             --image-tag $RELEASE_DOCKER_IMG_NAME
-            #python3 ./build/rocm/ci_build \
-            #--compiler clang \
-            #--base-docker ${{ inputs.base_docker }}
-            #--python-versions ${{ inputs.python_version }} \
-            #--rocm-version ${{ inputs.rocm_version }} \
-            #--rocm-build-job ${{ inputs.rocm_build_job_name }} \
-            #--rocm-build-num ${{ inputs.rocm_build_job_num }} \
-            #dist_docker \
-            #--image-tag $RELEASE_DOCKER_IMG_NAME
       - name: Archive wheels to Github
         uses: actions/upload-artifact@v4
         with:
@@ -111,9 +107,7 @@ jobs:
           path: ./${{ env.WORKSPACE_DIR }}/logs/final_compiled_report.json
           if-no-files-found: error
       - name: Publish wheels to PyPI
+        if: ${{ inputs.publish_wheels }}
         run: |
           echo "Not implemeneted yet"
-      - name: Publish Docker image to Docker Hub
-        run: |
-          echo "Not implemented yet"
 
