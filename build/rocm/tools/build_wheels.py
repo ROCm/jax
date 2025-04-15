@@ -105,7 +105,7 @@ def build_jaxlib_wheel(
         "python",
         "build/build.py",
         "build",
-        "--wheels=jaxlib,jax-rocm-plugin,jax-rocm-pjrt",
+        "--wheels=jax-rocm-plugin,jax-rocm-pjrt",
         "--rocm_path=%s" % rocm_path,
         "--rocm_version=60",
         "--use_clang=%s" % use_clang,
