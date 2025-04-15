@@ -51,15 +51,17 @@ from jax._src import dtypes as _dtypes
 from jax._src import lib as _jaxlib
 from jax._src import monitoring
 from jax._src import test_warning_util
+from jax._src.typing import ArrayLike, DTypeLike
 from jax._src import xla_bridge
 from jax._src import util
 from jax._src import mesh as mesh_lib
 from jax._src.cloud_tpu_init import running_in_cloud_tpu_vm
 from jax._src.interpreters import mlir
+from jax._src.lib import jaxlib_extension_version
 from jax._src.numpy.util import promote_dtypes, promote_dtypes_inexact
 from jax._src.public_test_util import (  # noqa: F401
     _assert_numpy_allclose, _check_dtypes_match, _default_tolerance, _dtype, check_close, check_grads,
-    check_jvp, check_vjp, default_gradient_tolerance, default_tolerance, rand_like, tolerance)
+    check_jvp, check_vjp, default_gradient_tolerance, default_tolerance, rand_like, tolerance, ToleranceDict)
 from jax._src.util import unzip2
 from jax.tree_util import tree_all, tree_flatten, tree_map, tree_unflatten
 import numpy as np
@@ -89,7 +91,7 @@ _MAX_CASES_SAMPLING_RETRIES = config.int_flag(
   'sampling process is terminated.'
 )
 
-_SKIP_SLOW_TESTS = config.bool_flag(
+SKIP_SLOW_TESTS = config.bool_flag(
     'jax_skip_slow_tests',
     config.bool_env('JAX_SKIP_SLOW_TESTS', False),
     help='Skip tests marked as slow (> 5 sec).'
@@ -131,10 +133,10 @@ kSanitizeNameRE = re.compile(r"[ \"'\[\](){}<>=,._]+")
 def sanitize_test_name(s: str) -> str:
   return kSanitizeNameRE.sub("_", s)
 
-def num_float_bits(dtype):
+def num_float_bits(dtype: DTypeLike) -> int:
   return _dtypes.finfo(_dtypes.canonicalize_dtype(dtype)).bits
 
-def to_default_dtype(arr):
+def to_default_dtype(arr: ArrayLike) -> np.ndarray:
   """Convert a value to an array with JAX's default dtype.
 
   This is generally used for type conversions of values returned by numpy functions,
@@ -145,7 +147,7 @@ def to_default_dtype(arr):
   dtype = _dtypes._default_types.get(arr.dtype.kind)
   return arr.astype(_dtypes.canonicalize_dtype(dtype)) if dtype else arr
 
-def with_jax_dtype_defaults(func, use_defaults=True):
+def with_jax_dtype_defaults(func: Callable[..., Any], use_defaults: bool = True):
   """Return a version of a function with outputs that match JAX's default dtypes.
 
   This is generally used to wrap numpy functions within tests, in order to make
@@ -168,7 +170,7 @@ def with_jax_dtype_defaults(func, use_defaults=True):
       return tree_map(f, result, use_defaults)
   return wrapped
 
-def is_sequence(x):
+def is_sequence(x: Any) -> bool:
   try:
     iter(x)
   except TypeError:
@@ -176,14 +178,16 @@ def is_sequence(x):
   else:
     return True
 
-def _normalize_tolerance(tol):
+def _normalize_tolerance(tol: int | float | ToleranceDict | None) -> ToleranceDict:
   tol = tol or 0
   if isinstance(tol, dict):
     return {np.dtype(k): v for k, v in tol.items()}
   else:
     return dict.fromkeys(_default_tolerance, tol)
 
-def join_tolerance(tol1, tol2):
+def join_tolerance(
+    tol1: int | float | ToleranceDict | None,
+    tol2: int | float | ToleranceDict | None) -> ToleranceDict:
   tol1 = _normalize_tolerance(tol1)
   tol2 = _normalize_tolerance(tol2)
   out = tol1
@@ -192,7 +196,7 @@ def join_tolerance(tol1, tol2):
   return out
 
 
-def check_eq(xs, ys, err_msg=''):
+def check_eq(xs: Any, ys: Any, err_msg: str = '') -> None:
   assert_close = partial(_assert_numpy_allclose, err_msg=err_msg)
   tree_all(tree_map(assert_close, xs, ys))
 
@@ -373,10 +377,13 @@ def device_under_test():
 
 def supported_dtypes():
   if device_under_test() == "tpu":
-    types = {np.bool_, np.int8, np.int16, np.int32, np.uint8, np.uint16,
-             np.uint32, _dtypes.bfloat16, np.float16, np.float32, np.complex64,
+    types = {np.bool_, _dtypes.int4, np.int8, np.int16, np.int32,
+             _dtypes.uint4, np.uint8, np.uint16, np.uint32,
+             _dtypes.bfloat16, np.float16, np.float32, np.complex64,
              _dtypes.float8_e4m3fn, _dtypes.float8_e4m3b11fnuz,
              _dtypes.float8_e5m2}
+    if jaxlib_extension_version < 327:
+      types -= {_dtypes.int4, _dtypes.uint4}
   elif device_under_test() == "gpu":
     types = {np.bool_, np.int8, np.int16, np.int32, np.int64,
              np.uint8, np.uint16, np.uint32, np.uint64,
@@ -386,10 +393,12 @@ def supported_dtypes():
   elif device_under_test() == "METAL":
     types = {np.int32, np.uint32, np.float32}
   else:
-    types = {np.bool_, np.int8, np.int16, np.int32, np.int64,
-             np.uint8, np.uint16, np.uint32, np.uint64,
+    types = {np.bool_, _dtypes.int4, np.int8, np.int16, np.int32, np.int64,
+             _dtypes.uint4, np.uint8, np.uint16, np.uint32, np.uint64,
              _dtypes.bfloat16, np.float16, np.float32, np.float64,
              np.complex64, np.complex128}
+    if jaxlib_extension_version < 327:
+      types -= {_dtypes.int4, _dtypes.uint4}
   if not config.enable_x64.value:
     types -= {np.uint64, np.int64, np.float64, np.complex128}
   return types
@@ -432,10 +441,10 @@ def get_tpu_version() -> int:
   if device_under_test() != "tpu":
     raise ValueError("Device is not TPU")
   kind = jax.devices()[0].device_kind
-  if kind.endswith(' lite'):
-    kind = kind[:-len(' lite')]
-  assert kind[:-1] == "TPU v", kind
-  return int(kind[-1])
+  match = re.match(r"TPU[^\d]*(\d+)", kind)
+  if match is None:
+    raise ValueError(f"Device kind {kind} is not supported")
+  return int(match.group(1))
 
 def is_device_tpu_at_least(version: int) -> bool:
   if device_under_test() != "tpu":
@@ -1348,15 +1357,15 @@ class JaxTestCase(parameterized.TestCase):
     else:
       return self.assertWarnsRegex(DeprecationWarning, message)
 
-  def assertArraysEqual(self, x, y, *, check_dtypes=True, err_msg='',
+  def assertArraysEqual(self, actual, desired, *, check_dtypes=True, err_msg='',
                         allow_object_dtype=False, verbose=True):
     """Assert that x and y arrays are exactly equal."""
     if check_dtypes:
-      self.assertDtypesMatch(x, y)
-    x = np.asarray(x)
-    y = np.asarray(y)
+      self.assertDtypesMatch(actual, desired)
+    actual = np.asarray(actual)
+    desired = np.asarray(desired)
 
-    if (not allow_object_dtype) and (x.dtype == object or y.dtype == object):
+    if (not allow_object_dtype) and (actual.dtype == object or desired.dtype == object):
       # See https://github.com/jax-ml/jax/issues/17867
       raise TypeError(
         "assertArraysEqual may be poorly behaved when np.asarray casts to dtype=object. "
@@ -1366,57 +1375,57 @@ class JaxTestCase(parameterized.TestCase):
 
     # Work around https://github.com/numpy/numpy/issues/18992
     with np.errstate(over='ignore'):
-      np.testing.assert_array_equal(x, y, err_msg=err_msg,
+      np.testing.assert_array_equal(actual, desired, err_msg=err_msg,
                                     verbose=verbose)
 
-  def assertArraysAllClose(self, x, y, *, check_dtypes=True, atol=None,
+  def assertArraysAllClose(self, actual, desired, *, check_dtypes=True, atol=None,
                            rtol=None, err_msg=''):
-    """Assert that x and y are close (up to numerical tolerances)."""
-    self.assertEqual(x.shape, y.shape)
-    atol = max(tolerance(_dtype(x), atol), tolerance(_dtype(y), atol))
-    rtol = max(tolerance(_dtype(x), rtol), tolerance(_dtype(y), rtol))
+    """Assert that actual and desired are close (up to numerical tolerances)."""
+    self.assertEqual(actual.shape, desired.shape)
+    atol = max(tolerance(_dtype(actual), atol), tolerance(_dtype(desired), atol))
+    rtol = max(tolerance(_dtype(actual), rtol), tolerance(_dtype(desired), rtol))
 
-    _assert_numpy_allclose(x, y, atol=atol, rtol=rtol, err_msg=err_msg)
+    _assert_numpy_allclose(actual, desired, atol=atol, rtol=rtol, err_msg=err_msg)
 
     if check_dtypes:
-      self.assertDtypesMatch(x, y)
+      self.assertDtypesMatch(actual, desired)
 
-  def assertDtypesMatch(self, x, y, *, canonicalize_dtypes=True):
+  def assertDtypesMatch(self, actual, desired, *, canonicalize_dtypes=True):
     if not config.enable_x64.value and canonicalize_dtypes:
-      self.assertEqual(_dtypes.canonicalize_dtype(_dtype(x), allow_extended_dtype=True),
-                       _dtypes.canonicalize_dtype(_dtype(y), allow_extended_dtype=True))
+      self.assertEqual(_dtypes.canonicalize_dtype(_dtype(actual), allow_extended_dtype=True),
+                       _dtypes.canonicalize_dtype(_dtype(desired), allow_extended_dtype=True))
     else:
-      self.assertEqual(_dtype(x), _dtype(y))
+      self.assertEqual(_dtype(actual), _dtype(desired))
 
-  def assertAllClose(self, x, y, *, check_dtypes=True, atol=None, rtol=None,
+  def assertAllClose(self, actual, desired, *, check_dtypes=True, atol=None, rtol=None,
                      canonicalize_dtypes=True, err_msg=''):
-    """Assert that x and y, either arrays or nested tuples/lists, are close."""
-    if isinstance(x, dict):
-      self.assertIsInstance(y, dict)
-      self.assertEqual(set(x.keys()), set(y.keys()))
-      for k in x.keys():
-        self.assertAllClose(x[k], y[k], check_dtypes=check_dtypes, atol=atol,
+    """Assert that actual and desired, either arrays or nested tuples/lists, are close."""
+    if isinstance(actual, dict):
+      self.assertIsInstance(desired, dict)
+      self.assertEqual(set(actual.keys()), set(desired.keys()))
+      for k in actual.keys():
+        self.assertAllClose(actual[k], desired[k], check_dtypes=check_dtypes, atol=atol,
                             rtol=rtol, canonicalize_dtypes=canonicalize_dtypes,
                             err_msg=err_msg)
-    elif is_sequence(x) and not hasattr(x, '__array__'):
-      self.assertTrue(is_sequence(y) and not hasattr(y, '__array__'))
-      self.assertEqual(len(x), len(y))
-      for x_elt, y_elt in zip(x, y):
-        self.assertAllClose(x_elt, y_elt, check_dtypes=check_dtypes, atol=atol,
+    elif is_sequence(actual) and not hasattr(actual, '__array__'):
+      self.assertTrue(is_sequence(desired) and not hasattr(desired, '__array__'))
+      self.assertEqual(len(actual), len(desired))
+      for actual_elt, desired_elt in zip(actual, desired):
+        self.assertAllClose(actual_elt, desired_elt, check_dtypes=check_dtypes, atol=atol,
                             rtol=rtol, canonicalize_dtypes=canonicalize_dtypes,
                             err_msg=err_msg)
-    elif hasattr(x, '__array__') or np.isscalar(x):
-      self.assertTrue(hasattr(y, '__array__') or np.isscalar(y))
+    elif hasattr(actual, '__array__') or np.isscalar(actual):
+      self.assertTrue(hasattr(desired, '__array__') or np.isscalar(desired))
       if check_dtypes:
-        self.assertDtypesMatch(x, y, canonicalize_dtypes=canonicalize_dtypes)
-      x = np.asarray(x)
-      y = np.asarray(y)
-      self.assertArraysAllClose(x, y, check_dtypes=False, atol=atol, rtol=rtol,
+        self.assertDtypesMatch(actual, desired, canonicalize_dtypes=canonicalize_dtypes)
+      actual = np.asarray(actual)
+      desired = np.asarray(desired)
+      self.assertArraysAllClose(actual, desired, check_dtypes=False, atol=atol, rtol=rtol,
                                 err_msg=err_msg)
-    elif x == y:
+    elif actual == desired:
       return
     else:
-      raise TypeError((type(x), type(y)))
+      raise TypeError((type(actual), type(desired)))
 
   def assertMultiLineStrippedEqual(self, expected, what):
     """Asserts two strings are equal, after dedenting and stripping each line."""
@@ -1430,7 +1439,6 @@ class JaxTestCase(parameterized.TestCase):
       print(f"Found\n{what}\n")
     self.assertMultiLineEqual(expected_clean, what_clean,
                               msg=f"Found\n{what}\nExpecting\n{expected}")
-
 
   @contextmanager
   def assertNoWarnings(self):
@@ -1501,9 +1509,9 @@ class JaxTestCase(parameterized.TestCase):
     python_should_be_executing = False
     compiled_ans = cfun(*args)
 
-    self.assertAllClose(python_ans, monitored_ans, check_dtypes=check_dtypes,
+    self.assertAllClose(monitored_ans, python_ans, check_dtypes=check_dtypes,
                         atol=atol or tol, rtol=rtol or tol)
-    self.assertAllClose(python_ans, compiled_ans, check_dtypes=check_dtypes,
+    self.assertAllClose(compiled_ans, python_ans, check_dtypes=check_dtypes,
                         atol=atol or tol, rtol=rtol or tol)
 
     args = args_maker()
@@ -1514,7 +1522,7 @@ class JaxTestCase(parameterized.TestCase):
     python_should_be_executing = False
     compiled_ans = cfun(*args)
 
-    self.assertAllClose(python_ans, compiled_ans, check_dtypes=check_dtypes,
+    self.assertAllClose(compiled_ans, python_ans, check_dtypes=check_dtypes,
                         atol=atol or tol, rtol=rtol or tol)
 
   def _CheckAgainstNumpy(self, numpy_reference_op, lax_op, args_maker,
@@ -1523,7 +1531,7 @@ class JaxTestCase(parameterized.TestCase):
     args = args_maker()
     lax_ans = lax_op(*args)
     numpy_ans = numpy_reference_op(*args)
-    self.assertAllClose(numpy_ans, lax_ans, check_dtypes=check_dtypes,
+    self.assertAllClose(lax_ans, numpy_ans, check_dtypes=check_dtypes,
                         atol=atol or tol, rtol=rtol or tol,
                         canonicalize_dtypes=canonicalize_dtypes)
 
@@ -1630,15 +1638,11 @@ class _LazyDtypes:
       _dtypes.float8_e4m3fnuz,
       _dtypes.float8_e5m2,
       _dtypes.float8_e5m2fnuz,
+      _dtypes.float8_e3m4,
+      _dtypes.float8_e4m3,
+      _dtypes.float8_e8m0fnu,
+      _dtypes.float4_e2m1fn,
     ]
-    if _dtypes.float8_e3m4 is not None:
-      float_dtypes += [_dtypes.float8_e3m4]
-    if _dtypes.float8_e4m3 is not None:
-      float_dtypes += [_dtypes.float8_e4m3]
-    if _dtypes.float8_e8m0fnu is not None:
-      float_dtypes += [_dtypes.float8_e8m0fnu]
-    if _dtypes.float4_e2m1fn is not None:
-      float_dtypes += [_dtypes.float4_e2m1fn]
     return self.supported(float_dtypes)
 
   @_cached_property
