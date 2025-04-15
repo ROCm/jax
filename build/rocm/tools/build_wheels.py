@@ -86,7 +86,7 @@ def find_clang_path():
     return None
 
 
-def build_jaxlib_wheel(
+def build_plugin_wheels(
     jax_path, rocm_path, python_version, xla_path=None, compiler="gcc"
 ):
     use_clang = "true" if compiler == "clang" else "false"
@@ -105,7 +105,7 @@ def build_jaxlib_wheel(
         "python",
         "build/build.py",
         "build",
-        "--wheels=jaxlib,jax-rocm-plugin,jax-rocm-pjrt",
+        "--wheels=jax-rocm-plugin,jax-rocm-pjrt",
         "--rocm_path=%s" % rocm_path,
         "--rocm_version=60",
         "--use_clang=%s" % use_clang,
@@ -298,7 +298,7 @@ def main():
     update_rocm_targets(rocm_path, GPU_DEVICE_TARGETS)
 
     for py in python_versions:
-        build_jaxlib_wheel(args.jax_path, rocm_path, py, args.xla_path, args.compiler)
+        build_plugin_wheels(args.jax_path, rocm_path, py, args.xla_path, args.compiler)
         wheel_paths = find_wheels(os.path.join(args.jax_path, "dist"))
         for wheel_path in wheel_paths:
             # skip jax wheel since it is non-platform
