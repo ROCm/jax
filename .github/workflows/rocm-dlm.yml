@@ -1,0 +1,73 @@
+name: ROCm DLM Performance Evaluations
+
+on:
+  push:
+
+jobs:
+  build-and-test-jax:
+    runs-on: mi-250
+    strategy:
+      matrix:
+        python: ["3.12"]
+        rocm: ["6.4.0"]
+    env:
+      BASE_IMAGE: "ubuntu:22.04"
+      TEST_IMAGE: ubuntu-jax-${{ github.run_id }}_${{ github.run_number }}_${{ github.run_attempt }}
+      PYTHON_VERSION: ${{ matrix.python }}
+      ROCM_VERSION: ${{ matrix.rocm }}
+      WORKSPACE_DIR: workdir_${{ github.run_id }}_${{ github.run_number }}_${{ github.run_attempt }}
+
+    steps:
+      - name: Clean up old runs
+        run: |
+          set -e
+          echo "Cleaning up old workdirs..."
+          docker run -v "$(pwd):/jax" ubuntu /bin/bash -c "chown -R $UID /jax/workdir_* || true"
+          rm -rf workdir_* || true
+          ls -l
+
+      - name: Print system info
+        run: |
+          echo "System Info:"
+          whoami
+          printenv
+          df -h
+          rocm-smi || true
+
+      - name: Checkout JAX source
+        uses: actions/checkout@v4
+        with:
+          path: ${{ env.WORKSPACE_DIR }}
+
+      - name: Build JAX Docker Image
+        run: |
+          set -euxo pipefail
+          (
+            cd $WORKSPACE_DIR
+            python3 build/rocm/ci_build \
+              --rocm-version "$ROCM_VERSION" \
+              --base-docker "$BASE_IMAGE" \
+              --python-versions "$PYTHON_VERSION" \
+              --compiler=clang \
+              dist_docker \
+              --image-tag "$TEST_IMAGE"
+          )
+
+      - name: Clone ROCm DeepLearningModels repo
+        run: |
+          git clone https://github.com/ROCm/DeepLearningModels.git
+
+      - name: Set up Python venv and install madengine
+        run: |
+          python3 -m venv dlm_venv
+          . dlm_venv/bin/activate
+          pip install --upgrade pip
+          pip install -r DeepLearningModels/requirements.txt
+
+      - name: Run DLM Model with madengine
+        run: |
+          . dlm_venv/bin/activate
+          cd DeepLearningModels
+          madengine run \
+            --tags jax_resnet --live-output \
+            --additional-context "{\"docker_build_arg\": {\"BASE_DOCKER\": \"${TEST_IMAGE}\"}}"
