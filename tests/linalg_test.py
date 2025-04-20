@@ -2064,6 +2064,7 @@ class ScipyLinalgTest(jtu.JaxTestCase):
     cdtype=float_types + complex_types,
     rshape=[(), (3,), (7,), (4, 4), (2, 4, 0)],
     rdtype=float_types + complex_types + int_types)
+  @jtu.ignore_warning(category=FutureWarning, message="Don't treat future SciPy warning as error")
   def testToeplitzConstruction(self, rshape, rdtype, cshape, cdtype):
     if ((rdtype in [np.float64, np.complex128]
          or cdtype in [np.float64, np.complex128])
