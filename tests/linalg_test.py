@@ -361,7 +361,7 @@ class NumpyLinalgTest(jtu.JaxTestCase):
 
   @jtu.run_on_devices("cpu", "gpu")
   def testEigvalsInf(self):
-    self.skipTest("Skip test on ROCm")
+    #self.skipTest("Skip test on ROCm")
     # https://github.com/jax-ml/jax/issues/2661
     if jtu.test_device_matches(["gpu"]) and jtu.jaxlib_version() <= (0, 4, 35):
       self.skipTest("eig on GPU requires jaxlib version > 0.4.35")
@@ -2027,12 +2027,12 @@ class ScipyLinalgTest(jtu.JaxTestCase):
 
     self.assertAllClose(root, expected, check_dtypes=False)
 
-  @jtu.ignore_warning(category=FutureWarning, message="Don't treat future SciPy warning as error")
   @jtu.sample_product(
     cshape=[(), (4,), (8,), (4, 7), (2, 1, 5)],
     cdtype=float_types + complex_types,
     rshape=[(), (3,), (7,), (4, 4), (2, 4, 0)],
     rdtype=float_types + complex_types + int_types)
+  @jtu.ignore_warning(category=FutureWarning, message="Don't treat future SciPy warning as error")
   def testToeplitzConstruction(self, rshape, rdtype, cshape, cdtype):
     if ((rdtype in [np.float64, np.complex128]
          or cdtype in [np.float64, np.complex128])
