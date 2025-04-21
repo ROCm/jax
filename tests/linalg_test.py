@@ -361,7 +361,6 @@ class NumpyLinalgTest(jtu.JaxTestCase):
 
   @jtu.run_on_devices("cpu", "gpu")
   def testEigvalsInf(self):
-    #self.skipTest("Skip test on ROCm")
     # https://github.com/jax-ml/jax/issues/2661
     if jtu.test_device_matches(["gpu"]) and jtu.jaxlib_version() <= (0, 4, 35):
       self.skipTest("eig on GPU requires jaxlib version > 0.4.35")
