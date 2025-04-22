@@ -1,9 +1,12 @@
 """Update the third_party/xla/workspace.bzl file to use the given XLA commit"""
 
 import argparse
+import logging
 import os.path
 import re
 import subprocess
+
+logger = logging.getLogger(__name__)
 
 
 def update_xla_hash(xla_commit, xla_repo, workspace_file_path):
@@ -32,8 +35,8 @@ def update_xla_hash(xla_commit, xla_repo, workspace_file_path):
         text=True,
     )
     sha256_text, _ = sha256_proc.communicate()
-    # Sometimes sha256sum sticks some extra characters onto its output
-    # Just take the first 64, since sha256s area always 64 characters long
+    # sha256sum sticks some extra characters onto its output. Just take the
+    # first 64, since sha256s area always 64 characters long.
     sha256_text = sha256_text[:64]
     print(sha256_text)
 
@@ -60,10 +63,9 @@ def update_xla_hash(xla_commit, xla_repo, workspace_file_path):
             flags=re.M,
         )
         # Write to the workspace file
-        # workspace_file.seek(0)
-        # workspace_file.write(contents)
-        # workspace_file.truncate()
-        print(contents)
+        workspace_file.seek(0)
+        workspace_file.write(contents)
+        workspace_file.truncate()
 
 
 def parse_args():
@@ -77,12 +79,14 @@ def parse_args():
     arg_parser.add_argument(
         "--xla-repo",
         default="https://github.com/openxla/xla",
-        help="URL to the XLA repo where this branch or commit can be found",
+        help="URL to the XLA repo where this branch or commit can be "
+        "found. Defaults to https://github.com/openxla/xla.",
     )
     arg_parser.add_argument(
         "--workspace-file",
         default="./third_party/xla/workspace.bzl",
-        help="Path to the workspace.bzl file to put the hash",
+        help="Path to the workspace.bzl file to put the hash. Defaults to "
+        "./third_party/xla/workspace.bzl.",
     )
     return arg_parser.parse_args()
 
