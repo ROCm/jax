@@ -42,10 +42,13 @@ from jax.util import split_list
 import numpy as np
 import scipy.sparse
 from pathlib import Path
+import os
 
 def get_rocm_version():
-  version_path = Path("/opt/rocm/.info/version")
-  assert version_path.exists(), ("Expected ROCm version file")
+  rocm_path = os.environ.get("ROCM_PATH", "/opt/rocm")
+  version_path = Path(rocm_path) / ".info" / "version"
+  if not version_path.exists():
+    raise FileNotFoundError(f"Expected ROCm version file at {version_path}")
   version_str = version_path.read_text().strip()
   major, minor, *_ = version_str.split(".")
   return int(major), int(minor)
@@ -218,7 +221,7 @@ class cuSparseTest(sptu.SparseTestCase):
   def test_csr_matvec(self, shape, dtype, transpose):
     rocm_ver = get_rocm_version()
     if rocm_ver < (6, 4) and dtype in [np.float32, np.complex64]:
-      self.skipTest("ROCm <6.4 bug: NaN propagation when beta==0 (fixed in ROCm 6.4)")
+      self.skipTest("ROCm <6.4 bug: NaN propagation when beta==0 (fixed in ROCm 6.4.0)")
 
     op = lambda M: M.T if transpose else M
 
@@ -242,7 +245,7 @@ class cuSparseTest(sptu.SparseTestCase):
   def test_csr_matmat(self, shape, dtype, transpose):
     rocm_ver = get_rocm_version()
     if rocm_ver < (6, 4) and dtype in [np.float32, np.complex64]:
-      self.skipTest("ROCm <6.4 bug: NaN propagation when beta==0 (fixed in ROCm 6.4)")
+      self.skipTest("ROCm <6.4 bug: NaN propagation when beta==0 (fixed in ROCm 6.4.0)")
 
     op = lambda M: M.T if transpose else M
 
