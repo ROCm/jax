@@ -16,6 +16,8 @@ import contextlib
 from functools import partial
 import itertools
 import math
+import os
+from pathlib import Path
 
 from absl.testing import absltest
 from absl.testing import parameterized
@@ -41,8 +43,6 @@ import jax.numpy as jnp
 from jax.util import split_list
 import numpy as np
 import scipy.sparse
-from pathlib import Path
-import os
 
 def get_rocm_version():
   rocm_path = os.environ.get("ROCM_PATH", "/opt/rocm")
@@ -220,7 +220,7 @@ class cuSparseTest(sptu.SparseTestCase):
   )
   def test_csr_matvec(self, shape, dtype, transpose):
     rocm_ver = get_rocm_version()
-    if rocm_ver < (6, 4) and dtype in [np.float32, np.complex64]:
+    if rocm_ver < (6, 4) and dtype in (jtu.dtypes.floating + jtu.dtypes.complex):
       self.skipTest("ROCm <6.4 bug: NaN propagation when beta==0 (fixed in ROCm 6.4.0)")
 
     op = lambda M: M.T if transpose else M
@@ -244,7 +244,7 @@ class cuSparseTest(sptu.SparseTestCase):
   )
   def test_csr_matmat(self, shape, dtype, transpose):
     rocm_ver = get_rocm_version()
-    if rocm_ver < (6, 4) and dtype in [np.float32, np.complex64]:
+    if rocm_ver < (6, 4) and dtype in (jtu.dtypes.floating + jtu.dtypes.complex):
       self.skipTest("ROCm <6.4 bug: NaN propagation when beta==0 (fixed in ROCm 6.4.0)")
 
     op = lambda M: M.T if transpose else M
