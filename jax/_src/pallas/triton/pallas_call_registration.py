@@ -67,9 +67,12 @@ def pallas_call_lowering(
   if lowering_platform == "rocm":
     num_stages = triton_params.get("num_stages", 1)
     num_stages = 1 if num_stages is None else num_stages
+    waves_per_eu = triton_params.get("waves_per_eu", 1)
+    waves_per_eu = 1 if waves_per_eu is None else waves_per_eu
   else:
     num_stages = triton_params.get("num_stages", 3)
     num_stages = 3 if num_stages is None else num_stages
+    waves_per_eu = 1
 
   if debug:
     print(f"\nThe kernel jaxpr for pallas_call {name_and_src_info}:")
@@ -98,6 +101,7 @@ def pallas_call_lowering(
       ir=ir.StringAttr.get(buf.getvalue()),
       num_stages=mlir.i32_attr(num_stages),
       num_warps=mlir.i32_attr(num_warps),
+      waves_per_eu=mlir.i32_attr(waves_per_eu),
       grid_x=mlir.i32_attr(grid_x),
       grid_y=mlir.i32_attr(grid_y),
       grid_z=mlir.i32_attr(grid_z),
