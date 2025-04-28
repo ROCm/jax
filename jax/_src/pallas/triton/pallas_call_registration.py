@@ -67,12 +67,13 @@ def pallas_call_lowering(
   if lowering_platform == "rocm":
     num_stages = triton_params.get("num_stages", 1)
     num_stages = 1 if num_stages is None else num_stages
-    waves_per_eu = triton_params.get("waves_per_eu", 1)
-    waves_per_eu = 1 if waves_per_eu is None else waves_per_eu
+    #set default value set to 0 - same as no limits are given
+    waves_per_eu = triton_params.get("waves_per_eu", 0)
+    waves_per_eu = 0 if waves_per_eu is None else waves_per_eu
   else:
     num_stages = triton_params.get("num_stages", 3)
     num_stages = 3 if num_stages is None else num_stages
-    waves_per_eu = 1
+    waves_per_eu = 0
 
   if debug:
     print(f"\nThe kernel jaxpr for pallas_call {name_and_src_info}:")
