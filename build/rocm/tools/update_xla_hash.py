@@ -1,11 +1,14 @@
+#!/usr/bin/env python3
 """Update the third_party/xla/workspace.bzl file to use the given XLA commit"""
 
 import argparse
+import hashlib
 import logging
 import os.path
 import re
-import requests
 import subprocess
+
+import requests
 
 GH_COMMIT_URL = "https://api.github.com/repos/{0}/commits/{1}"
 GH_BASE_URL = "https://github.com"
@@ -31,7 +34,7 @@ def update_xla_hash(xla_commit, xla_repo, workspace_file_path, gh_token):
         )
         commit_info_resp.raise_for_status()
         logger.info("Found commit hash via GH API: %s", commit_info_resp.text)
-        xla_commit_hash = commit_info_resp.text
+        xla_commit_hash = commit_info_resp.text.strip()
     # If the user didn't give us a token make sure the commit hash looks hashy
     else:
         if not xla_commit.isalnum():
@@ -39,27 +42,12 @@ def update_xla_hash(xla_commit, xla_repo, workspace_file_path, gh_token):
         xla_commit_hash = xla_commit
 
     # Get the sha256 of this commit
-    curl_proc = subprocess.Popen(
-        args=[
-            "curl",
-            "--output",
-            "-",
-            "-L",
-            f"{GH_BASE_URL}/{xla_repo}/archive/{xla_commit_hash}.tar.gz",
-        ],
-        stdout=subprocess.PIPE,
-    )
-    sha256_proc = subprocess.Popen(
-        args=["sha256sum"],
-        stdin=curl_proc.stdout,
-        stdout=subprocess.PIPE,
-        text=True,
-    )
-    sha256_text, _ = sha256_proc.communicate()
-    # sha256sum sticks some extra characters onto its output. Just take the
-    # first 64, since sha256s area always 64 characters long.
-    sha256_text = sha256_text[:64]
-    print(sha256_text)
+    xla_zip_resp = requests.get(f"{GH_BASE_URL}/{xla_repo}/archive/{xla_commit_hash}.tar.gz")
+    xla_zip_resp.raise_for_status()
+    hasher = hashlib.sha256()
+    hasher.update(xla_zip_resp.content)
+    sha256_hex = hasher.hexdigest().strip()
+    logger.info("sha256: %s", sha256_hex)
 
     # Open the workspace file
     with open(workspace_file_path, "r+") as workspace_file:
@@ -73,7 +61,7 @@ def update_xla_hash(xla_commit, xla_repo, workspace_file_path, gh_token):
         )
         contents = re.sub(
             'XLA_SHA256 = "[a-z0-9]*"',
-            f'XLA_SHA256 = "{sha256_text}"',
+            f'XLA_SHA256 = "{sha256_hex}"',
             contents,
             flags=re.M,
         )
@@ -125,3 +113,4 @@ if __name__ == "__main__":
     args = parse_args()
     logging.basicConfig(level=args.loglevel)
     update_xla_hash(args.xla_commit, args.xla_repo, args.workspace_file, args.gh_token)
+
