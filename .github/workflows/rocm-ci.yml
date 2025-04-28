@@ -68,5 +68,5 @@ jobs:
           GFX: "gfx90a"
         run: |
           cd $WORKSPACE_DIR
-          python3 build/rocm/ci_build test $TEST_IMAGE --test-cmd "pytest tests/core_test.py"
+          python3 build/rocm/ci_build test $TEST_IMAGE --test-cmd "pytest tests/core_test.py tests/linalg_test.py"
 
