@@ -30,7 +30,7 @@ def update_xla_hash(xla_commit, xla_repo, workspace_file_path, gh_token):
                 "Accept": "application/vnd.github.sha",
                 "Authorization": f"Bearer {gh_token}",
                 "X-Github-Api-Version": "2022-11-28",
-            }
+            },
         )
         commit_info_resp.raise_for_status()
         logger.info("Found commit hash via GH API: %s", commit_info_resp.text)
@@ -38,11 +38,15 @@ def update_xla_hash(xla_commit, xla_repo, workspace_file_path, gh_token):
     # If the user didn't give us a token make sure the commit hash looks hashy
     else:
         if not xla_commit.isalnum():
-            raise ValueError(f"XLA commit hash '{xla_commit}' is not a valid commit hash")
+            raise ValueError(
+                f"XLA commit hash '{xla_commit}' is not a valid commit hash"
+            )
         xla_commit_hash = xla_commit
 
     # Get the sha256 of this commit
-    xla_zip_resp = requests.get(f"{GH_BASE_URL}/{xla_repo}/archive/{xla_commit_hash}.tar.gz")
+    xla_zip_resp = requests.get(
+        f"{GH_BASE_URL}/{xla_repo}/archive/{xla_commit_hash}.tar.gz"
+    )
     xla_zip_resp.raise_for_status()
     hasher = hashlib.sha256()
     hasher.update(xla_zip_resp.content)
@@ -87,7 +91,7 @@ def parse_args():
     )
     arg_parser.add_argument(
         "gh_token",
-        help="Github token to authenticate with. Either the GIHUB_TOKEN from Actions or your PAT."
+        help="Github token to authenticate with. Either the GIHUB_TOKEN from Actions or your PAT.",
     )
     arg_parser.add_argument(
         "--xla-repo",
@@ -100,11 +104,12 @@ def parse_args():
         help="Path to the workspace.bzl file to put the hash. Defaults to ./third_party/xla/workspace.bzl.",
     )
     arg_parser.add_argument(
-        "-v", "--verbose",
+        "-v",
+        "--verbose",
         help="Turn on debug logging",
         action="store_const",
         dest="loglevel",
-        const=logging.DEBUG
+        const=logging.DEBUG,
     )
     return arg_parser.parse_args()
 
@@ -113,4 +118,3 @@ if __name__ == "__main__":
     args = parse_args()
     logging.basicConfig(level=args.loglevel)
     update_xla_hash(args.xla_commit, args.xla_repo, args.workspace_file, args.gh_token)
-
