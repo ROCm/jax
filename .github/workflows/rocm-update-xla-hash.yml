@@ -2,7 +2,7 @@ name: ROCm Update XLA Hash
 
 on:
   workflow_dispatch:
-    inuts:
+    inputs:
       xla_hash:
         description: Full commit hash or branch name of the XLA commit
         type: string
@@ -22,8 +22,8 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
         with:
           path: ${{ env.WORKSPACE_DIR }}
-            - name: Generate an app token
-      - id: generate-token
+      - name: Generate an app token
+        id: generate-token
         uses: actions/create-github-app-token@v1
         with:
           app-id: ${{ vars.ROCM_REPO_MANAGEMENT_API_2_ID }}
