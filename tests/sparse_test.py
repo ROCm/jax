@@ -219,11 +219,8 @@ class cuSparseTest(sptu.SparseTestCase):
     transpose=[True, False],
   )
   def test_csr_matvec(self, shape, dtype, transpose):
-    if (
-        jtu.is_device_rocm() and
-        rocm_ver < (6, 4) and
-        dtype in (jtu.dtypes.floating + jtu.dtypes.complex)
-    ):
+    rocm_ver = get_rocm_version()
+    if rocm_ver < (6, 4) and dtype in (jtu.dtypes.floating + jtu.dtypes.complex):
       self.skipTest("ROCm <6.4 bug: NaN propagation when beta==0 (fixed in ROCm 6.4.0)")
 
     op = lambda M: M.T if transpose else M
@@ -246,11 +243,8 @@ class cuSparseTest(sptu.SparseTestCase):
       transpose=[True, False],
   )
   def test_csr_matmat(self, shape, dtype, transpose):
-    if (
-        jtu.is_device_rocm() and
-        rocm_ver < (6, 4) and
-        dtype in (jtu.dtypes.floating + jtu.dtypes.complex)
-    ):
+    rocm_ver = get_rocm_version()
+    if rocm_ver < (6, 4) and dtype in (jtu.dtypes.floating + jtu.dtypes.complex):
       self.skipTest("ROCm <6.4 bug: NaN propagation when beta==0 (fixed in ROCm 6.4.0)")
 
     op = lambda M: M.T if transpose else M
