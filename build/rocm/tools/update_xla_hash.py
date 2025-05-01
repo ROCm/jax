@@ -90,7 +90,7 @@ def parse_args():
         help="Branch or commit to put in the workspace file",
     )
     arg_parser.add_argument(
-        "gh_token",
+        "--gh-token",
         help="Github token to authenticate with. Either the GIHUB_TOKEN from Actions or your PAT.",
     )
     arg_parser.add_argument(
