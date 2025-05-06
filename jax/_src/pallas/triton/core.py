@@ -29,10 +29,13 @@ class TritonCompilerParams(pallas_core.CompilerParams):
       32 threads.
     num_stages: The number of stages the compiler should use for software
       pipelining loops.
+    waves_per_eu: Manages Vector General Purpose Registers (VGPR) usage to achieve
+      desired occupancy levels.
     serialized_metadata: Additional compiler metadata. This field is unstable
       and may be removed in the future.
   """
   PLATFORM: ClassVar[str] = "triton"
   num_warps: int | None = None
   num_stages: int | None = None
+  waves_per_eu: int | None = None
   serialized_metadata: bytes | None = None
