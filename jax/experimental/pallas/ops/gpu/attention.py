@@ -186,7 +186,14 @@ def mha(
   if grid_ is None:
     grid_ = (pl.cdiv(q_seq_len, block_q), batch_size, num_heads)
 
+  # cj401
+  num_warps = 2
   num_warps_ = num_warps
+  num_stages = 1
+    
+  block_q = 16
+  block_k = 32
+  
   if num_warps_ is None:
     num_warps_ = 4 if head_dim <= 64 else 8
   kernel = functools.partial(mha_forward_kernel, num_heads=num_heads,
@@ -244,6 +251,15 @@ def _mha_forward(
     debug: bool,
 ):
   del backward_pass_impl
+  
+  # cj401
+  num_warps = 2
+  num_warps_ = num_warps
+  num_stages = 1
+    
+  block_q = 16
+  block_k = 32
+  
   batch_size, q_seq_len, num_heads, head_dim = q.shape
   kv_seq_len = k.shape[1]
   block_q = min(block_q, q_seq_len)
@@ -253,7 +269,6 @@ def _mha_forward(
   if grid_ is None:
     grid_ = (pl.cdiv(q_seq_len, block_q), batch_size, num_heads)
 
-  num_warps_ = num_warps
   if num_warps_ is None:
     num_warps_ = 4 if head_dim <= 64 else 8
   kernel = functools.partial(mha_forward_kernel, num_heads=num_heads,
@@ -314,6 +329,14 @@ def _preprocess_backward_kernel(out_ref, dout_ref, delta_ref):
 @jax.named_scope("preprocess_backward")
 def _preprocess_backward(out, do, lse, block_q: int,
                          debug: bool, interpret: bool):
+  
+  # cj401
+  num_warps = 2
+  num_stages = 1
+    
+  block_q = 16
+  block_k = 32
+  
   batch_size, seq_len, num_heads, head_dim = out.shape
   out_shape = jax.ShapeDtypeStruct(lse.shape, lse.dtype)
   delta = pl.pallas_call(
@@ -328,7 +351,7 @@ def _preprocess_backward(out, do, lse, block_q: int,
           ),
       ],
       out_specs=pl.BlockSpec((None, None, block_q), lambda i, j, k: (j, k, i)),
-      compiler_params=dict(triton=dict(num_warps=4, num_stages=3)),
+      compiler_params=dict(triton=dict(num_warps=num_warps, num_stages=num_stages)),
       out_shape=out_shape,
       debug=debug,
       interpret=interpret,
@@ -501,7 +524,14 @@ def _mha_backward(sm_scale: float, causal: bool, block_q: int, block_k: int,
                   debug: bool, res, do):
   del num_warps, num_stages, grid
   q, k, v, segment_ids, out, lse = res
-
+  
+  # cj401
+  num_warps = 2
+  num_stages = 1
+    
+  block_q = 16
+  block_k = 32
+  
   if backward_pass_impl == "xla":
     return jax.vjp(
         functools.partial(mha_reference, sm_scale=sm_scale, causal=causal),
@@ -547,7 +577,10 @@ def _mha_backward(sm_scale: float, causal: bool, block_q: int, block_k: int,
       in_specs.insert(3, pl.BlockSpec((None, kv_seq_len), lambda i, j, _: (i, 0)))
 
     grid = (batch_size, num_heads, pl.cdiv(kv_seq_len, block_k))
-    num_warps = 8
+    # num_warps = 8
+      
+    # print(f'{block_k = } {block_q = }')
+    # print(f'{num_warps = } {num_stages = }')
     dq, dk, dv = pl.pallas_call(
         functools.partial(
             mha_backward_kernel,
@@ -579,7 +612,7 @@ def _mha_backward(sm_scale: float, causal: bool, block_q: int, block_k: int,
         name="mha_backward",
         debug=debug,
         interpret=interpret,
-        compiler_params=dict(triton=dict(num_warps=num_warps, num_stages=2)),
+        compiler_params=dict(triton=dict(num_warps=num_warps, num_stages=num_stages)),
     )(q, k, v, segment_ids, out, do, lse, delta)
   else:
     raise ValueError(f"Invalid backward pass implementation: {backward_pass_impl}")
