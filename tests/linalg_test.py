@@ -43,7 +43,7 @@ scipy_version = jtu.parse_version(scipy.version.version)
 
 T = lambda x: np.swapaxes(x, -1, -2)
 
-float_types = jtu.dtypes.floating
+float_types = jtu.dtypes.floating 
 complex_types = jtu.dtypes.complex
 int_types = jtu.dtypes.all_integer
 
@@ -502,16 +502,26 @@ class NumpyLinalgTest(jtu.JaxTestCase):
       )
 
   def testEighTinyNorm(self):
-    self.skipTest("Skip tests on ROCm")
     rng = jtu.rand_default(self.rng())
     a = rng((300, 300), dtype=np.float32)
     eps = jnp.finfo(a.dtype).eps
     a = eps * (a + np.conj(a.T))
     w, v = jnp.linalg.eigh(a)
     w = w.astype(v.dtype)
+    # Detect platform
+    backend = xla_bridge.get_backend()
+    is_gpu = backend.platform == "gpu"
+    is_rocm = "rocm" in backend.platform_version.lower()
+    reference = 80 * eps * np.linalg.norm(a)
+
+    # ROCm has reduced float32 precision in eigh for near-zero matrices.
+    # Increase epsilon to avoid false failures due to numerical error
+    # (This numerical issue is also observed with CUDA version 12.9.)
+    if is_gpu and is_rocm:
+        reference = max(reference, 2e-5)
     with jax.numpy_rank_promotion("allow"):
       self.assertLessEqual(
-          np.linalg.norm(np.matmul(a, v) - w * v), 80 * eps * np.linalg.norm(a)
+          np.linalg.norm(np.matmul(a, v) - w * v), reference
       )
 
   @jtu.sample_product(
