@@ -85,7 +85,6 @@ class DistributedTest(jtu.JaxTestCase):
 class MultiProcessGpuTest(jtu.JaxTestCase):
 
   def test_gpu_distributed_initialize(self):
-    self.skipTest("Skip on ROCm")
     if not jtu.test_device_matches(['gpu']):
       raise unittest.SkipTest('Tests only for GPU.')
 

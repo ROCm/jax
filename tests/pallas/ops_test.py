@@ -526,8 +526,6 @@ class OpsTest(PallasBaseTest):
   )
   @hp.given(hps.data())
   def test_unary_primitives(self, name, func, shape_dtype_strategy, data):
-    if name == "exp" or name == "logistic":
-      self.skipTest("Skip on ROCm")
     if self.INTERPRET:
       self.skipTest("This hypothesis test is slow, even more so in interpret mode.")
     # We want exact equality here to match how JAX lowers to XLA
@@ -866,8 +864,6 @@ class OpsTest(PallasBaseTest):
       for fn, dtype in itertools.product(*args)
   )
   def test_elementwise(self, fn, dtype):
-    if (dtype == "int32"): 
-      self.skipTest("Failing on ROCm")
     if not jax.config.x64_enabled and jnp.dtype(dtype).itemsize == 8:
       self.skipTest("64-bit types require x64_enabled")
 
@@ -1811,8 +1807,6 @@ class OpsTest(PallasBaseTest):
       ("min_f32", pl.atomic_min, np.array([-2, -1, 0, 1], np.float32), np.min),
   )
   def test_scalar_atomic(self, op, value, numpy_op):
-    if (numpy_op.__name__ == "max" or numpy_op.__name__ == "min"):
-      self.skipTest("Not supported on ROCm")
     # The Pallas TPU lowering currently supports only blocks of rank >= 1
     if jtu.test_device_matches(["tpu"]):
       self.skipTest("Not supported on TPU")
