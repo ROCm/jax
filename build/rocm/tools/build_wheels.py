@@ -30,12 +30,15 @@ import select
 import subprocess
 import shutil
 import sys
+from typing import List
 
 
 LOG = logging.getLogger(__name__)
 
 
-GPU_DEVICE_TARGETS = "gfx900 gfx906 gfx908 gfx90a gfx942 gfx1030 gfx1100 gfx1101 gfx1200 gfx1201"
+DEFAULT_GPU_DEVICE_TARGETS = (
+    "gfx906,gfx908,gfx90a,gfx942,gfx1030,gfx1100,gfx1101,gfx1200,gfx1201"
+)
 
 
 def build_rocm_path(rocm_version_str):
@@ -46,11 +49,11 @@ def build_rocm_path(rocm_version_str):
         return os.path.realpath("/opt/rocm")
 
 
-def update_rocm_targets(rocm_path, targets):
+def update_rocm_targets(rocm_path: str, targets: List[str]):
     target_fp = os.path.join(rocm_path, "bin/target.lst")
     version_fp = os.path.join(rocm_path, ".info/version")
     with open(target_fp, "w") as fd:
-        fd.write("%s\n" % targets)
+        fd.write("%s\n" % " ".join(targets))
 
     # mimic touch
     open(version_fp, "a").close()
@@ -251,7 +254,7 @@ def parse_args():
     )
     p.add_argument(
         "--python-versions",
-        default=["3.10.19,3.12"],
+        default="3.10.19,3.12",
         help="Comma separated CPython versions that wheels will be built and output for",
     )
     p.add_argument(
@@ -265,6 +268,11 @@ def parse_args():
         type=str,
         default="gcc",
         help="Compiler backend to use when compiling jax/jaxlib",
+    )
+    p.add_argument(
+        "--gpu-device-targets",
+        default=DEFAULT_GPU_DEVICE_TARGETS,
+        help="Comma separated list of GPU device targets passed from job",
     )
 
     p.add_argument("jax_path", help="Directory where JAX source directory is located")
@@ -286,6 +294,7 @@ def find_wheels(path):
 def main():
     args = parse_args()
     python_versions = args.python_versions.split(",")
+    gpu_device_targets = args.gpu_device_targets.split(",")
 
     print("ROCM_VERSION=%s" % args.rocm_version)
     print("PYTHON_VERSIONS=%r" % python_versions)
@@ -295,7 +304,7 @@ def main():
 
     rocm_path = build_rocm_path(args.rocm_version)
 
-    update_rocm_targets(rocm_path, GPU_DEVICE_TARGETS)
+    update_rocm_targets(rocm_path, gpu_device_targets)
 
     for py in python_versions:
         build_jaxlib_wheel(args.jax_path, rocm_path, py, args.xla_path, args.compiler)
