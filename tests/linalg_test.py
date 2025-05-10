@@ -2100,7 +2100,6 @@ class LaxLinalgTest(jtu.JaxTestCase):
     sort_eigenvalues=[True, False],
   )
   def testEigh(self, n, dtype, lower, sort_eigenvalues):
-    self.skipTest("Skip tests on ROCm")
     rng = jtu.rand_default(self.rng())
     tol = 1e-3
     args_maker = lambda: [rng((n, n), dtype)]
