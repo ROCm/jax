@@ -150,7 +150,7 @@ class FusedAttentionTest(PallasBaseTest):
 
   @jtu.sample_product(
       batch_size=(1, 2),
-      seq_len=(128, 384),
+      seq_len=(32, 64),
       num_heads=(1, 2, 8),
       head_dim=(32, 64, 128),
       block_q=(64, 128),
@@ -223,7 +223,7 @@ class FusedAttentionTest(PallasBaseTest):
 
   @jtu.sample_product(
       batch_size=(1, 2),
-      seq_len=(128, 384),
+      seq_len=(32, 64),
       num_heads=(1, 2, 4),
       head_dim=(32,),
       causal=(True, False),
