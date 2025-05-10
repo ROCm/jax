@@ -195,7 +195,6 @@ class PrimitiveTest(jtu.JaxTestCase):
     self.export_and_compare_to_native(f, x)
 
   def test_random_with_threefry_gpu_kernel_lowering(self):
-    self.skipTest("Skip test on ROCm")
     # On GPU we use a custom call for threefry2x32
     with config.threefry_gpu_kernel_lowering(True):
       def f(x):
