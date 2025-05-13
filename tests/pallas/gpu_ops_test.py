@@ -148,9 +148,12 @@ class FusedAttentionTest(PallasBaseTest):
     if jtu.test_device_matches(["tpu"]):
       self.skipTest("Not intended for TPU")
 
+  # Sequence length is reduced for ROCm due to large dimension not
+  # fitting in shared memory. Higher dimension causes "XlaRuntimeError:
+  # RESOURCE_EXHAUSTED: Shared memory size limit exceeded" error.
   @jtu.sample_product(
       batch_size=(1, 2),
-      seq_len=(32, 64),
+      seq_len=(32, 64) if jtu.is_device_rocm else (128, 384),
       num_heads=(1, 2, 8),
       head_dim=(32, 64, 128),
       block_q=(64, 128),
@@ -221,9 +224,12 @@ class FusedAttentionTest(PallasBaseTest):
     o_ref = attention.mha_reference(q, k, v, segment_ids, causal=causal)
     np.testing.assert_allclose(o, o_ref, atol=0.05)
 
+  # Sequence length is reduced for ROCm due to large dimension not
+  # fitting in shared memory. Higher dimension causes "XlaRuntimeError:
+  # RESOURCE_EXHAUSTED: Shared memory size limit exceeded" error.
   @jtu.sample_product(
       batch_size=(1, 2),
-      seq_len=(32, 64),
+      seq_len=(32, 64) if jtu.is_device_rocm else (128, 384),
       num_heads=(1, 2, 4),
       head_dim=(32,),
       causal=(True, False),
