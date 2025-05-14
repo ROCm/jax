@@ -442,29 +442,6 @@ class CompatTest(bctu.CompatTestBase):
     self.run_one_test(func, data, rtol=rtol,
                       expect_current_custom_calls=info["custom_call_targets"])
 
-  # TODO(b/369826500): Remove legacy custom call test after mid March 2025.
-  @parameterized.named_parameters(
-      dict(testcase_name=f"_dtype={dtype_name}_{batched}",
-           dtype_name=dtype_name, batched=batched)
-      for dtype_name in ("f32",)
-      # For batched qr we use cublas_geqrf_batched/hipblas_geqrf_batched.
-      for batched in ("batched", "unbatched"))
-  def test_gpu_qr_solver_geqrf_legacy(self, dtype_name, batched):
-    if jtu.test_device_matches(["rocm"]):
-      data = self.load_testdata(rocm_qr_hipsolver_geqrf.data_2024_08_05[batched])
-      prefix = "hip"
-    elif jtu.test_device_matches(["cuda"]):
-      data = self.load_testdata(cuda_qr_cusolver_geqrf.data_2023_03_18[batched])
-      prefix = "cu"
-    else:
-      self.skipTest("Unsupported platform")
-    dtype = dict(f32=np.float32)[dtype_name]
-    rtol = dict(f32=1e-3)[dtype_name]
-    shape = dict(batched=(2, 3, 3), unbatched=(3, 3))[batched]
-    func = lambda: CompatTest.qr_harness(shape, dtype)
-    self.run_one_test(func, data, rtol=rtol, expect_current_custom_calls=[
-        f"{prefix}solver_geqrf_ffi", f"{prefix}solver_orgqr_ffi"])
-
   @parameterized.named_parameters(
       dict(testcase_name=f"_dtype={dtype_name}", dtype_name=dtype_name)
       for dtype_name in ("f32", "f64", "c64", "c128"))
