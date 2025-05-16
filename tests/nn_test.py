@@ -61,6 +61,8 @@ class NNFunctionsTest(jtu.JaxTestCase):
       impl=['cudnn', 'xla'],
   )
   def testDotProductAttention(self, dtype, group_num, use_vmap, impl):
+    if jtu.is_device_rocm:
+      self.skipTest("Skip on ROCm")
     if impl == 'cudnn' and not _is_required_cudnn_version_satisfied(8904):
       raise unittest.SkipTest("CUDA or cuDNN versions are not compatible.")
     if impl == 'cudnn' and dtype == jnp.float32:
