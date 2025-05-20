@@ -40,10 +40,20 @@ else:
   softmax = None
 import jax.numpy as jnp
 import numpy as np
-
+from pathlib import Path
 
 # TODO(sharadmv): Update signatures of pallas_call to correct inputs/outputs.
 # pylint: disable=no-value-for-parameter
+
+def get_rocm_version():
+  rocm_path = os.environ.get("ROCM_PATH", "/opt/rocm")
+  version_path = Path(rocm_path) / ".info" / "version"
+  if not version_path.exists():
+    raise FileNotFoundError(f"Expected ROCm version file at {version_path}")
+  version_str = version_path.read_text().strip()
+  major, minor, *_ = version_str.split(".")
+  return int(major), int(minor)
+
 
 config.parse_flags_with_absl()
 
@@ -149,11 +159,12 @@ class FusedAttentionTest(PallasBaseTest):
       self.skipTest("Not intended for TPU")
 
   # Sequence length is reduced for ROCm due to large dimension not
-  # fitting in shared memory. Higher dimension causes "XlaRuntimeError:
-  # RESOURCE_EXHAUSTED: Shared memory size limit exceeded" error.
+  # fitting in shared memory in ROCM versions below 6.5.0. Higher 
+  # dimension causes "XlaRuntimeError: RESOURCE_EXHAUSTED: Shared 
+  # memory size limit exceeded" error.
   @jtu.sample_product(
       batch_size=(1, 2),
-      seq_len=(32, 64) if jtu.is_device_rocm else (128, 384),
+      seq_len=(32, 64) if jtu.is_device_rocm and get_rocm_version() < (6, 5) else (128, 384),
       num_heads=(1, 2, 8),
       head_dim=(32, 64, 128),
       block_q=(64, 128),
