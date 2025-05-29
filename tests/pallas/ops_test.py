@@ -529,8 +529,6 @@ class OpsTest(PallasBaseTest):
   @hp.given(select_n_strategy(max_cases=2, min_rank=2, max_rank=4,
                               min_size_exp=1))
   def test_select_n(self, args):
-    if jtu.test_device_matches(["gpu"]):
-      self.skipTest("TODO: error on GPU, lowering bug for select_n")
     pred, *cases = args
     scalar_pred = not pred.shape
 
