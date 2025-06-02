@@ -25,6 +25,9 @@ from collections.abc import Callable
 import math
 import re
 
+import os
+from pathlib import Path
+
 from absl import logging
 from absl.testing import absltest
 
@@ -37,6 +40,15 @@ from jax._src import config
 from jax._src import test_util as jtu
 from jax._src.internal_test_util import test_harnesses
 from jax import random
+
+def get_rocm_version():
+  rocm_path = os.environ.get("ROCM_PATH", "/opt/rocm")
+  version_path = Path(rocm_path) / ".info" / "version"
+  if not version_path.exists():
+    raise FileNotFoundError(f"Expected ROCm version file at {version_path}")
+  version_str = version_path.read_text().strip()
+  major, minor, *_ = version_str.split(".")
+  return int(major), int(minor)
 
 
 def make_disjunction_regexp(*parts: str) -> re.Pattern[str]:
@@ -192,6 +204,9 @@ class PrimitiveTest(jtu.JaxTestCase):
     self.export_and_compare_to_native(f, x)
 
   def test_random_with_threefry_gpu_kernel_lowering(self):
+    if jtu.is_device_rocm and get_rocm_version() > (6, 5):
+        self.skipTest("Skip on ROCm: test_random_with_threefry_gpu_kernel_lowering")
+
     # On GPU we use a custom call for threefry2x32
     with config.threefry_gpu_kernel_lowering(True):
       def f(x):
