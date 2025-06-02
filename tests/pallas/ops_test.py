@@ -1487,7 +1487,6 @@ class OpsTest(PallasBaseTest):
   def test_binary(self, f, dtype):
     if jtu.is_device_rocm and f == jnp.bitwise_right_shift and dtype == "uint32":
         self.skipTest("Skip on ROCm: binary_bitwise_right_shift for uint32")
-
     self.skip_if_mosaic_gpu()
 
     if jtu.test_device_matches(["tpu"]) and jnp.dtype(dtype).itemsize == 2:
