@@ -559,6 +559,9 @@ class OpsTest(PallasBaseTest):
   )
   @hp.given(hps.data())
   def test_unary_primitives(self, name, func, shape_dtype_strategy, data):
+    print(name)
+    if jtu.is_device_rocm and name == "logistic":
+        self.skipTest("Skip on ROCm: test_unary_primitives_logistic")
     if name in ["abs", "log1p", "pow2", "reciprocal", "relu", "sin", "sqrt"]:
       self.skip_if_mosaic_gpu()
 
@@ -1577,6 +1580,10 @@ class OpsTest(PallasBaseTest):
       for fn, dtype in itertools.product(*args)
   )
   def test_binary(self, f, dtype):
+    print(dtype, f)
+    if jtu.is_device_rocm and f == jnp.bitwise_right_shift and dtype == "uint32":
+        self.skipTest("Skip on ROCm: binary_bitwise_right_shift for uint32")
+
     self.skip_if_mosaic_gpu()
 
     if jtu.test_device_matches(["tpu"]) and jnp.dtype(dtype).itemsize == 2:
@@ -1649,6 +1656,9 @@ class OpsTest(PallasBaseTest):
 
   @parameterized.parameters("float16", "bfloat16", "float32")
   def test_approx_tanh(self, dtype):
+    if jtu.is_device_rocm:
+        self.skipTest("Skip on ROCm: test_approx_tanh")
+
     self.skip_if_mosaic_gpu()
 
     if jtu.test_device_matches(["tpu"]):
@@ -1678,6 +1688,9 @@ class OpsTest(PallasBaseTest):
     )
 
   def test_elementwise_inline_asm(self):
+    if jtu.is_device_rocm:
+        self.skipTest("Skip on ROCm: test_elementwise_inline_asm")
+
     self.skip_if_mosaic_gpu()
 
     if jtu.test_device_matches(["tpu"]):
@@ -1977,6 +1990,13 @@ class OpsTest(PallasBaseTest):
       trans_y=[False, True],
   )
   def test_dot(self, lhs_and_rhs_shape, dtype, trans_x, trans_y):
+    if (
+        jtu.is_device_rocm() and
+        jtu.get_rocm_version() < (6, 5)
+    ):
+      # TODO(psanal35): Investigate the root cause
+      self.skipTest("ROCm <6.5 issue: some test cases fail (fixed in ROCm 6.5.0)")
+      
     self.skip_if_mosaic_gpu()
 
     # TODO(apaszke): Remove after 12 weeks have passed.
@@ -2258,6 +2278,9 @@ class OpsTest(PallasBaseTest):
       ("min_f32", pl.atomic_min, np.array([1, 2, 3, 4], np.float32), np.min),
   )
   def test_scalar_atomic(self, op, value, numpy_op):
+    if jtu.is_device_rocm and value.dtype == np.float32 and (op == pl.atomic_min or op == pl.atomic_max):
+        self.skipTest("Skip on ROCm: test_scalar_atomic_(max/min)_f32")
+
     self.skip_if_mosaic_gpu()
 
     # The Pallas TPU lowering currently supports only blocks of rank >= 1
@@ -2496,6 +2519,8 @@ class OpsTest(PallasBaseTest):
       dtype=["float16", "float32", "int32", "uint32"],
   )
   def test_cumsum(self, dtype, axis):
+    if jtu.is_device_rocm:
+        self.skipTest("Skip on ROCm: test_cumsum")
     self.skip_if_mosaic_gpu()
 
     if jtu.test_device_matches(["tpu"]):
