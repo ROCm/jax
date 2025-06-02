@@ -60,6 +60,7 @@ class MultiProcessGpuTest(jtu.JaxTestCase):
         env["JAX_PORT"] = str(port)
         env["NUM_TASKS"] = str(num_tasks)
         env["TASK"] = str(task)
+        env["JAX_PLATFORMS"] = 'gpu'
         if jtu.is_device_rocm():
           env["HIP_VISIBLE_DEVICES"] = ",".join(
               str((task * num_gpus_per_task) + i) for i in range(num_gpus_per_task))
@@ -106,6 +107,7 @@ class MultiProcessGpuTest(jtu.JaxTestCase):
         env["JAX_PORT"] = str(port)
         env["NUM_TASKS"] = str(num_tasks)
         env["TASK"] = str(task)
+        env["JAX_PLATFORMS"] = 'gpu'
         visible_devices = ",".join(
             str((task * num_gpus_per_task) + i) for i in range(num_gpus_per_task))
 
