@@ -1562,11 +1562,8 @@ class LaxBackedNumpyTests(jtu.JaxTestCase):
   )
   @jax.default_matmul_precision("float32")
   def testPoly(self, a_shape, dtype, rank):
-    if jtu.is_device_rocm and a_shape == (12,) and dtype == np.int32 and rank == 2:
-        self.skipTest("Skip on ROCm: testPoly: a_shape == (12,) and dtype == numpy.int32 and rank == 2")
-
-    if jtu.is_device_rocm and a_shape == (12,) and dtype == np.int8 and rank == 2:
-        self.skipTest("Skip on ROCm: testPoly: a_shape == (12,) and dtype == numpy.int8 and rank == 2")
+    if jtu.is_device_rocm and a_shape == (12,) and dtype in ( np.int32,  np.int8 )  and rank == 2:
+        self.skipTest(f"Skip on ROCm: testPoly: a_shape == (12,) and dtype == {dtype} and rank == 2")
 
     if jtu.is_device_rocm and a_shape == (6,) and dtype == np.float32 and rank == 2:
         self.skipTest("Skip on ROCm: testPoly: a_shape == (6,) and dtype == numpy.float32 and rank == 2")
