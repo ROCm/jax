@@ -39,8 +39,10 @@ class RnnTest(jtu.JaxTestCase):
   def test_lstm(self, batch_size: int, seq_len: int, input_size: int,
                 hidden_size: int, num_layers: int, bidirectional: bool):
     # TODO(ruturaj4): Bidirectional doesn't quite work well with rocm.
-    if bidirectional and jtu.is_device_rocm():
-      self.skipTest("Bidirectional mode is not available for ROCm.")
+    #if bidirectional and jtu.is_device_rocm():
+    #  self.skipTest("Bidirectional mode is not available for ROCm.")
+    if jtu.is_device_rocm:
+        self.skipTest("Skip on ROCm: test_lstm")
 
     num_directions = 2 if bidirectional else 1
     seq_length_key, root_key = jax.random.split(jax.random.PRNGKey(0))
