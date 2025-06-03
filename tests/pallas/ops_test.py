@@ -1844,6 +1844,52 @@ class OpsTest(PallasBaseTest):
     expected = jax.lax.broadcast_in_dim(x, out_shape, dims)
     np.testing.assert_allclose(f(x), expected)
 
+
+
+  def is_failing_case_for_test_dot(self, lhs_and_rhs_shape, dtype, trans_x=False, trans_y=False):
+    lhs_shape, rhs_shape = lhs_and_rhs_shape
+
+    return (
+      # Case 1: (16, 128) x (256, 128)^T — float32
+      (lhs_shape == (16, 128) and rhs_shape == (256, 128) and dtype == jnp.float32 and not trans_x and trans_y) or
+
+      # Case 2: (16, 128) x (128, 256) — float16
+      (lhs_shape == (16, 128) and rhs_shape == (128, 256) and dtype == jnp.float16 and not trans_x and not trans_y) or
+
+      # Case 3: (16, 128) x (256, 128)^T — float16
+      (lhs_shape == (16, 128) and rhs_shape == (256, 128) and dtype == jnp.float16 and not trans_x and trans_y) or
+
+      # Case 4: (16, 256) x (256, 128) — float32
+      (lhs_shape == (16, 256) and rhs_shape == (256, 128) and dtype == jnp.float32 and not trans_x and not trans_y) or
+
+      # Case 5: (16, 256) x (256, 128) — float16
+      (lhs_shape == (16, 256) and rhs_shape == (256, 128) and dtype == jnp.float16 and not trans_x and not trans_y) or
+
+      # Case 6: (128, 16) x (128, 256) — float32
+      (lhs_shape == (128, 16) and rhs_shape == (128, 256) and dtype == jnp.float32 and trans_x and not trans_y) or
+
+      # Case 7: (128, 16) x (128, 256) — float16
+      (lhs_shape == (128, 16) and rhs_shape == (128, 256) and dtype == jnp.float16 and trans_x and not trans_y) or
+
+      # Case 8: (128, 16) x (256, 128)^T — float32
+      (lhs_shape == (128, 16) and rhs_shape == (256, 128) and dtype == jnp.float32 and trans_x and trans_y) or
+
+      # Case 9: (128, 16) x (256, 128)^T — float16
+      (lhs_shape == (128, 16) and rhs_shape == (256, 128) and dtype == jnp.float16 and trans_x and trans_y) or
+
+      # Case 10: (256, 16) x (256, 128) — float32
+      (lhs_shape == (256, 16) and rhs_shape == (256, 128) and dtype == jnp.float32 and trans_x and not trans_y) or
+
+      # Case 11: (256, 16) x (256, 128) — float16
+      (lhs_shape == (256, 16) and rhs_shape == (256, 128) and dtype == jnp.float16 and trans_x and not trans_y) or
+
+      # Case 12: (128, 128) x (128, 128) — all combinations, float32 only
+      (lhs_shape == (128, 128) and rhs_shape == (128, 128) and dtype == jnp.float32) or
+
+      # Case 13: (16, 128) x (128, 256) — float32
+      (lhs_shape == (16, 128) and rhs_shape == (128, 256) and dtype == jnp.float32 and not trans_x and not trans_y)
+    )
+
   @parameterized.product(
       lhs_and_rhs_shape=[
           ((16, 16), (16, 16)),
