@@ -18,6 +18,8 @@ from collections.abc import Sequence
 import functools
 import itertools
 import math
+import os
+from pathlib import Path
 import sys
 from typing import Any
 import unittest
@@ -36,6 +38,15 @@ from jax.experimental import pallas as pl
 from jax.interpreters import partial_eval as pe
 import jax.numpy as jnp
 import numpy as np
+
+def get_rocm_version():
+  rocm_path = os.environ.get("ROCM_PATH", "/opt/rocm")
+  version_path = Path(rocm_path) / ".info" / "version"
+  if not version_path.exists():
+    raise FileNotFoundError(f"Expected ROCm version file at {version_path}")
+  version_str = version_path.read_text().strip()
+  major, minor, *_ = version_str.split(".")
+  return int(major), int(minor)
 
 if sys.platform != "win32":
   from jax.experimental.pallas import triton as plgpu
@@ -1553,7 +1564,13 @@ class OpsTest(PallasBaseTest):
       trans_y=[False, True],
   )
   def test_dot(self, lhs_and_rhs_shape, dtype, trans_x, trans_y):
-    self.skipTest("Skip dot tests for ROCm")
+    if (
+        jtu.is_device_rocm() and
+        get_rocm_version() < (6, 5)
+    ):
+      # TODO(psanal35): Investigate the root cause
+      self.skipTest("ROCm <6.5 issue: some test cases fail (fixed in ROCm 6.5.0)")
+
     # TODO(apaszke): Remove after 12 weeks have passed.
     if not jtu.if_cloud_tpu_at_least(2024, 12, 19):
       self.skipTest("Requires libtpu built after 2024-12-19")
@@ -1581,6 +1598,19 @@ class OpsTest(PallasBaseTest):
           math.prod(lhs_shape) + math.prod(rhs_shape) + math.prod(out_shape)
           > (256 * 256) * 2
       ):
+        self.skipTest("Shared memory size limit exceeded")
+      if (jtu.is_device_rocm() and (
+          lhs_and_rhs_shape in [
+            ((128, 16), (128, 256)),
+            ((16, 128), (128, 256)),
+            ((16, 128), (256, 128)),
+            ((16, 256), (256, 128)),
+            ((128, 16), (256, 128)),
+            ((256, 16), (256, 128)),
+          ] or (
+            lhs_and_rhs_shape == ((128, 128), (128, 128)) and
+            dtype == jnp.float32
+      ))):
         self.skipTest("Shared memory size limit exceeded")
       if min(*lhs_shape, *rhs_shape) < 16:
         self.skipTest("All dimensions of lhs and rhs must be >= 16")
