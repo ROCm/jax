@@ -34,7 +34,7 @@ cc_library(
     hdrs = [
         "//jaxlib/gpu:vendor.h",
     ],
-    defines = ["JAX_GPU_HIP=1"],
+    defines = ["JAX_GPU_HIP=1", "HIPBLAS_V2"],
     deps = [
         "@local_config_rocm//rocm:rocm_headers",
     ],
