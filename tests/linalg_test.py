@@ -17,8 +17,6 @@ import itertools
 from typing import Iterator
 from unittest import skipIf
 
-import os
-from pathlib import Path
 import numpy as np
 import scipy
 import scipy.linalg
@@ -36,16 +34,6 @@ from jax._src.lax import linalg as lax_linalg
 from jax._src import test_util as jtu
 from jax._src import xla_bridge
 from jax._src.numpy.util import promote_dtypes_inexact
-
-
-def get_rocm_version():
-  rocm_path = os.environ.get("ROCM_PATH", "/opt/rocm")
-  version_path = Path(rocm_path) / ".info" / "version"
-  if not version_path.exists():
-    raise FileNotFoundError(f"Expected ROCm version file at {version_path}")
-  version_str = version_path.read_text().strip()
-  major, minor, *_ = version_str.split(".")
-  return int(major), int(minor)
 
 config.parse_flags_with_absl()
 
@@ -343,7 +331,6 @@ class NumpyLinalgTest(jtu.JaxTestCase):
     # haven't checked, that might be because of perturbations causing the
     # ordering of eigenvalues to change, which will trip up check_grads. So we
     # just test on small-ish matrices.
-    
     if jtu.is_device_rocm:
         self.skipTest("Skip on ROCm: testEigvalsGrad")
 
@@ -373,7 +360,6 @@ class NumpyLinalgTest(jtu.JaxTestCase):
   @jtu.run_on_devices("cpu", "gpu")
   def testEigvalsInf(self):
     # https://github.com/jax-ml/jax/issues/2661
-    
     if jtu.is_device_rocm:
         self.skipTest("Skip on ROCm: testEigvalsInf")
 
@@ -2168,7 +2154,7 @@ class LaxLinalgTest(jtu.JaxTestCase):
     sort_eigenvalues=[True, False],
   )
   def testEigh(self, n, dtype, lower, sort_eigenvalues):
-    if jtu.is_device_rocm and get_rocm_version() > (6, 5):
+    if jtu.is_device_rocm and jtu.get_rocm_version() > (6, 5):
         self.skipTest("Skip on ROCm: tests/linalg_test.py::LaxLinalgTest::testEigh[0-9]")
 
     rng = jtu.rand_default(self.rng())
