@@ -24,9 +24,6 @@ from __future__ import annotations
 from collections.abc import Callable
 import math
 
-import os
-from pathlib import Path
-
 from absl import logging
 from absl.testing import absltest
 
@@ -48,6 +45,12 @@ def get_rocm_version():
   version_str = version_path.read_text().strip()
   major, minor, *_ = version_str.split(".")
   return int(major), int(minor)
+
+def make_disjunction_regexp(*parts: str) -> re.Pattern[str]:
+  if not parts:
+    return re.compile("matches_no_test")
+  else:
+    return re.compile("(" + "|".join(parts) + ")")
 
 
 class PrimitiveTest(jtu.JaxTestCase):
@@ -187,7 +190,7 @@ class PrimitiveTest(jtu.JaxTestCase):
     self.export_and_compare_to_native(f, x)
 
   def test_random_with_threefry_gpu_kernel_lowering(self):
-    if jtu.is_device_rocm and get_rocm_version() > (6, 5):
+    if jtu.is_device_rocm and jtu.get_rocm_version() > (6, 5):
         self.skipTest("Skip on ROCm: test_random_with_threefry_gpu_kernel_lowering")
 
     # On GPU we use a custom call for threefry2x32
