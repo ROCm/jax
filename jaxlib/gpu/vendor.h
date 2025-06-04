@@ -426,9 +426,8 @@ constexpr uint32_t kNumThreadsPerWarp = 32;
 
 typedef hipFloatComplex gpuComplex;
 typedef hipDoubleComplex gpuDoubleComplex;
-
-typedef hipblasComplex gpublasComplex;
-typedef hipblasDoubleComplex gpublasDoubleComplex;
+typedef hipFloatComplex gpublasComplex;
+typedef hipDoubleComplex gpublasDoubleComplex;
 typedef hipsolverHandle_t gpusolverDnHandle_t;
 typedef hipblasFillMode_t gpublasFillMode_t;
 typedef hipsolverFillMode_t gpusolverFillMode_t;
