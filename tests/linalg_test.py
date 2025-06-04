@@ -266,8 +266,6 @@ class NumpyLinalgTest(jtu.JaxTestCase):
   @jtu.run_on_devices("cpu", "gpu")
   def testEig(self, shape, dtype, compute_left_eigenvectors,
               compute_right_eigenvectors):
-    if jtu.is_device_rocm:
-        self.skipTest("Skip on ROCm: testEig")
     rng = jtu.rand_default(self.rng())
     n = shape[-1]
     args_maker = lambda: [rng(shape, dtype)]
@@ -310,10 +308,6 @@ class NumpyLinalgTest(jtu.JaxTestCase):
   def testEigHandlesNanInputs(self, shape, dtype, compute_left_eigenvectors,
                               compute_right_eigenvectors):
     """Verifies that `eig` fails gracefully if given non-finite inputs."""
-
-    if jtu.is_device_rocm:
-        self.skipTest("Skip on ROCm: testEigHandlesNanInputs")
-
     a = jnp.full(shape, jnp.nan, dtype)
     results = lax.linalg.eig(
         a, compute_left_eigenvectors=compute_left_eigenvectors,
@@ -331,9 +325,6 @@ class NumpyLinalgTest(jtu.JaxTestCase):
     # haven't checked, that might be because of perturbations causing the
     # ordering of eigenvalues to change, which will trip up check_grads. So we
     # just test on small-ish matrices.
-    if jtu.is_device_rocm:
-        self.skipTest("Skip on ROCm: testEigvalsGrad")
-
     rng = jtu.rand_default(self.rng())
     args_maker = lambda: [rng(shape, dtype)]
     a, = args_maker()
@@ -347,9 +338,6 @@ class NumpyLinalgTest(jtu.JaxTestCase):
   )
   @jtu.run_on_devices("cpu", "gpu")
   def testEigvals(self, shape, dtype):
-    if jtu.is_device_rocm:
-        self.skipTest("Skip on ROCm: testEigvals")
-
     rng = jtu.rand_default(self.rng())
     args_maker = lambda: [rng(shape, dtype)]
     a, = args_maker()
@@ -360,9 +348,6 @@ class NumpyLinalgTest(jtu.JaxTestCase):
   @jtu.run_on_devices("cpu", "gpu")
   def testEigvalsInf(self):
     # https://github.com/jax-ml/jax/issues/2661
-    if jtu.is_device_rocm:
-        self.skipTest("Skip on ROCm: testEigvalsInf")
-
     x = jnp.array([[jnp.inf]])
     self.assertTrue(jnp.all(jnp.isnan(jnp.linalg.eigvals(x))))
 
@@ -372,8 +357,6 @@ class NumpyLinalgTest(jtu.JaxTestCase):
   )
   @jtu.run_on_devices("cpu", "gpu")
   def testEigBatching(self, shape, dtype):
-    if jtu.is_device_rocm:
-        self.skipTest("Skip on ROCm: testEigBatching")
     rng = jtu.rand_default(self.rng())
     shape = (10,) + shape
     args = rng(shape, dtype)
@@ -500,9 +483,6 @@ class NumpyLinalgTest(jtu.JaxTestCase):
       )
 
   def testEighTinyNorm(self):
-    if jtu.is_device_rocm:
-        self.skipTest("Skip on ROCm: testEighTinyNorm")
-
     rng = jtu.rand_default(self.rng())
     a = rng((300, 300), dtype=np.float32)
     eps = jnp.finfo(a.dtype).eps
@@ -529,10 +509,6 @@ class NumpyLinalgTest(jtu.JaxTestCase):
       rank=[1, 3, 299],
   )
   def testEighRankDeficient(self, rank):
-
-    if jtu.is_device_rocm:
-        self.skipTest("Skip on ROCm: testEighRankDeficient")
-
     rng = jtu.rand_default(self.rng())
     eps = jnp.finfo(np.float32).eps
     a = rng((300, rank), dtype=np.float32)
@@ -897,7 +873,8 @@ class NumpyLinalgTest(jtu.JaxTestCase):
   )
   @jax.default_matmul_precision("float32")
   def testSVD(self, b, m, n, dtype, full_matrices, compute_uv, hermitian, algorithm):
-    if algorithm is not None:
+      if jtu.is_device_rocm and algorithm == lax.linalg.SvdAlgorithm.JACOBI and dtype in {np.float32, np.complex64}:
+        self.skipTest("Skip on ROCm: testSVD Jacobi tests")
       if hermitian:
         self.skipTest("Hermitian SVD doesn't support the algorithm parameter.")
       if not jtu.test_device_matches(["cpu", "gpu"]):
@@ -2152,9 +2129,6 @@ class LaxLinalgTest(jtu.JaxTestCase):
     sort_eigenvalues=[True, False],
   )
   def testEigh(self, n, dtype, lower, sort_eigenvalues):
-    if jtu.is_device_rocm and jtu.get_rocm_version() > (6, 5):
-        self.skipTest("Skip on ROCm: tests/linalg_test.py::LaxLinalgTest::testEigh[0-9]")
-
     rng = jtu.rand_default(self.rng())
     tol = 1e-3
     args_maker = lambda: [rng((n, n), dtype)]
