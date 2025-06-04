@@ -13,7 +13,8 @@ pytest-xdist
 pytest-json-report
 pytest-html
 pytest-rerunfailures
-pip install pytest-html-merger
+pytest-html-merger
+pytest-reportlog
 wheel
 rich
 setuptools
