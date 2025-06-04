@@ -432,6 +432,10 @@ nanobind_extension(
         "@nanobind",
         "@xla//xla/ffi/api:ffi",
     ],
+    linkopts = [
+        "-L/opt/rocm/lib",  #/opt/rocm/lib64 
+        "-lamdhip64",       
+    ],
 )
 
 cc_library(
