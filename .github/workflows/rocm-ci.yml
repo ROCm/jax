@@ -28,15 +28,15 @@ jobs:
       TEST_IMAGE: ubuntu-jax-${{ github.run_id }}_${{ github.run_number }}_${{ github.run_attempt }}
       PYTHON_VERSION: ${{ matrix.python }}
       ROCM_VERSION: ${{ matrix.rocm }}
-      WORKSPACE_DIR: workdir_${{ github.run_id }}_${{ github.run_number }}_${{ github.run_attempt }}
+      WORKSPACE_DIR: workdir_gpuci_${{ github.run_id }}_${{ github.run_number }}_${{ github.run_attempt }}
     steps:
       - name: Clean up old runs
         run: |
           ls
           # Make sure that we own all of the files so that we have permissions to delete them
-          docker run -v "./:/jax" ubuntu /bin/bash -c "chown -R $UID /jax/workdir_* || true"
+          docker run -v "./:/jax" ubuntu /bin/bash -c "chown -R $UID /jax/workdir_gpuci_* || true"
           # Remove any old work directories from this machine
-          rm -rf workdir_*
+          rm -rf workdir_gpuci_*
           ls
       - name: Print system info
         run: |
