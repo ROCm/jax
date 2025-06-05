@@ -873,7 +873,7 @@ class NumpyLinalgTest(jtu.JaxTestCase):
   )
   @jax.default_matmul_precision("float32")
   def testSVD(self, b, m, n, dtype, full_matrices, compute_uv, hermitian, algorithm):
-    if algorithm is not None:  
+    if algorithm is not None:
       if jtu.is_device_rocm and algorithm == lax.linalg.SvdAlgorithm.JACOBI and dtype in {np.float32, np.complex64}:
         self.skipTest("Skip on ROCm: testSVD Jacobi tests")
       if hermitian:
