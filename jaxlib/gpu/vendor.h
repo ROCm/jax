@@ -422,9 +422,7 @@ constexpr uint32_t kNumThreadsPerWarp = 32;
 }  // namespace jax::JAX_GPU_NAMESPACE
 
 #elif defined(JAX_GPU_HIP)
-
 #define HIPBLAS_V2 1
-
 // IWYU pragma: begin_exports
 #include "rocm/include/hip/hip_cooperative_groups.h"
 #include "rocm/include/hip/hip_runtime_api.h"
@@ -444,12 +442,13 @@ constexpr uint32_t kNumThreadsPerWarp = 32;
 // TODO(Ruturaj4): Currently equivalent API does exist in
 // MIOpen lib. Remove when MIOpen support is complete.
 #define MIOPEN_STATUS_SUCCESS 0
-
-typedef hipComplex gpuComplex;
+// TODO(PhamBinh): Figure out later to use hipComplex or hipFloatComplex
+typedef hipFloatComplex gpuComplex;
 typedef hipDoubleComplex gpuDoubleComplex;
-typedef hipComplex gpublasComplex;
+
+typedef hipFloatComplex gpublasComplex;
 typedef hipDoubleComplex gpublasDoubleComplex;
-typedef struct hipsolverHandle_* gpusolverDnHandle_t;
+typedef hipsolverHandle_t gpusolverDnHandle_t;
 typedef hipblasFillMode_t gpublasFillMode_t;
 typedef hipsolverFillMode_t gpusolverFillMode_t;
 typedef struct hipblasHandle_* gpublasHandle_t;
