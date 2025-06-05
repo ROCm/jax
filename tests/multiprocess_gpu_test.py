@@ -148,6 +148,8 @@ class MultiProcessGpuTest(jtu.JaxTestCase):
           proc.kill()
 
   def test_gpu_ompi_distributed_initialize(self):
+    if jtu.is_device_rocm:
+        self.skipTest("Skip on ROCm: test_gpu_ompi_distributed_initialize")
     if not jtu.test_device_matches(['gpu']):
       raise unittest.SkipTest('Tests only for GPU.')
     if shutil.which('mpirun') is None:
