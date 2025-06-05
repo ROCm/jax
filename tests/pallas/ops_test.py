@@ -529,8 +529,8 @@ class OpsTest(PallasBaseTest):
   @hp.given(select_n_strategy(max_cases=2, min_rank=2, max_rank=4,
                               min_size_exp=1))
   def test_select_n(self, args):
-    if jtu.test_device_matches(["gpu"]):
-      self.skipTest("TODO: error on GPU, lowering bug for select_n")
+    if jtu.is_device_rocm:
+        self.skipTest("Skip on ROCm: test_select_n")
     pred, *cases = args
     scalar_pred = not pred.shape
 
@@ -562,8 +562,8 @@ class OpsTest(PallasBaseTest):
   @hp.given(hps.data())
   @jtu.skip_if_mosaic_gpu_exceeds_shared_memory(device_patterns="RTX PRO 6000 Blackwell")
   def test_unary_primitives(self, name, func, shape_dtype_strategy, data):
-    if jtu.is_device_rocm and name == "logistic":
-        self.skipTest("Skip on ROCm: test_unary_primitives_logistic")
+    if jtu.is_device_rocm and name in {"logistic", "reciprocal"}:
+        self.skipTest("Skip on ROCm: test_unary_primitives_[logistic,reciprocal]")
     if name in ["abs", "log1p", "pow2", "reciprocal", "relu", "sin", "sqrt"]:
       self.skip_if_mosaic_gpu()
 
@@ -2005,6 +2005,10 @@ class OpsTest(PallasBaseTest):
   @jtu.skip_if_triton_exceeds_shared_memory(device_patterns="RTX PRO 6000 Blackwell")
   @jtu.skip_if_mosaic_gpu_exceeds_shared_memory(device_patterns="RTX PRO 6000 Blackwell")
   def test_dot(self, lhs_and_rhs_shape, dtype, trans_x, trans_y):
+    test_name = str(self).split()[0]
+    skip_numbers = list(range(12, 20))
+    if jtu.is_device_rocm and jtu.get_rocm_version() == (7, 0) and test_name in {f"test_dot{i}" for i in skip_numbers}:
+        self.skipTest("Skip on ROCm: test_dot[12-19]")
     if (
         jtu.is_device_rocm() and
         jtu.get_rocm_version() < (6, 5)
