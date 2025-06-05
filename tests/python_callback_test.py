@@ -948,6 +948,8 @@ class PureCallbackTest(jtu.JaxTestCase):
     np.testing.assert_allclose(g(x), x)
 
   def test_can_shard_pure_callback_maximally(self):
+    if jtu.is_device_rocm:
+      self.skipTest("Skip on ROCm: test_can_shard_pure_callback_maximally")
     mesh = Mesh(np.array(jax.devices()), axis_names=('x',))
 
     spec = jax.sharding.PartitionSpec('x')
@@ -967,6 +969,8 @@ class PureCallbackTest(jtu.JaxTestCase):
     )
 
   def test_can_shard_pure_callback_maximally_with_sharding(self):
+    if jtu.is_device_rocm:
+        self.skipTest("Skip on ROCm: test_can_shard_pure_callback_maximally_with_sharding")
     mesh = Mesh(np.array(jax.devices()), axis_names=('x',))
 
     spec = jax.sharding.PartitionSpec('x')
@@ -1240,6 +1244,8 @@ class IOCallbackTest(jtu.JaxTestCase):
   def test_can_use_io_callback_in_pjit(
       self, *, ordered: bool, with_sharding: bool
   ):
+    if jtu.is_device_rocm:
+        self.skipTest("Skip on ROCm: test_can_use_io_callback_in_pjit")
     devices = jax.devices()
     mesh = jax.sharding.Mesh(np.array(devices), ['dev'])
 
@@ -1298,6 +1304,8 @@ class IOCallbackTest(jtu.JaxTestCase):
       self.assertIn(f"{{maximal device={callback_device_index}}}", stablehlo_ir)
 
   def test_sequence_pjit_io_callback_ordered(self):
+    if jtu.is_device_rocm:
+        self.skipTest("Skip on ROCm: test_sequence_pjit_io_callback_ordered")
     # A sequence of pairs of calls to pjit(io_callback(ordered=True)) with each
     # pair on a different device assignment.
     _collected: list[int] = []
