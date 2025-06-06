@@ -429,13 +429,10 @@ nanobind_extension(
         "//jaxlib/cpu:lapack_kernels",
         "@com_google_absl//absl/base",
         "@local_config_rocm//rocm:rocm_headers",
+        "@local_config_rocm//rocm:rocm_hip",
         "@nanobind",
         "@xla//xla/ffi/api:ffi",
-    ],
-    linkopts = [
-        "-L/opt/rocm/lib",  #/opt/rocm/lib64 
-        "-lamdhip64",       
-    ],
+    ]
 )
 
 cc_library(
