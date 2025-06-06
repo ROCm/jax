@@ -34,7 +34,6 @@ import textwrap
 import threading
 from typing import Any, TextIO
 import unittest
-import warnings
 import zlib
 
 from absl.testing import parameterized
@@ -411,7 +410,6 @@ def get_rocm_version():
     major, minor, *_ = version_str.split(".")
     return int(major), int(minor)
   except FileNotFoundError:
-    warnings.warn("ROCm was not installed")
     raise unittest.SkipTest("ROCm was not installed")
 
 def is_device_cuda():
