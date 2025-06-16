@@ -34,7 +34,8 @@ licenses(["notice"])
 
 package(
     default_applicable_licenses = [],
-    default_visibility = ["//jax:internal"],
+    default_visibility = ["//visibility:public"],
+
 )
 
 py_library_providing_imports_info(
