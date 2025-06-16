@@ -26,7 +26,7 @@ licenses(["notice"])
 
 package(
     default_applicable_licenses = [],
-    default_visibility = ["//:__subpackages__"],
+    default_visibility = ["//visibility:public"],
 )
 
 cc_library(
@@ -433,10 +433,6 @@ nanobind_extension(
         "@local_config_rocm//rocm:hip",
         "@nanobind",
         "@xla//xla/ffi/api:ffi",
-    ],
-    linkopts = [
-        "-L/opt/rocm/lib",  #/opt/rocm/lib64 
-        "-lamdhip64",       
     ],
 )
 
