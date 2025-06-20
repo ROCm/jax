@@ -4,6 +4,7 @@ VERS_1.0 {
       GetPjrtApi;
       MosaicGpuCompile;
       MosaicGpuUnload;
+      rocprofiler_configure;
     };
 
   local:
