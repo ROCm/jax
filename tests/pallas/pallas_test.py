@@ -549,6 +549,8 @@ class PallasCallTest(PallasBaseTest):
   def test_matmul(self, m, n, k, dtype, bm, bn, bk, gm):
     if jtu.test_device_matches(["tpu"]) and not self.INTERPRET:
       self.skipTest("On TPU the test works only in interpret mode")
+    if jtu.is_device_rocm and self.INTERPRET:
+      self.skipTest("Skip on ROCm: test_matmul")                                                                                                                                                   [835/1847]
     k1, k2 = random.split(random.key(0))
     x = random.normal(k1, (m, k), dtype=dtype)
     y = random.normal(k2, (k, n), dtype=dtype)

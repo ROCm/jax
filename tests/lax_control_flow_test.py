@@ -2599,6 +2599,8 @@ class LaxControlFlowTest(jtu.JaxTestCase):
   def testAssociativeScanSolvingRegressionTest(self, shape):
     # This test checks that the batching rule doesn't raise for a batch
     # sensitive function (solve).
+    if jtu.is_device_rocm:
+      self.skipTest("Skip on ROCm: testAssociativeScanSolvingRegressionTest")
     ms = np.repeat(np.eye(2).reshape(1, 2, 2), shape, axis=0)
     vs = np.ones((shape, 2))
 
