@@ -2601,6 +2601,7 @@ class LaxControlFlowTest(jtu.JaxTestCase):
     # sensitive function (solve).
     if jtu.is_device_rocm:
       self.skipTest("Skip on ROCm: testAssociativeScanSolvingRegressionTest")
+
     ms = np.repeat(np.eye(2).reshape(1, 2, 2), shape, axis=0)
     vs = np.ones((shape, 2))
 

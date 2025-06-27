@@ -188,6 +188,7 @@ class FfiTest(jtu.JaxTestCase):
   def test_ffi_call_batching(self, shape, vmap_method):
     if jtu.is_device_rocm:
       self.skipTest("Skip on ROCm: test_ffi_call_batching")
+
     shape = (10,) + shape
     x = self.rng().randn(*shape).astype(np.float32)
     expected = lax_linalg_internal.geqrf(x)
