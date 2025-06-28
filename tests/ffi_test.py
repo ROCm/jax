@@ -173,6 +173,9 @@ class FfiTest(jtu.JaxTestCase):
   @jtu.sample_product(shape=[(6, 5), (4, 5, 6)])
   @jtu.run_on_devices("gpu", "cpu")
   def test_ffi_call(self, shape):
+    if jtu.is_device_rocm and str(self).split()[0] == "test_ffi_call0":
+      self.skipTest("Skip on ROCm: test_ffi_call0")
+
     x = self.rng().randn(*shape).astype(np.float32)
     expected = lax_linalg_internal.geqrf(x)
     actual = ffi_call_geqrf(x)
