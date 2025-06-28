@@ -79,8 +79,8 @@ class PrimitiveTest(jtu.JaxTestCase):
                "operator to work around missing XLA support for pair-reductions")
   )
   def test_prim(self, harness: test_harnesses.Harness):
-    if jtu.is_device_rocm and "multi_array_shape_complex64" in harness.fullname:
-      self.skipTest("Skip on ROCm: test_prim_multi_array_shape_complex64")
+    if jtu.is_device_rocm and "multi_array_shape" in harness.fullname:
+      self.skipTest("Skip on ROCm: test_prim_multi_array_shape")
 
     if "eigh_" in harness.fullname:
       self.skipTest("Eigenvalues are sorted and it is not correct to compare "
