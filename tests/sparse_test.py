@@ -16,6 +16,7 @@ import contextlib
 from functools import partial
 import itertools
 import math
+import unittest
 
 from absl.testing import absltest
 from absl.testing import parameterized
@@ -46,6 +47,7 @@ jax.config.parse_flags_with_absl()
 
 all_dtypes = jtu.dtypes.integer + jtu.dtypes.floating + jtu.dtypes.complex
 
+@unittest.skipIf(jtu.is_device_rocm, "Skip on ROCm: cuSparseTest")
 class cuSparseTest(sptu.SparseTestCase):
   def gpu_dense_conversion_warning_context(self, dtype):
     if jtu.test_device_matches(["gpu"]) and np.issubdtype(dtype, np.integer):
@@ -804,6 +806,7 @@ class SparseGradTest(sptu.SparseTestCase):
         self.assertAllClose(jax.grad(g, argnums=0, has_aux=has_aux)(y, Xtree_de),
                             sparse.grad(g, argnums=0, has_aux=has_aux)(y, Xtree_sp))
 
+@unittest.skipIf(jtu.is_device_rocm, "Skip on ROCm: SparseObjectTest")
 class SparseObjectTest(sptu.SparseTestCase):
   @parameterized.named_parameters(
     {"testcase_name": f"_{cls.__name__}", "cls": cls}

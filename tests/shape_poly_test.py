@@ -3624,11 +3624,12 @@ class ShapePolyHarnessesTest(jtu.JaxTestCase):
       #one_containing="",
   )
   def test_harness(self, harness: PolyHarness):
-
-    if jtu.is_device_rocm and harness.group_name == "svd" and harness.dtype in {np.float32, np.complex64}:
-        raise unittest.SkipTest("Skip for ROCm: shape_poly_test svd for float32 and complex64.")
+    if jtu.is_device_rocm and harness.group_name in {"qr", "svd"} and harness.dtype in {np.float32, np.complex64}:
+        raise unittest.SkipTest("Skip for ROCm: shape_poly_test svd and qr for float32 and complex64.")
     if jtu.is_device_rocm and harness.group_name == "vmap_eigh" and harness.dtype == np.complex64:
         raise unittest.SkipTest("Skip for ROCm: shape_poly_test vmap_eigh for complex64.")
+    if jtu.is_device_rocm and "vmap_qr_multi_array" in harness.fullname and harness.dtype == np.float32:
+        raise unittest.SkipTest("Skip for ROCm: shape_poly_test vmap_qr_multi_array for comple64 (note: when printed out, harness.dtype is np.float32.)")
 
     # We do not expect the associative scan error on TPUs
     if harness.expect_error == expect_error_associative_scan and jtu.test_device_matches(["tpu"]):

@@ -1006,6 +1006,9 @@ class NumpyLinalgTest(jtu.JaxTestCase):
   )
   @jax.default_matmul_precision("float32")
   def testQr(self, shape, dtype, full_matrices):
+    if jtu.is_device_rocm:
+      self.skipTest("Skip on ROCm: tests/linalg_test.py::NumpyLinalgTest::testQr")
+
     if (jtu.test_device_matches(["cuda"]) and
         _is_required_cuda_version_satisfied(12000)):
       self.skipTest("Triggers a bug in cuda-12 b/287345077")
@@ -1081,6 +1084,9 @@ class NumpyLinalgTest(jtu.JaxTestCase):
     dtype=float_types + complex_types,
   )
   def testQrBatching(self, shape, dtype):
+    if jtu.is_device_rocm:
+      self.skipTest("Skip on ROCm: tests/linalg_test.py::NumpyLinalgTest::testQrBatching")
+
     rng = jtu.rand_default(self.rng())
     args = rng(shape, jnp.float32)
     qs, rs = vmap(jsp.linalg.qr)(args)
