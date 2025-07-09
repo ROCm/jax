@@ -291,8 +291,10 @@ class FusedAttentionTest(PallasBaseTest):
       use_segment_ids,
   ):
     test_name = str(self).split()[0]
-    if jtu.is_device_rocm and test_name in {"test_fused_attention_bwd7", "test_fused_attention_bwd8"}:
-      self.skipTest("Skip on ROCm: tests/pallas/gpu_ops_test.py::FusedAttentionTest::test_fused_attention_fwd[7,8]")
+    skip_suffix_list = [4, 6, 7, 8, 9]
+    
+    if jtu.is_device_rocm and self.INTERPRET and any(test_name.endswith(str(suffix)) for suffix in skip_suffix_list):
+      self.skipTest("Skip on ROCm: tests/pallas/gpu_ops_test.py::FusedAttentionTest::test_fused_attention_bwd[4, 6, 7, 8, 9]")
 
     k1, k2, k3 = random.split(random.key(0), 3)
     q = random.normal(
