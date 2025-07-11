@@ -50,7 +50,7 @@ class MultiProcessGpuTest(jtu.JaxTestCase):
 
     port = portpicker.pick_unused_port()
     # ROCm will fail if HIP_VISIBLE_DEVICES is set to a single non existent device
-    num_gpus = 4 if not jtu.is_device_rocm() else min(4, len(jax.devices()))
+    num_gpus = 4 if not jtu.is_device_rocm() else min(4, jax.local_device_count())
     num_gpus_per_task = 1
     num_tasks = num_gpus // num_gpus_per_task
 
