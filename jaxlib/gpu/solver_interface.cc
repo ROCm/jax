@@ -313,10 +313,10 @@ JAX_GPU_DEFINE_GESVDJ(gpuDoubleComplex, gpusolverDnZgesvdj);
                               workspace, lwork, info, params, batch));        \
   }
 
-JAX_GPU_DEFINE_GESVDJ_BATCHED(float, gpusolverDnSgesvdjBatched);
-JAX_GPU_DEFINE_GESVDJ_BATCHED(double, gpusolverDnDgesvdjBatched);
-JAX_GPU_DEFINE_GESVDJ_BATCHED(gpuComplex, gpusolverDnCgesvdjBatched);
-JAX_GPU_DEFINE_GESVDJ_BATCHED(gpuDoubleComplex, gpusolverDnZgesvdjBatched);
+JAX_GPU_DEFINE_GESVDJ_BATCHED(float, gpublasSgesvdjBatched);ed);
+JAX_GPU_DEFINE_GESVDJ_BATCHED(double, gpublasDgesvdjBatched);ed);
+JAX_GPU_DEFINE_GESVDJ_BATCHED(gpuComplex, gpublasCgesvdjBatched);ed);
+JAX_GPU_DEFINE_GESVDJ_BATCHED(gpuDoubleComplex, gpublasZgesvdjBatched);ed);
 #undef JAX_GPU_DEFINE_GESVDJ_BATCHED
 
 #define JAX_GPU_DEFINE_CSRLSVQR(Type, Scalar, Name)                          \
@@ -365,6 +365,19 @@ JAX_GPU_DEFINE_SYTRD(double, gpusolverDnDsytrd);
 JAX_GPU_DEFINE_SYTRD(gpuComplex, gpusolverDnChetrd);
 JAX_GPU_DEFINE_SYTRD(gpuDoubleComplex, gpusolverDnZhetrd);
 #undef JAX_GPU_DEFINE_SYTRD
+
+#define JAX_GPU_DEFINE_GEQRF_BLAS(Type, Name)                                   \
+  template <>                                                                   \
+  absl::Status GeqrfBlas<Type>(gpublasHandle_t handle, int m, int n, Type *a,   \
+                               Type *tau, int *info) {                          \
+    return JAX_AS_STATUS(Name(handle, m, n, a, m, tau, info));                  \
+  }
+
+JAX_GPU_DEFINE_GEQRF_BLAS(float, gpublasSgeqrf);
+JAX_GPU_DEFINE_GEQRF_BLAS(double, gpublasDgeqrf);
+JAX_GPU_DEFINE_GEQRF_BLAS(gpuComplex, gpublasCgeqrf);
+JAX_GPU_DEFINE_GEQRF_BLAS(gpuDoubleComplex, gpublasZgeqrf);
+#undef JAX_GPU_DEFINE_GEQRF_BLAS
 
 }  // namespace solver
 }  // namespace JAX_GPU_NAMESPACE

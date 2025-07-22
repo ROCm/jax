@@ -490,7 +490,10 @@ typedef hipsparseDnVecDescr_t gpusparseDnVecDescr_t;
 #define gpublasDgetrfBatched hipblasDgetrfBatched
 #define gpublasCgetrfBatched hipblasCgetrfBatched
 #define gpublasZgetrfBatched hipblasZgetrfBatched
-
+#define gpublasSgeqrf hipblasSgeqrf
+#define gpublasDgeqrf hipblasDgeqrf
+#define gpublasCgeqrf hipblasCgeqrf
+#define gpublasZgeqrf hipblasZgeqrf
 #define gpublasSsyrk hipblasSsyrk
 #define gpublasDsyrk hipblasDsyrk
 #define gpublasCsyrk hipblasCsyrk

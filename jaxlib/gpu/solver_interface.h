@@ -232,6 +232,10 @@ JAX_GPU_SOLVER_EXPAND_DEFINITION(absl::StatusOr<int>, SytrdBufferSize);
 JAX_GPU_SOLVER_EXPAND_DEFINITION(absl::Status, Sytrd);
 #undef JAX_GPU_SOLVER_Sytrd_ARGS
 
+// BLAS-based single-matrix QR (no workspace, BLAS handle)
+template <typename T>
+absl::Status GeqrfBlas(gpublasHandle_t handle, int m, int n, T* a, T* tau, int* info);
+
 #undef JAX_GPU_SOLVER_EXPAND_DEFINITION
 
 }  // namespace solver

@@ -215,17 +215,7 @@ ffi::Error GeqrfImpl(int64_t batch, int64_t rows, int64_t cols,
   FFI_ASSIGN_OR_RETURN(auto m, MaybeCastNoOverflow<int>(rows));
   FFI_ASSIGN_OR_RETURN(auto n, MaybeCastNoOverflow<int>(cols));
 
-  FFI_ASSIGN_OR_RETURN(auto handle, SolverHandlePool::Borrow(stream));
-  FFI_ASSIGN_OR_RETURN(int lwork,
-                       solver::GeqrfBufferSize<T>(handle.get(), m, n));
-
-  FFI_ASSIGN_OR_RETURN(auto workspace,
-                       AllocateWorkspace<T>(scratch, lwork, "geqrf"));
-  // Note: We ignore the returned value of info because it is only used for
-  // shape checking (which we already do ourselves), but it is expected to be
-  // in device memory, so we need to allocate it.
-  FFI_ASSIGN_OR_RETURN(auto info, AllocateWorkspace<int>(scratch, 1, "geqrf"));
-
+  FFI_ASSIGN_OR_RETURN(auto handle, BlasHandlePool::Borrow(stream));
   auto a_data = static_cast<T*>(a.untyped_data());
   auto out_data = static_cast<T*>(out->untyped_data());
   auto tau_data = static_cast<T*>(tau->untyped_data());
@@ -233,12 +223,12 @@ ffi::Error GeqrfImpl(int64_t batch, int64_t rows, int64_t cols,
     JAX_FFI_RETURN_IF_GPU_ERROR(gpuMemcpyAsync(
         out_data, a_data, a.size_bytes(), gpuMemcpyDeviceToDevice, stream));
   }
-
   int out_step = m * n;
   int tau_step = std::min(m, n);
   for (auto i = 0; i < batch; ++i) {
-    FFI_RETURN_IF_ERROR_STATUS(solver::Geqrf<T>(
-        handle.get(), m, n, out_data, tau_data, workspace, lwork, info));
+    int info = 0;
+    FFI_RETURN_IF_ERROR_STATUS(solver::GeqrfBlas<T>(
+        handle.get(), m, n, out_data, tau_data, &info));
     out_data += out_step;
     tau_data += tau_step;
   }
