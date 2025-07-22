@@ -313,10 +313,10 @@ JAX_GPU_DEFINE_GESVDJ(gpuDoubleComplex, gpusolverDnZgesvdj);
                               workspace, lwork, info, params, batch));        \
   }
 
-JAX_GPU_DEFINE_GESVDJ_BATCHED(float, gpublasSgesvdjBatched);ed);
-JAX_GPU_DEFINE_GESVDJ_BATCHED(double, gpublasDgesvdjBatched);ed);
-JAX_GPU_DEFINE_GESVDJ_BATCHED(gpuComplex, gpublasCgesvdjBatched);ed);
-JAX_GPU_DEFINE_GESVDJ_BATCHED(gpuDoubleComplex, gpublasZgesvdjBatched);ed);
+JAX_GPU_DEFINE_GESVDJ_BATCHED(float, gpublasSgesvdjBatched);
+JAX_GPU_DEFINE_GESVDJ_BATCHED(double, gpublasDgesvdjBatched));
+JAX_GPU_DEFINE_GESVDJ_BATCHED(gpuComplex, gpublasCgesvdjBatched);
+JAX_GPU_DEFINE_GESVDJ_BATCHED(gpuDoubleComplex, gpublasZgesvdjBatched);
 #undef JAX_GPU_DEFINE_GESVDJ_BATCHED
 
 #define JAX_GPU_DEFINE_CSRLSVQR(Type, Scalar, Name)                          \
