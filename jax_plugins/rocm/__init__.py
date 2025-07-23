@@ -76,10 +76,62 @@ def _get_library_path():
   return None
 
 
+def set_rocm_paths(path):
+  rocm_lib = None
+  try:
+    import rocm
+    rocm_lib = os.path.join(rocm.__path__[0], "lib")
+  except ImportError:
+    # find python site-packages
+    sp = path.parent.parent.parent
+    maybe_rocm_lib = os.path.join(sp, "rocm/lib")
+    if os.path.exists(maybe_rocm_lib):
+      rocm_lib = maybe_rocm_lib
+
+  if not rocm_lib:
+    logger.info("No ROCm wheel installation found")
+    return
+  else:
+    logger.info("ROCm wheel install found at %r" % rocm_lib)
+
+  bitcode_path = ""
+  lld_path = ""
+
+  for root, dirs, files in os.walk(os.path.join(rocm_lib, "llvm")):
+    # look for ld.lld and ocml.bc
+    for f in files:
+      if f == "ocml.bc":
+        bitcode_path = root
+      if f == "ld.lld":
+        # amd backend needs the directory not the full path to binary
+        lld_path = root
+
+    if bitcode_path and lld_path:
+      break
+
+
+  if not bitcode_path:
+    logger.warning("jax_rocm60_plugin couldn't locate amdgpu bitcode")
+  else:
+    logger.info("jax_rocm60_plugin using bitcode found at %r", bitcode_path)
+
+  if not lld_path:
+    logger.warning("jax_rocm60_plugin couldn't locate amdgpu ld.lld")
+  else:
+    logger.info("jax_rocm60_plugin using ld.lld found at %r", lld_path)
+
+  os.environ["JAX_ROCM_PLUGIN_INTERNAL_BITCODE_PATH"] = bitcode_path
+  os.environ["HIP_DEVICE_LIB_PATH"] = bitcode_path
+  os.environ["JAX_ROCM_PLUGIN_INTERNAL_LLD_PATH"] = lld_path
+
+
 def initialize():
   path = _get_library_path()
   if path is None:
     return
+
+  set_rocm_paths(path)
+
   options = xla_client.generate_pjrt_gpu_plugin_options()
   options["platform_name"] = "ROCM"
   c_api = xb.register_plugin(

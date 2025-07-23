@@ -21,6 +21,7 @@ import argparse
 import functools
 import os
 import pathlib
+import subprocess
 import tempfile
 
 from bazel_tools.tools.python.runfiles import runfiles
@@ -140,6 +141,29 @@ def prepare_rocm_plugin_wheel(sources_path: pathlib.Path, *, cpu, rocm_version):
       dst_dir=plugin_dir,
       dst_filename="xla_rocm_plugin.so",
   )
+
+  # NOTE(mrodden): this is a hack to change/set rpath values
+  # in the shared objects that are produced by the bazel build
+  # before they get pulled into the wheel build process.
+  # we have to do this change here because setting rpath
+  # using bazel requires the rpath to be valid during the build
+  # which won't be correct until we make changes to
+  # the xla/tsl/jax plugin build
+
+  try:
+    subprocess.check_output(["which", "patchelf"])
+  except subprocess.CalledProcessError as ex:
+    mesg = (
+        "rocm plugin and kernel wheel builds require patchelf. "
+        "please install 'patchelf' and run again"
+    )
+    raise Exception(mesg) from ex
+
+  shared_obj_path = os.path.join(plugin_dir, "xla_rocm_plugin.so")
+  runpath = '$ORIGIN/../rocm/lib:$ORIGIN/../../rocm/lib'
+  # patchelf --force-rpath --set-rpath $RUNPATH $so
+  subprocess.check_call(["patchelf", "--force-rpath", "--set-rpath", runpath, shared_obj_path])
+
 
 
 tmpdir = None
