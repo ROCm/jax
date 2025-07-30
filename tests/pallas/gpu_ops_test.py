@@ -175,6 +175,9 @@ class FusedAttentionTest(PallasBaseTest):
       use_fwd,
       use_segment_ids,
   ):
+    if jtu.is_device_rocm and 'gfx950' in [d.compute_capability for d in jax.devices()]:
+      self.skipTest("Skip on ROCm: test_fused_attention_fwd: LLVM ERROR: Do not know how to scalarize the result of this operator!")
+
     if jtu.is_device_rocm and batch_size == 2 and seq_len == 384 and  num_heads == 8 and head_dim == 64 and block_sizes == (('block_q', 128), ('block_k', 128)) and causal and use_fwd and use_segment_ids:
       self.skipTest("Skip on ROCm: tests/pallas/gpu_ops_test.py::FusedAttentionTest::test_fused_attention_fwd4")
     k1, k2, k3 = random.split(random.key(0), 3)
@@ -292,7 +295,8 @@ class FusedAttentionTest(PallasBaseTest):
   ):
     test_name = str(self).split()[0]
     skip_suffix_list = [4, 6, 7, 8, 9]
-    
+    if jtu.is_device_rocm and 'gfx950' in [d.compute_capability for d in jax.devices()]:
+        self.skipTest("Skip on ROCm: test_fused_attention_bwd: LLVM ERROR: Do not know how to scalarize the result of this operator!")
     if jtu.is_device_rocm and self.INTERPRET and any(test_name.endswith(str(suffix)) for suffix in skip_suffix_list):
       self.skipTest("Skip on ROCm: tests/pallas/gpu_ops_test.py::FusedAttentionTest::test_fused_attention_bwd[4, 6, 7, 8, 9]")
 
