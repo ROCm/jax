@@ -1562,10 +1562,10 @@ class LaxBackedNumpyTests(jtu.JaxTestCase):
   )
   @jax.default_matmul_precision("float32")
   def testPoly(self, a_shape, dtype, rank):
-    if jtu.is_device_rocm and a_shape == (12,) and dtype in ( np.int32,  np.int8 )  and rank == 2:
+    if jtu.is_device_rocm() and a_shape == (12,) and dtype in ( np.int32,  np.int8 )  and rank == 2:
         self.skipTest(f"Skip on ROCm: testPoly: a_shape == (12,) and dtype == {dtype} and rank == 2")
 
-    if jtu.is_device_rocm and a_shape == (6,) and dtype == np.float32 and rank == 2:
+    if jtu.is_device_rocm() and a_shape == (6,) and dtype == np.float32 and rank == 2:
         self.skipTest("Skip on ROCm: testPoly: a_shape == (6,) and dtype == numpy.float32 and rank == 2")
 
     if dtype in (np.float16, jnp.bfloat16, np.int16):
@@ -2585,7 +2585,7 @@ class LaxBackedNumpyTests(jtu.JaxTestCase):
     a2_shape=one_dim_array_shapes,
   )
   def testPolyMul(self, a1_shape, a2_shape, dtype):
-    if jtu.is_device_rocm and str(self).split()[0] == "testPolyMul1":
+    if jtu.is_device_rocm() and str(self).split()[0] == "testPolyMul1":
       self.skipTest("Skip on ROCm: testPolyMul")
 
     rng = jtu.rand_default(self.rng())

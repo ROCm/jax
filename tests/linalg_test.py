@@ -874,7 +874,7 @@ class NumpyLinalgTest(jtu.JaxTestCase):
   @jax.default_matmul_precision("float32")
   def testSVD(self, b, m, n, dtype, full_matrices, compute_uv, hermitian, algorithm):
     if algorithm is not None:
-      if jtu.is_device_rocm and algorithm == lax.linalg.SvdAlgorithm.JACOBI and dtype in {np.float32, np.complex64}:
+      if jtu.is_device_rocm() and algorithm == lax.linalg.SvdAlgorithm.JACOBI and dtype in {np.float32, np.complex64}:
         self.skipTest("Skip on ROCm: testSVD Jacobi tests")
       if hermitian:
         self.skipTest("Hermitian SVD doesn't support the algorithm parameter.")
@@ -1006,7 +1006,7 @@ class NumpyLinalgTest(jtu.JaxTestCase):
   )
   @jax.default_matmul_precision("float32")
   def testQr(self, shape, dtype, full_matrices):
-    if jtu.is_device_rocm:
+    if jtu.is_device_rocm():
       self.skipTest("Skip on ROCm: tests/linalg_test.py::NumpyLinalgTest::testQr")
 
     if (jtu.test_device_matches(["cuda"]) and
@@ -1084,7 +1084,7 @@ class NumpyLinalgTest(jtu.JaxTestCase):
     dtype=float_types + complex_types,
   )
   def testQrBatching(self, shape, dtype):
-    if jtu.is_device_rocm:
+    if jtu.is_device_rocm():
       self.skipTest("Skip on ROCm: tests/linalg_test.py::NumpyLinalgTest::testQrBatching")
 
     rng = jtu.rand_default(self.rng())
