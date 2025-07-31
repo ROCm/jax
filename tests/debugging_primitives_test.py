@@ -806,7 +806,7 @@ class DebugPrintParallelTest(jtu.JaxTestCase):
     self._assertLinesEqual(output(), "hello: 0\nhello: 1\nhello: 2\nhello: 3\n")
 
   def test_unordered_print_with_pjit(self):
-    if jtu.is_device_rocm:
+    if jtu.is_device_rocm():
         self.skipTest("Skip on ROCm: tests/debugging_primitives_test.py::DebugPrintParallelTest::test_unordered_print_with_pjit")
     def f(x):
       debug_print("{}", x, ordered=False)
@@ -843,7 +843,7 @@ class DebugPrintParallelTest(jtu.JaxTestCase):
     self.assertEqual(output(), "[0 1 2 3 4 5 6 7]\n")
 
   def test_unordered_print_of_pjit_of_while(self):
-    if jtu.is_device_rocm:
+    if jtu.is_device_rocm():
         self.skipTest("Skip on ROCm: tests/debugging_primitives_test.py::DebugPrintParallelTest::test_unordered_print_of_pjit_of_while")
     def f(x):
       def cond(carry):

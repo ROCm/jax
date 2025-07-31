@@ -481,7 +481,7 @@ class PgleTest(jtu.JaxTestCase):
   @parameterized.parameters([True, False])
   @jtu.thread_unsafe_test()
   def testAutoPgleWithCommandBuffers(self, enable_compilation_cache):
-    if jtu.is_device_rocm:
+    if jtu.is_device_rocm():
         self.skipTest("Skip on ROCm: tests/pgle_test.py::PgleTest::testAutoPgleWithCommandBuffers")
     with (config.pgle_profiling_runs(1),
           config.enable_compilation_cache(enable_compilation_cache),

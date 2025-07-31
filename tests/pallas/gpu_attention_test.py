@@ -104,7 +104,7 @@ class DecodeAttentionTest(PallasBaseTest):
       kv_seq_len,
       return_residuals,
   ):
-    if jtu.is_device_rocm and 'gfx950' in [d.compute_capability for d in jax.devices()]:
+    if jtu.is_device_rocm() and 'gfx950' in [d.compute_capability for d in jax.devices()]:
       self.skipTest("Skip on ROCm: test_mqa: LLVM ERROR: Do not know how to scalarize the result of this operator!")
     del kwargs
     normalize_output = not return_residuals
@@ -185,7 +185,7 @@ class DecodeAttentionTest(PallasBaseTest):
       kv_seq_len,
       return_residuals,
   ):
-    if jtu.is_device_rocm and 'gfx950' in [d.compute_capability for d in jax.devices()]:
+    if jtu.is_device_rocm() and 'gfx950' in [d.compute_capability for d in jax.devices()]:
       self.skipTest("Skip on ROCm: test_gqa: LLVM ERROR: Do not know how to scalarize the result of this operator!")
     del kwargs
     normalize_output = not return_residuals
