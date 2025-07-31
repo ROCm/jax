@@ -395,6 +395,20 @@ def supported_dtypes():
 def is_device_rocm():
   return 'rocm' in xla_bridge.get_backend().platform_version
 
+def any_rocm_device_has_gfx_prefix(gfx_prefixes: str | tuple[str])->bool:
+  """Returns true if any available device has gfx value that starts with any of
+  prefixes in gfx_prefixes.
+  Intended use is to skip tests that require certain features not present in
+  devices."""
+  if not is_device_rocm():
+    return False
+  if isinstance(gfx_prefixes, str):
+    gfx_prefixes = (gfx_prefixes,)
+  assert isinstance(gfx_prefixes, tuple), "argument must be a tuple of strings"
+  assert all([isinstance(e, str) for e in gfx_prefixes])
+  gfxs = frozenset([d.compute_capability for d in jax.devices()])
+  return any([g.startswith(gfx_prefixes) for g in gfxs])
+
 def get_rocm_version():
   rocm_path = os.environ.get("ROCM_PATH", "/opt/rocm")
   version_path = Path(rocm_path) / ".info" / "version"
