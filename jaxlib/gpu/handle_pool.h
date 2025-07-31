@@ -24,11 +24,25 @@ limitations under the License.
 #include "absl/synchronization/mutex.h"
 
 namespace jax {
+// Enum to distinguish between pool types
+enum class HandleKind {
+  UNKNOWN,
+  BLAS,
+  SOLVER
+};
+
+// Tag types for unique pool instantiations
+struct DefaultTag {};
+struct BlasTag {};
+struct SolverTag {};
+struct SparseTag {};
 
 // To avoid creating cublas/cusolver contexts in the middle of execution, we
 // maintain a pool of them.
-template <typename HandleType, typename StreamType>
+template <typename HandleType, typename StreamType, typename Tag = DefaultTag>
 class HandlePool {
+  HandleKind kind() const { return kind_; }
+  void set_kind(HandleKind kind) { kind_ = kind; }
  public:
   HandlePool() = default;
 
@@ -66,44 +80,74 @@ class HandlePool {
     HandleType get() { return handle_; }
 
    private:
-    friend class HandlePool<HandleType, StreamType>;
-    Handle(HandlePool<HandleType, StreamType>* pool, HandleType handle,
+    friend class HandlePool<HandleType, StreamType, Tag>;
+    Handle(HandlePool<HandleType, StreamType, Tag>* pool, HandleType handle,
            StreamType stream)
         : pool_(pool), handle_(handle), stream_(stream) {}
-    HandlePool<HandleType, StreamType>* pool_ = nullptr;
+    HandlePool<HandleType, StreamType, Tag>* pool_ = nullptr;
     HandleType handle_ = nullptr;
     StreamType stream_ = nullptr;
   };
 
   // Borrows a handle from the pool. If 'stream' is non-null, sets the stream
-  // associated with the handle.
-  static absl::StatusOr<Handle> Borrow(StreamType stream);
+  // associated with the handle. On first use for a stream, creates two handles.
+  static absl::StatusOr<Handle> Borrow(StreamType stream) {
+    auto* pool = Instance();
+    absl::MutexLock lock(&pool->mu_);
+    HandleType handle;
+    if (pool->handles_[stream].empty()) {
+      HandleType new_handle;
+      absl::Status status = JAX_AS_STATUS(CreateHandle(&new_handle));
+      if (!status.ok()) return status;
+      pool->handles_[stream].push_back(new_handle);
+    }
+    handle = pool->handles_[stream].back();
+    pool->handles_[stream].pop_back();
+    if (stream) {
+      absl::Status status = JAX_AS_STATUS(SetHandleStream(handle, stream));
+      if (!status.ok()) return status;
+    }
+    return Handle(pool, handle, stream);
+  }
+
+  // These must be specialized for each handle type in the corresponding pool .cc file
+  static absl::Status CreateHandle(HandleType* handle);
+  static absl::Status SetHandleStream(HandleType handle, StreamType stream);
 
  private:
-  static HandlePool<HandleType, StreamType>* Instance();
+  static HandlePool<HandleType, StreamType, Tag>* Instance(HandleKind kind = HandleKind::UNKNOWN);
 
   void Return(HandleType handle, StreamType stream);
 
   absl::Mutex mu_;
   std::map<StreamType, std::vector<HandleType>> handles_ ABSL_GUARDED_BY(mu_);
+  HandleKind kind_ = HandleKind::UNKNOWN;
 };
 
-template <typename HandleType, typename StreamType>
-/*static*/ HandlePool<HandleType, StreamType>*
-HandlePool<HandleType, StreamType>::Instance() {
-  static auto* pool = new HandlePool<HandleType, StreamType>;
-  return pool;
+template <typename HandleType, typename StreamType, typename Tag>
+/*static*/ HandlePool<HandleType, StreamType, Tag>*
+HandlePool<HandleType, StreamType, Tag>::Instance(HandleKind kind) {
+  static std::map<HandleKind, HandlePool<HandleType, StreamType, Tag>*> pools;
+  auto it = pools.find(kind);
+  if (it == pools.end()) {
+    auto* pool = new HandlePool<HandleType, StreamType, Tag>;
+    pool->set_kind(kind);
+    pools[kind] = pool;
+    return pool;
+  }
+  return it->second;
 }
 
-template <typename HandleType, typename StreamType>
-void HandlePool<HandleType, StreamType>::Return(HandleType handle,
-                                                StreamType stream) {
+template <typename HandleType, typename StreamType, typename Tag>
+void HandlePool<HandleType, StreamType, Tag>::Return(HandleType handle,
+                                                    StreamType stream) {
   absl::MutexLock lock(&mu_);
   handles_[stream].push_back(handle);
 }
 
 // template <typename HandleType, typename StreamType>
 // HandlePool<HandleType, StreamType>::Borrow(StreamType stream)
+
 
 }  // namespace jax
 

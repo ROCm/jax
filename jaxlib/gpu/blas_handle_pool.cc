@@ -20,13 +20,14 @@ limitations under the License.
 #include "jaxlib/gpu/gpu_kernel_helpers.h"
 #include "jaxlib/gpu/vendor.h"
 #include "jaxlib/gpu/handle_pool.h"
-
 namespace jax {
 
 template <>
-/*static*/ absl::StatusOr<BlasHandlePool::Handle> BlasHandlePool::Borrow(
-    gpuStream_t stream) {
-  BlasHandlePool* pool = Instance();
+/*static*/ absl::StatusOr<HandlePool<gpublasHandle_t, gpuStream_t, BlasTag>::Handle>
+HandlePool<gpublasHandle_t, gpuStream_t, BlasTag>::Borrow(gpuStream_t stream) {
+  auto* pool = Instance(HandleKind::BLAS);
+  std::cout << "BlasHandlePool kind: " << static_cast<int>(pool->kind_) << std::endl;
+
   absl::MutexLock lock(&pool->mu_);
   gpublasHandle_t handle;
   if (pool->handles_[stream].empty()) {
@@ -36,7 +37,11 @@ template <>
     pool->handles_[stream].pop_back();
   }
   if (stream) {
-    JAX_RETURN_IF_ERROR(JAX_AS_STATUS(gpublasSetStream(handle, stream)));
+    if (pool->kind_ == HandleKind::BLAS) {
+      JAX_RETURN_IF_ERROR(JAX_AS_STATUS(gpublasSetStream(handle, stream)));
+    } else {
+      return absl::InternalError("BlasHandlePool kind is not BLAS");
+    }
   }
   return Handle(pool, handle, stream);
 }

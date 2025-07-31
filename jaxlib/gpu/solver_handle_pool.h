@@ -26,7 +26,7 @@ limitations under the License.
 
 namespace jax {
 
-using SolverHandlePool = HandlePool<gpusolverDnHandle_t, gpuStream_t>;
+using SolverHandlePool = HandlePool<gpusolverDnHandle_t, gpuStream_t, SolverTag>;
 
 template <>
 absl::StatusOr<SolverHandlePool::Handle> SolverHandlePool::Borrow(
