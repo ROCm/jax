@@ -14,7 +14,6 @@ limitations under the License.
 ==============================================================================*/
 
 #include "jaxlib/gpu/solver_handle_pool.h"
-
 #include "absl/status/statusor.h"
 #include "absl/synchronization/mutex.h"
 #include "jaxlib/gpu/gpu_kernel_helpers.h"
@@ -30,7 +29,7 @@ namespace jax {
 template <>
 /*static*/ absl::StatusOr<SolverHandlePool::Handle> SolverHandlePool::Borrow(
     gpuStream_t stream) {
-  SolverHandlePool* pool = Instance();
+  SolverHandlePool* pool = Instance(HandleKind::SOLVER);
   absl::MutexLock lock(&pool->mu_);
   gpusolverDnHandle_t handle;
   if (pool->handles_[stream].empty()) {
@@ -40,7 +39,11 @@ template <>
     pool->handles_[stream].pop_back();
   }
   if (stream) {
-    JAX_RETURN_IF_ERROR(JAX_AS_STATUS(gpusolverDnSetStream(handle, stream)));
+    if (pool->kind_ == HandleKind::SOLVER) {
+      JAX_RETURN_IF_ERROR(JAX_AS_STATUS(gpusolverDnSetStream(handle, stream)));
+    } else {
+      return absl::InternalError("SolverHandlePool kind is not SOLVER");
+    }
   }
   return Handle(pool, handle, stream);
 }

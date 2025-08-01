@@ -1,3 +1,6 @@
+
+// Tag type for BLAS pool
+struct BlasTag {};
 /* Copyright 2024 The JAX Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,7 +25,7 @@ limitations under the License.
 
 namespace jax {
 
-using BlasHandlePool = HandlePool<gpublasHandle_t, gpuStream_t>;
+using BlasHandlePool = HandlePool<gpublasHandle_t, gpuStream_t, BlasTag>;
 
 template <>
 absl::StatusOr<BlasHandlePool::Handle> BlasHandlePool::Borrow(
