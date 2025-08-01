@@ -431,10 +431,12 @@ typedef hipDoubleComplex gpuDoubleComplex;
 typedef hipComplex gpublasComplex;
 typedef hipDoubleComplex gpublasDoubleComplex;
 
-typedef hipsolverHandle_t gpusolverDnHandle_t;
+// Create unique opaque pointer types for proper singleton separation - BLAS and SOLVER only
+typedef struct hipblasHandle_* gpublasHandle_t;
+typedef struct hipsolverHandle_* gpusolverDnHandle_t;
+
 typedef hipblasFillMode_t gpublasFillMode_t;
 typedef hipsolverFillMode_t gpusolverFillMode_t;
-typedef hipblasHandle_t gpublasHandle_t;
 typedef hipblasOperation_t gpublasOperation_t;
 typedef hipblasStatus_t gpublasStatus_t;
 typedef hipCtx_t gpuContext_t;
@@ -480,8 +482,10 @@ typedef hipsparseDnVecDescr_t gpusparseDnVecDescr_t;
 #define GPU_C_64F HIP_C_64F
 #define GPU_R_64F HIP_R_64F
 
-#define gpublasCreate hipblasCreate
+// Wrapper functions for BLAS handles to ensure unique types
+#define gpublasCreate(handle) hipblasCreate(reinterpret_cast<hipblasHandle_t*>(handle))
 #define gpublasSetStream hipblasSetStream
+
 #define gpublasSgeqrfBatched hipblasSgeqrfBatched
 #define gpublasDgeqrfBatched hipblasDgeqrfBatched
 #define gpublasCgeqrfBatched hipblasCgeqrfBatched
@@ -531,8 +535,10 @@ typedef hipsparseDnVecDescr_t gpusparseDnVecDescr_t;
 #define GPUDNN_LSTM miopenLSTM
 #define GPUDNN_BIDIRECTIONAL miopenRNNbidirection
 
-#define gpusolverDnCreate hipsolverCreate
+// Wrapper functions for SOLVER handles to ensure unique types
+#define gpusolverDnCreate(handle) hipsolverCreate(reinterpret_cast<hipsolverHandle_t*>(handle))
 #define gpusolverDnSetStream hipsolverSetStream
+
 #define gpusolverDnCreateSyevjInfo hipsolverCreateSyevjInfo
 #define gpusolverDnDestroySyevjInfo hipsolverDestroySyevjInfo
 #define gpusolverDnSgeqrf hipsolverSgeqrf
