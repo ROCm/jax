@@ -450,7 +450,10 @@ typedef hipDoubleComplex gpuDoubleComplex;
 typedef hipComplex gpublasComplex;
 typedef hipDoubleComplex gpublasDoubleComplex;
 
-typedef hipsolverHandle_t gpusolverDnHandle_t;
+// Create unique opaque pointer types for proper singleton separation - BLAS and SOLVER only
+typedef struct hipblasHandle_* gpublasHandle_t;
+typedef struct hipsolverHandle_* gpusolverDnHandle_t;
+
 typedef hipblasFillMode_t gpublasFillMode_t;
 typedef hipsolverFillMode_t gpusolverFillMode_t;
 typedef struct hipblasHandle_* gpublasHandle_t;
@@ -502,6 +505,7 @@ typedef hipsparseDnVecDescr_t gpusparseDnVecDescr_t;
 // Wrapper functions for BLAS handles to ensure unique types
 #define gpublasCreate(handle) hipblasCreate(reinterpret_cast<hipblasHandle_t*>(handle))
 #define gpublasSetStream hipblasSetStream
+
 #define gpublasSgeqrfBatched hipblasSgeqrfBatched
 #define gpublasDgeqrfBatched hipblasDgeqrfBatched
 #define gpublasCgeqrfBatched hipblasCgeqrfBatched
@@ -554,6 +558,7 @@ typedef hipsparseDnVecDescr_t gpusparseDnVecDescr_t;
 // Wrapper functions for SOLVER handles to ensure unique types
 #define gpusolverDnCreate(handle) hipsolverCreate(reinterpret_cast<hipsolverHandle_t*>(handle))
 #define gpusolverDnSetStream hipsolverSetStream
+
 #define gpusolverDnCreateSyevjInfo hipsolverCreateSyevjInfo
 #define gpusolverDnDestroySyevjInfo hipsolverDestroySyevjInfo
 #define gpusolverDnSgeqrf hipsolverSgeqrf
