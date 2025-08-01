@@ -212,7 +212,6 @@ ffi::Error GeqrfImpl(int64_t batch, int64_t rows, int64_t cols,
                      gpuStream_t stream, ffi::ScratchAllocator& scratch,
                      ffi::AnyBuffer a, ffi::Result<ffi::AnyBuffer> out,
                      ffi::Result<ffi::AnyBuffer> tau) {
-  std::cout<<"CAlllllllllll QR decomposition: geqrf";
   FFI_ASSIGN_OR_RETURN(auto m, MaybeCastNoOverflow<int>(rows));
   FFI_ASSIGN_OR_RETURN(auto n, MaybeCastNoOverflow<int>(cols));
 
