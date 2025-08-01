@@ -18,6 +18,8 @@ limitations under the License.
 
 #include <map>
 #include <vector>
+#include <iostream>
+#include <typeinfo>
 
 #include "absl/base/thread_annotations.h"
 #include "absl/status/statusor.h"
@@ -38,6 +40,12 @@ struct SolverTag {};
 
 // To avoid creating cublas/cusolver contexts in the middle of execution, we
 // maintain a pool of them.
+
+// The Tag template parameter ensures unique pool instantiations for different
+// handle types (BLAS, SOLVER, etc.). Without this tag, C++ template 
+// instantiation would create a single shared static pool when HandleType and 
+// StreamType are the same, leading to resource contamination between different
+// GPU library contexts (e.g., hipBLAS and hipSOLVER sharing the same pool).
 template <typename HandleType, typename StreamType, typename Tag = DefaultTag>
 class HandlePool {
   HandleKind kind() const { return kind_; }

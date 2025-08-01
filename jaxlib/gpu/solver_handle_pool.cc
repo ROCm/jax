@@ -29,26 +29,19 @@ namespace jax {
 template <>
 /*static*/ absl::StatusOr<SolverHandlePool::Handle> SolverHandlePool::Borrow(
     gpuStream_t stream) {
-  std::cout << "HandleKind::SOLVER = " << static_cast<int>(HandleKind::SOLVER) << std::endl;
   SolverHandlePool* pool = Instance(HandleKind::SOLVER);
   absl::MutexLock lock(&pool->mu_);
   gpusolverDnHandle_t handle;
-  std::cout << "[SolverHandlePool::Borrow] pool address: " << pool
-            << ", kind: " << static_cast<int>(pool->kind_)
-            << ", stream: " << stream << std::endl;
   if (pool->handles_[stream].empty()) {
-    std::cout << "[SolverHandlePool::Borrow] Creating new solver handle for stream: " << stream << std::endl;
     JAX_RETURN_IF_ERROR(JAX_AS_STATUS(gpusolverDnCreate(&handle)));
   } else {
     handle = pool->handles_[stream].back();
     pool->handles_[stream].pop_back();
-    std::cout << "[SolverHandlePool::Borrow] Reusing solver handle for stream: " << stream << std::endl;
   }
   if (stream) {
     if (pool->kind_ == HandleKind::SOLVER) {
       JAX_RETURN_IF_ERROR(JAX_AS_STATUS(gpusolverDnSetStream(handle, stream)));
     } else {
-      std::cout << "[SolverHandlePool::Borrow] ERROR: Pool kind is not SOLVER!" << std::endl;
       return absl::InternalError("SolverHandlePool kind is not SOLVER");
     }
   }

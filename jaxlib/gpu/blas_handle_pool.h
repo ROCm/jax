@@ -23,9 +23,6 @@ limitations under the License.
 #include "jaxlib/gpu/vendor.h"
 #include "jaxlib/gpu/handle_pool.h"
 
-
-
-
 namespace jax {
 
 using BlasHandlePool = HandlePool<gpublasHandle_t, gpuStream_t, BlasTag>;
