@@ -10,6 +10,11 @@ pillow>=10.4.0
 # TODO(kanglan): Remove once psutil from portpicker supports python 3.13t
 portpicker; python_version<"3.13"
 pytest-xdist
+pytest-json-report
+pytest-html
+pytest-rerunfailures
+pytest-html-merger
+pytest-reportlog
 wheel
 rich
 setuptools
@@ -19,3 +24,4 @@ matplotlib~=3.8.4; python_version=="3.10"
 matplotlib; python_version>="3.11"
 opt-einsum
 auditwheel
+
