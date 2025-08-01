@@ -35,7 +35,6 @@ enum class HandleKind {
 struct DefaultTag {};
 struct BlasTag {};
 struct SolverTag {};
-struct SparseTag {};
 
 // To avoid creating cublas/cusolver contexts in the middle of execution, we
 // maintain a pool of them.
@@ -90,29 +89,8 @@ class HandlePool {
   };
 
   // Borrows a handle from the pool. If 'stream' is non-null, sets the stream
-  // associated with the handle. On first use for a stream, creates two handles.
-  static absl::StatusOr<Handle> Borrow(StreamType stream) {
-    auto* pool = Instance();
-    absl::MutexLock lock(&pool->mu_);
-    HandleType handle;
-    if (pool->handles_[stream].empty()) {
-      HandleType new_handle;
-      absl::Status status = JAX_AS_STATUS(CreateHandle(&new_handle));
-      if (!status.ok()) return status;
-      pool->handles_[stream].push_back(new_handle);
-    }
-    handle = pool->handles_[stream].back();
-    pool->handles_[stream].pop_back();
-    if (stream) {
-      absl::Status status = JAX_AS_STATUS(SetHandleStream(handle, stream));
-      if (!status.ok()) return status;
-    }
-    return Handle(pool, handle, stream);
-  }
-
-  // These must be specialized for each handle type in the corresponding pool .cc file
-  static absl::Status CreateHandle(HandleType* handle);
-  static absl::Status SetHandleStream(HandleType handle, StreamType stream);
+  // associated with the handle.
+  static absl::StatusOr<Handle> Borrow(StreamType stream);
 
  private:
   static HandlePool<HandleType, StreamType, Tag>* Instance(HandleKind kind = HandleKind::UNKNOWN);
