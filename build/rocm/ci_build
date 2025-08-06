@@ -24,6 +24,12 @@ import argparse
 import os
 import subprocess
 import sys
+from typing import List
+
+
+DEFAULT_GPU_DEVICE_TARGETS = (
+    "gfx906,gfx908,gfx90a,gfx942,gfx1030,gfx1100,gfx1101,gfx1200,gfx1201"
+)
 
 
 def image_by_name(name):
@@ -40,7 +46,11 @@ def dist_wheels(
     rocm_build_job="",
     rocm_build_num="",
     compiler="gcc",
+    gpu_device_targets: List[str] = None,
 ):
+    if not gpu_device_targets:
+        gpu_device_targets = DEFAULT_GPU_DEVICE_TARGETS.split(",")
+
     if xla_path:
         xla_path = os.path.abspath(xla_path)
 
@@ -65,6 +75,7 @@ def dist_wheels(
         "--build-arg=ROCM_BUILD_JOB=%s" % rocm_build_job,
         "--build-arg=ROCM_BUILD_NUM=%s" % rocm_build_num,
         "--tag=%s" % image,
+        "--build-arg=GPU_DEVICE_TARGETS=%s" % " ".join(gpu_device_targets),
         ".",
     ]
 
@@ -87,6 +98,8 @@ def dist_wheels(
         pyver_string,
         "--compiler",
         compiler,
+        "--gpu-device-targets",
+        ",".join(gpu_device_targets),
     ]
 
     if xla_path:
@@ -160,9 +173,13 @@ def dist_docker(
     tag="rocm/jax-dev",
     dockerfile=None,
     keep_image=True,
+    gpu_device_targets: List[str] = None,
 ):
     if not dockerfile:
         dockerfile = "build/rocm/Dockerfile.ms"
+
+    if not gpu_device_targets:
+        gpu_device_targets = DEFAULT_GPU_DEVICE_TARGETS.split(",")
 
     python_version = python_versions[0]
 
@@ -178,6 +195,7 @@ def dist_docker(
         "--target",
         "rt_build",
         "--build-arg=ROCM_VERSION=%s" % rocm_version,
+        "--build-arg=GPU_DEVICE_TARGETS=%s" % " ".join(gpu_device_targets),
         "--build-arg=ROCM_BUILD_JOB=%s" % rocm_build_job,
         "--build-arg=ROCM_BUILD_NUM=%s" % rocm_build_num,
         "--build-arg=BASE_DOCKER=%s" % base_docker,
@@ -244,6 +262,55 @@ def test(image_name, test_cmd):
     subprocess.check_call(cmd)
 
 
+def canonicalize_python_versions(versions: List[str]):
+    if isinstance(versions, str):
+        raise ValueError("'versions' must be a list of strings: versions=%r" % versions)
+
+    cleaned = []
+    for v in versions:
+        tup = v.split(".")
+        major = tup[0]
+        minor = tup[1]
+        rev = None
+        if len(tup) > 2 and tup[2]:
+            rev = tup[2]
+
+        cleaned.append("%s.%s" % (major, minor))
+
+    return cleaned
+
+
+def parse_gpu_targets(targets_string):
+    # catch case where targets_string was empty.
+    # None should already be caught by argparse, but
+    # it doesn't hurt to check twice
+    if not targets_string:
+        targets_string = DEFAULT_GPU_DEVICE_TARGETS
+
+    if "," in targets_string:
+        targets = targets_string.split(",")
+    elif " " in targets_string:
+        targets = targets_string.split(" ")
+    else:
+        targets = targets_string
+
+    res = []
+    # cleanup and validation
+    for t in targets:
+        if not t:
+            continue
+
+        if not t.startswith("gfx"):
+            raise ValueError("Invalid GPU architecture target: %r" % t)
+
+        res.append(t.strip())
+
+    if not res:
+        raise ValueError("GPU_DEVICE_TARGETS cannot be empty")
+
+    return res
+
+
 def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument(
@@ -255,7 +322,7 @@ def parse_args():
     p.add_argument(
         "--python-versions",
         type=lambda x: x.split(","),
-        default="3.12",
+        default=["3.12"],
         help="Comma separated list of CPython versions to build wheels for",
     )
 
@@ -287,6 +354,11 @@ def parse_args():
         choices=["gcc", "clang"],
         help="Compiler backend to use when compiling jax/jaxlib",
     )
+    p.add_argument(
+        "--gpu-device-targets",
+        default=DEFAULT_GPU_DEVICE_TARGETS,
+        help="List of AMDGPU device targets passed from job",
+    )
 
     subp = p.add_subparsers(dest="action", required=True)
 
@@ -306,15 +378,18 @@ def parse_args():
 
 def main():
     args = parse_args()
+    gpu_device_targets = parse_gpu_targets(args.gpu_device_targets)
+    python_versions = canonicalize_python_versions(args.python_versions)
 
     if args.action == "dist_wheels":
         dist_wheels(
             args.rocm_version,
-            args.python_versions,
+            python_versions,
             args.xla_source_dir,
             args.rocm_build_job,
             args.rocm_build_num,
             compiler=args.compiler,
+            gpu_device_targets=gpu_device_targets,
         )
 
     elif args.action == "test":
@@ -323,22 +398,24 @@ def main():
     elif args.action == "dist_docker":
         dist_wheels(
             args.rocm_version,
-            args.python_versions,
+            python_versions,
             args.xla_source_dir,
             args.rocm_build_job,
             args.rocm_build_num,
             compiler=args.compiler,
+            gpu_device_targets=gpu_device_targets,
         )
         dist_docker(
             args.rocm_version,
             args.base_docker,
-            args.python_versions,
+            python_versions,
             args.xla_source_dir,
             rocm_build_job=args.rocm_build_job,
             rocm_build_num=args.rocm_build_num,
             tag=args.image_tag,
             dockerfile=args.dockerfile,
             keep_image=args.keep_image,
+            gpu_device_targets=gpu_device_targets,
         )
 
 
