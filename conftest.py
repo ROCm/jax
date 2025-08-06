@@ -138,7 +138,6 @@ def pytest_runtest_protocol(item, nextitem):
 def pytest_sessionstart(session):
     """Called after the Session object has been created"""
     test_file = test_logger.get_test_file_name(session)
-    print(f"Starting test session for {test_file} on GPU {os.environ.get('HIP_VISIBLE_DEVICES', 'unknown')}")
 
 @pytest.hookimpl(trylast=True)
 def pytest_sessionfinish(session, exitstatus):
