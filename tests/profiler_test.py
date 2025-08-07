@@ -244,8 +244,7 @@ class ProfilerTest(unittest.TestCase):
     path = os.path.join(logdir, 'plugins', 'profile', '*', '*.xplane.pb')
     self.assertEqual(1, len(glob.glob(path)),
                      'Expected one path match: ' + path)
-
-  # @unittest.skip("Test causes OOMs")
+  
   @unittest.skipIf(not (portpicker and profiler_client and tf_profiler),
     "Test requires tensorflow.profiler and portpicker")
   def testSingleWorkerSamplingMode(self, delay_ms=None):
