@@ -18,6 +18,9 @@ import json
 import argparse
 import threading
 import subprocess
+import re
+import html
+import traceback
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
@@ -272,10 +275,41 @@ def append_abort_to_json(json_file, testfile, abort_info):
         with open(json_file, "w") as f:
             json.dump(report_data, f, indent=2)
             
-    except Exception as e:
-        print(f"Failed to create JSON report for {testfile}: {e}")
-        import traceback
-        traceback.print_exc()
+    except (OSError, IOError) as e:
+        print(f"Failed to write JSON report for {testfile}: {e}")
+    except json.JSONDecodeError as e:
+        print(f"Failed to parse existing JSON report for {testfile}: {e}")
+        print("Creating new JSON file instead...")
+        # Try creating a new file structure with just the abort test
+        try:
+            current_time = datetime.now().timestamp()
+            new_report_data = {
+                "created": current_time,
+                "duration": abort_info.get('duration', 0),
+                "exitcode": 1,
+                "root": "/rocm-jax/jax",
+                "environment": {},
+                "summary": {
+                    "passed": 0,
+                    "failed": 1,
+                    "total": 1,
+                    "collected": 1,
+                    "unskipped_total": 1
+                },
+                "collectors": [
+                    {
+                        "nodeid": "",
+                        "outcome": "failed",
+                        "result": [{"nodeid": f"tests/{testfile}.py", "type": "Module"}]
+                    }
+                ],
+                "tests": [abort_test]
+            }
+            os.makedirs(os.path.dirname(json_file), exist_ok=True)
+            with open(json_file, "w") as f:
+                json.dump(new_report_data, f, indent=2)
+        except (OSError, IOError) as io_e:
+            print(f"Failed to create new JSON report for {testfile}: {io_e}")
 
 def append_abort_to_html(html_file, testfile, abort_info):
     """Generate or append abort info to pytest-html format HTML report"""
@@ -298,25 +332,26 @@ def append_abort_to_html(html_file, testfile, abort_info):
             duration_str = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
             
             # Create abort test row HTML
-            abort_row = f"""      <tbody class="results-table-row">
-        <tr class="collapsible">
-          <td class="col-result">Failed</td>
-          <td class="col-name">tests/{testfile}.py::{test_name}</td>
-          <td class="col-duration">{duration_str}</td>
-          <td class="col-links"></td>
-        </tr>
-        <tr class="extras-row">
-          <td class="extra" colspan="4">
-            <div class="extraHTML"></div>
-            <div class="logwrapper">
-              <div class="logexpander"></div>
-              <div class="log">Test aborted: {abort_info.get('reason', 'Test aborted or crashed.')}<br/>
+            abort_row = f"""
+                <tbody class="results-table-row">
+                    <tr class="collapsible">
+                        <td class="col-result">Failed</td>
+                        <td class="col-name">tests/{testfile}.py::{test_name}</td>
+                        <td class="col-duration">{duration_str}</td>
+                        <td class="col-links"></td>
+                    </tr>
+                    <tr class="extras-row">
+                        <td class="extra" colspan="4">
+                            <div class="extraHTML"></div>
+                            <div class="logwrapper">
+                                <div class="logexpander"></div>
+                                <div class="log">Test aborted: {abort_info.get('reason', 'Test aborted or crashed.')}<br/>
 Abort detected at: {abort_time}<br/>
 GPU ID: {gpu_id}</div>
-            </div>
-          </td>
-        </tr>
-      </tbody>"""
+                            </div>
+                        </td>
+                    </tr>
+                </tbody>"""
             
             # Insert the abort row before the closing </table> tag of results-table specifically
             if '</table>' in html_content:
@@ -331,7 +366,6 @@ GPU ID: {gpu_id}</div>
                     return
                 
                 # Update the test count in the summary (find and replace pattern)
-                import re
                 
                 # Fix malformed run-count patterns first
                 malformed_pattern = r'(\d+/\d+ test done\.)'
@@ -349,9 +383,9 @@ GPU ID: {gpu_id}</div>
                 
                 # Update "X test took" pattern (current pytest-html format)
                 count_pattern2 = r'(\d+) tests? took'
-                match2 = re.search(count_pattern2, html_content)
-                if match2:
-                    current_count = int(match2.group(1))
+                match = re.search(count_pattern2, html_content)
+                if match:
+                    current_count = int(match.group(1))
                     new_count = current_count + 1
                     html_content = re.sub(count_pattern2, f'{new_count} tests took', html_content)
                 
@@ -368,14 +402,12 @@ GPU ID: {gpu_id}</div>
                     html_content = html_content.replace('data-test-result="failed" disabled', 'data-test-result="failed"')
                 
                 # Update the JSON data in data-jsonblob to include the abort test
-                import re
                 jsonblob_pattern = r'data-jsonblob="([^"]*)"'
                 match = re.search(jsonblob_pattern, html_content)
                 if match:
-                    import html as html_module
                     try:
                         # Decode the HTML-escaped JSON
-                        json_str = html_module.unescape(match.group(1))
+                        json_str = html.unescape(match.group(1))
                         existing_json = json.loads(json_str)
                         
                         # Add the abort test to the tests array
@@ -402,7 +434,7 @@ GPU ID: {gpu_id}</div>
                         existing_json["tests"][test_id] = new_test
                         
                         # Re-encode the JSON and escape for HTML
-                        updated_json_str = html_module.escape(json.dumps(existing_json))
+                        updated_json_str = html.escape(json.dumps(existing_json))
                         html_content = re.sub(jsonblob_pattern, f'data-jsonblob="{updated_json_str}"', html_content)
                         
                     except (json.JSONDecodeError, Exception) as e:
@@ -423,10 +455,12 @@ GPU ID: {gpu_id}</div>
             # File doesn't exist - create complete new HTML file
             _create_new_html_file(html_file, testfile, abort_info)
             
-    except Exception as e:
-        print(f"Failed to update HTML report for {testfile}: {e}")
-        import traceback
-        traceback.print_exc()
+    except (OSError, IOError) as e:
+        print(f"Failed to read/write HTML report for {testfile}: {e}")
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        print(f"Failed to parse existing HTML report for {testfile}: {e}")
+        print("Creating new HTML file instead...")
+        _create_new_html_file(html_file, testfile, abort_info)
 
 def _create_new_html_file(html_file, testfile, abort_info):
     """Create a new HTML file for abort-only report"""
@@ -474,100 +508,99 @@ def _create_new_html_file(html_file, testfile, abort_info):
         }
         
         # Convert JSON to HTML-escaped string for data-jsonblob attribute
-        import html
         json_blob = html.escape(json.dumps(json_data))
         
         html_content = f'''<!DOCTYPE html>
-<html>
-  <head>
-    <meta charset="utf-8"/>
-    <title id="head-title">{testfile}_log.html</title>
-    <link href="assets/style.css" rel="stylesheet" type="text/css"/>
-  </head>
-  <body onLoad="init()">
-    <h1 id="title">{testfile}_log.html</h1>
-    <p>Report generated on {datetime.now().strftime('%d-%b-%Y at %H:%M:%S')} by <a href="https://pypi.python.org/pypi/pytest-html">pytest-html</a> v4.1.1</p>
-    <div id="environment-header">
-      <h2>Environment</h2>
-    </div>
-    <table id="environment"></table>
-    <div class="summary">
-      <div class="summary__data">
-        <h2>Summary</h2>
-        <div class="additional-summary prefix">
-        </div>
-        <p class="run-count">1 tests took {duration_str}.</p>
-        <p class="filter">(Un)check the boxes to filter the results.</p>
-        <div class="summary__reload">
-          <div class="summary__reload__button hidden" onclick="location.reload()">
-            <div>There are still tests running. <br />Reload this page to get the latest results!</div>
-          </div>
-        </div>
-        <div class="summary__spacer"></div>
-        <div class="controls">
-          <div class="filters">
-            <input checked="true" class="filter" name="filter_checkbox" type="checkbox" data-test-result="failed" />
-            <span class="failed">1 Failed,</span>
-            <input checked="true" class="filter" name="filter_checkbox" type="checkbox" data-test-result="passed" disabled/>
-            <span class="passed">0 Passed,</span>
-            <input checked="true" class="filter" name="filter_checkbox" type="checkbox" data-test-result="skipped" disabled/>
-            <span class="skipped">0 Skipped,</span>
-            <input checked="true" class="filter" name="filter_checkbox" type="checkbox" data-test-result="xfailed" disabled/>
-            <span class="xfailed">0 Expected failures,</span>
-            <input checked="true" class="filter" name="filter_checkbox" type="checkbox" data-test-result="xpassed" disabled/>
-            <span class="xpassed">0 Unexpected passes,</span>
-            <input checked="true" class="filter" name="filter_checkbox" type="checkbox" data-test-result="error" disabled/>
-            <span class="error">0 Errors,</span>
-            <input checked="true" class="filter" name="filter_checkbox" type="checkbox" data-test-result="rerun" disabled/>
-            <span class="rerun">0 Reruns</span>
-          </div>
-          <div class="collapse">
-            <button id="show_all_details">Show all details</button>&nbsp;/&nbsp;<button id="hide_all_details">Hide all details</button>
-          </div>
-        </div>
-      </div>
-      <div class="additional-summary summary">
-      </div>
-      <div class="additional-summary postfix">
-      </div>
-    </div>
-    <table id="results-table">
-      <thead id="results-table-head">
-        <tr>
-          <th class="sortable result initial-sort" data-column-type="result">Result</th>
-          <th class="sortable" data-column-type="name">Test</th>
-          <th class="sortable" data-column-type="duration">Duration</th>
-          <th class="sortable links" data-column-type="links">Links</th>
-        </tr>
-      </thead>
-      <tbody class="results-table-row">
-        <tr class="collapsible">
-          <td class="col-result">Failed</td>
-          <td class="col-name">tests/{testfile}.py::{test_name}</td>
-          <td class="col-duration">{duration_str}</td>
-          <td class="col-links"></td>
-        </tr>
-        <tr class="extras-row">
-          <td class="extra" colspan="4">
-            <div class="extraHTML"></div>
-            <div class="logwrapper">
-              <div class="logexpander"></div>
-              <div class="log">Test aborted: {abort_info.get('reason', 'Test aborted or crashed.')}<br/>
-Abort detected at: {abort_time}<br/>
-GPU ID: {gpu_id}</div>
+        <html>
+          <head>
+            <meta charset="utf-8"/>
+            <title id="head-title">{testfile}_log.html</title>
+            <link href="assets/style.css" rel="stylesheet" type="text/css"/>
+          </head>
+          <body onLoad="init()">
+            <h1 id="title">{testfile}_log.html</h1>
+            <p>Report generated on {datetime.now().strftime('%d-%b-%Y at %H:%M:%S')} by <a href="https://pypi.python.org/pypi/pytest-html">pytest-html</a> v4.1.1</p>
+            <div id="environment-header">
+              <h2>Environment</h2>
             </div>
-          </td>
-        </tr>
-      </tbody>
-    </table>
-    <div id="data-container" data-jsonblob="{json_blob}"></div>
-    <script>
-      function init() {{
-        // Initialize any required functionality
-      }}
-    </script>
-  </body>
-</html>'''
+            <table id="environment"></table>
+            <div class="summary">
+              <div class="summary__data">
+                <h2>Summary</h2>
+                <div class="additional-summary prefix">
+                </div>
+                <p class="run-count">1 tests took {duration_str}.</p>
+                <p class="filter">(Un)check the boxes to filter the results.</p>
+                <div class="summary__reload">
+                  <div class="summary__reload__button hidden" onclick="location.reload()">
+                    <div>There are still tests running. <br />Reload this page to get the latest results!</div>
+                  </div>
+                </div>
+                <div class="summary__spacer"></div>
+                <div class="controls">
+                  <div class="filters">
+                    <input checked="true" class="filter" name="filter_checkbox" type="checkbox" data-test-result="failed" />
+                    <span class="failed">1 Failed,</span>
+                    <input checked="true" class="filter" name="filter_checkbox" type="checkbox" data-test-result="passed" disabled/>
+                    <span class="passed">0 Passed,</span>
+                    <input checked="true" class="filter" name="filter_checkbox" type="checkbox" data-test-result="skipped" disabled/>
+                    <span class="skipped">0 Skipped,</span>
+                    <input checked="true" class="filter" name="filter_checkbox" type="checkbox" data-test-result="xfailed" disabled/>
+                    <span class="xfailed">0 Expected failures,</span>
+                    <input checked="true" class="filter" name="filter_checkbox" type="checkbox" data-test-result="xpassed" disabled/>
+                    <span class="xpassed">0 Unexpected passes,</span>
+                    <input checked="true" class="filter" name="filter_checkbox" type="checkbox" data-test-result="error" disabled/>
+                    <span class="error">0 Errors,</span>
+                    <input checked="true" class="filter" name="filter_checkbox" type="checkbox" data-test-result="rerun" disabled/>
+                    <span class="rerun">0 Reruns</span>
+                  </div>
+                  <div class="collapse">
+                    <button id="show_all_details">Show all details</button>&nbsp;/&nbsp;<button id="hide_all_details">Hide all details</button>
+                  </div>
+                </div>
+              </div>
+              <div class="additional-summary summary">
+              </div>
+              <div class="additional-summary postfix">
+              </div>
+            </div>
+            <table id="results-table">
+              <thead id="results-table-head">
+                <tr>
+                  <th class="sortable result initial-sort" data-column-type="result">Result</th>
+                  <th class="sortable" data-column-type="name">Test</th>
+                  <th class="sortable" data-column-type="duration">Duration</th>
+                  <th class="sortable links" data-column-type="links">Links</th>
+                </tr>
+              </thead>
+              <tbody class="results-table-row">
+                <tr class="collapsible">
+                  <td class="col-result">Failed</td>
+                  <td class="col-name">tests/{testfile}.py::{test_name}</td>
+                  <td class="col-duration">{duration_str}</td>
+                  <td class="col-links"></td>
+                </tr>
+                <tr class="extras-row">
+                  <td class="extra" colspan="4">
+                    <div class="extraHTML"></div>
+                    <div class="logwrapper">
+                      <div class="logexpander"></div>
+                      <div class="log">Test aborted: {abort_info.get('reason', 'Test aborted or crashed.')}<br/>
+        Abort detected at: {abort_time}<br/>
+        GPU ID: {gpu_id}</div>
+                    </div>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+            <div id="data-container" data-jsonblob="{json_blob}"></div>
+            <script>
+              function init() {{
+                // Initialize any required functionality
+              }}
+            </script>
+          </body>
+        </html>'''
         
         # Ensure the logs directory exists
         os.makedirs(os.path.dirname(html_file), exist_ok=True)
@@ -578,9 +611,10 @@ GPU ID: {gpu_id}</div>
         
         print(f"Created new HTML report: {html_file}")
         
+    except (OSError, IOError) as e:
+        print(f"Failed to write new HTML report for {testfile}: {e}")
     except Exception as e:
-        print(f"Failed to create new HTML report for {testfile}: {e}")
-        import traceback
+        print(f"Unexpected error creating new HTML report for {testfile}: {e}")
         traceback.print_exc()
 
 
@@ -627,4 +661,5 @@ if __name__ == "__main__":
         print("%d GPUs detected." % sys_gpu_count)
 
     main(args)
+
 
