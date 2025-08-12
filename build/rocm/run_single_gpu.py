@@ -28,6 +28,52 @@ GPU_LOCK = threading.Lock()
 LAST_CODE = 0
 base_dir = "./logs"
 
+# Multi-GPU test files that should be excluded from single GPU runs
+MULTI_GPU_TESTS = {
+    "tests/multiprocess_gpu_test.py",
+    "tests/debug_info_test.py",
+    "tests/checkify_test.py",
+    "tests/mosaic/gpu_test.py",
+    "tests/random_test.py",
+    "tests/jax_jit_test.py",
+    "tests/mesh_utils_test.py",
+    "tests/pjit_test.py",
+    "tests/linalg_sharding_test.py",
+    "tests/multi_device_test.py",
+    "tests/distributed_test.py",
+    "tests/shard_alike_test.py",
+    "tests/api_test.py",
+    "tests/ragged_collective_test.py",
+    "tests/batching_test.py",
+    "tests/scaled_matmul_stablehlo_test.py",
+    "tests/export_harnesses_multi_platform_test.py",
+    "tests/pickle_test.py",
+    "tests/roofline_test.py",
+    "tests/profiler_test.py",
+    "tests/error_check_test.py",
+    "tests/debug_nans_test.py",
+    "tests/shard_map_test.py",
+    "tests/colocated_python_test.py",
+    "tests/cudnn_fusion_test.py",
+    "tests/compilation_cache_test.py",
+    "tests/export_back_compat_test.py",
+    "tests/pgle_test.py",
+    "tests/ffi_test.py",
+    "tests/lax_control_flow_test.py",
+    "tests/fused_attention_stablehlo_test.py",
+    "tests/layout_test.py",
+    "tests/pmap_test.py",
+    "tests/aot_test.py",
+    "tests/mock_gpu_topology_test.py",
+    "tests/ann_test.py",
+    "tests/debugging_primitives_test.py",
+    "tests/array_test.py",
+    "tests/export_test.py",
+    "tests/memories_test.py",
+    "tests/debugger_test.py",
+    "tests/python_callback_test.py"
+}
+
 
 def extract_filename(path):
     base_name = os.path.basename(path)
@@ -111,10 +157,24 @@ def collect_testmodules():
         exit(return_code)
     print("---------- collected test modules ----------")
     test_files = parse_test_log(log_file)
-    print("Found %d test modules." % (len(test_files)))
+    
+    # Filter out multi-GPU tests
+    filtered_test_files = set()
+    excluded_count = 0
+    for test_file in test_files:
+        # Convert absolute path to relative path for comparison
+        relative_path = os.path.relpath(test_file)
+        if relative_path not in MULTI_GPU_TESTS:
+            filtered_test_files.add(test_file)
+        else:
+            excluded_count += 1
+            print(f"Excluding multi-GPU test: {relative_path}")
+    
+    print("Found %d test modules." % (len(filtered_test_files)))
+    print("Excluded %d multi-GPU test modules." % excluded_count)
     print("--------------------------------------------")
-    print("\n".join(test_files))
-    return test_files
+    print("\n".join(filtered_test_files))
+    return filtered_test_files
 
 
 def run_test(testmodule, gpu_tokens, continue_on_fail):

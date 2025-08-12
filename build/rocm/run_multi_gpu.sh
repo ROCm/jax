@@ -52,19 +52,64 @@ run_tests() {
     # Create the log directory if it doesn't exist.
     mkdir -p "$LOG_DIR"
 
-    python3 -m pytest \
-        --html="${LOG_DIR}/multi_gpu_pmap_test_log.html" \
-        --json-report \
-        --json-report-file="${LOG_DIR}/multi_gpu_pmap_test_log.json" \
-        --reruns 3 \
-        tests/pmap_test.py
+    # Multi-GPU test files
+    MULTI_GPU_TESTS=(
+        "tests/multiprocess_gpu_test.py"
+        "tests/debug_info_test.py"
+        "tests/checkify_test.py"
+        "tests/mosaic/gpu_test.py"
+        "tests/random_test.py"
+        "tests/jax_jit_test.py"
+        "tests/mesh_utils_test.py"
+        "tests/pjit_test.py"
+        "tests/linalg_sharding_test.py"
+        "tests/multi_device_test.py"
+        "tests/distributed_test.py"
+        "tests/shard_alike_test.py"
+        "tests/api_test.py"
+        "tests/ragged_collective_test.py"
+        "tests/batching_test.py"
+        "tests/scaled_matmul_stablehlo_test.py"
+        "tests/export_harnesses_multi_platform_test.py"
+        "tests/pickle_test.py"
+        "tests/roofline_test.py"
+        "tests/profiler_test.py"
+        "tests/error_check_test.py"
+        "tests/debug_nans_test.py"
+        "tests/shard_map_test.py"
+        "tests/colocated_python_test.py"
+        "tests/cudnn_fusion_test.py"
+        "tests/compilation_cache_test.py"
+        "tests/export_back_compat_test.py"
+        "tests/pgle_test.py"
+        "tests/ffi_test.py"
+        "tests/lax_control_flow_test.py"
+        "tests/fused_attention_stablehlo_test.py"
+        "tests/layout_test.py"
+        "tests/pmap_test.py"
+        "tests/aot_test.py"
+        "tests/mock_gpu_topology_test.py"
+        "tests/ann_test.py"
+        "tests/debugging_primitives_test.py"
+        "tests/array_test.py"
+        "tests/export_test.py"
+        "tests/memories_test.py"
+        "tests/debugger_test.py"
+        "tests/python_callback_test.py"
+    )
 
-    python3 -m pytest \
-        --html="${LOG_DIR}/multi_gpu_multi_device_test_log.html" \
-        --json-report \
-        --json-report-file="${LOG_DIR}/multi_gpu_multi_device_test_log.json" \
-        --reruns 3 \
-        tests/multi_device_test.py
+    # Run each multi-GPU test
+    for test_file in "${MULTI_GPU_TESTS[@]}"; do
+        test_name=$(basename "$test_file" .py)
+        echo "Running multi-GPU test: $test_file"
+        
+        python3 -m pytest \
+            --html="${LOG_DIR}/multi_gpu_${test_name}_log.html" \
+            --json-report \
+            --json-report-file="${LOG_DIR}/multi_gpu_${test_name}_log.json" \
+            --reruns 3 \
+            "$test_file"
+    done
 
     # Merge individual HTML reports into one.
     python3 -m pytest_html_merger \
