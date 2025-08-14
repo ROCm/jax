@@ -122,8 +122,6 @@ class PagedAttentionKernelTest(PallasBaseTest):
       k_splits,
       attn_logits_soft_cap,
   ):
-    if jtu.is_device_rocm() and 'gfx950' in [d.compute_capability for d in jax.devices()]:
-      self.skipTest("Skip on ROCm: test_paged_attention: LLVM ERROR: Do not know how to scalarize the result of this operator!")
 
     test_name = str(self).split()[0]
     skip_numbers = {0, 1, 3, 5, 6, 7, 9}
