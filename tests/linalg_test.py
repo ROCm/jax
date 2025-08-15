@@ -1709,6 +1709,9 @@ class ScipyLinalgTest(jtu.JaxTestCase):
     dtype=int_types + float_types + complex_types
   )
   def testExpm(self, n, batch_size, dtype):
+    if jtu.is_device_rocm():
+        self.skipTest("Skip on ROCm: testExpm. Test aborts due to HIP runtime issue")
+
     if (jtu.test_device_matches(["cuda"]) and
         _is_required_cuda_version_satisfied(12000)):
       self.skipTest("Triggers a bug in cuda-12 b/287345077")
