@@ -65,6 +65,8 @@ class QdwhTest(jtu.JaxTestCase):
 
   def _testQdwh(self, a, dynamic_shape=None):
     """Computes the polar decomposition and tests its basic properties."""
+    if jtu.is_device_rocm():
+        self.skipTest("Skip on ROCm: testQdwh. Test aborts due to HIP runtime issue")
     eps = jnp.finfo(a.dtype).eps
     u, h, iters, conv = qdwh.qdwh(a, dynamic_shape=dynamic_shape)
     tol = 13 * eps

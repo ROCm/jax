@@ -134,6 +134,8 @@ class LaxBackedScipyTests(jtu.JaxTestCase):
     dtype=float_types + complex_types,
   )
   def test_cg_as_solve(self, shape, dtype):
+    if jtu.is_device_rocm():
+        self.skipTest("Skip on ROCm: test_cg_as_solve. Test aborts due to HIP runtime issue")
 
     rng = jtu.rand_default(self.rng())
     a = rng(shape, dtype)
