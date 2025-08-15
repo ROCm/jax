@@ -28,9 +28,9 @@ detect_amd_gpus() {
         echo "Error: lspci command not found. Aborting."
         exit 1
     fi
-    # Count AMD/ATI GPU controllers.
+    # Count AMD GPUs.
     local count
-    count=$(lspci | grep -c 'controller.*AMD/ATI')
+    count=$(rocm-smi | grep -E '^Device' -A 1000 | awk '$1 ~ /^[0-9]+$/ {count++} END {print count}')
     echo "$count"
 }
 
@@ -52,19 +52,39 @@ run_tests() {
     # Create the log directory if it doesn't exist.
     mkdir -p "$LOG_DIR"
 
-    python3 -m pytest \
-        --html="${LOG_DIR}/multi_gpu_pmap_test_log.html" \
-        --json-report \
-        --json-report-file="${LOG_DIR}/multi_gpu_pmap_test_log.json" \
-        --reruns 3 \
-        tests/pmap_test.py
+    # Multi-GPU test files - load from shared configuration
+    echo "Loading multi-GPU tests from configuration..."
+    
+    # Set the path to the configuration file
+    CONFIG_PATH="build/rocm/multi_gpu_tests_config.py"
+    
+    # Check if python3 and the config file are available
+    if ! python3 -c "import sys; sys.path.insert(0, 'build/rocm'); import multi_gpu_tests_config" 2>/dev/null; then
+        echo "Error: multi_gpu_tests_config.py not found in build/rocm/ or not importable. Aborting."
+        exit 1
+    fi
+    
+    # Load the multi-GPU tests from the configuration file
+    mapfile -t MULTI_GPU_TESTS < <(python3 "$CONFIG_PATH" --list)
 
-    python3 -m pytest \
-        --html="${LOG_DIR}/multi_gpu_multi_device_test_log.html" \
-        --json-report \
-        --json-report-file="${LOG_DIR}/multi_gpu_multi_device_test_log.json" \
-        --reruns 3 \
-        tests/multi_device_test.py
+    # Run each multi-GPU test
+    for test_file in "${MULTI_GPU_TESTS[@]}"; do
+        test_name=$(basename "$test_file" .py)
+        echo "Running multi-GPU test: $test_file"
+        
+        # Define file paths for abort detection (files created by conftest.py)
+        json_log_file="${LOG_DIR}/multi_gpu_${test_name}_log.json"
+        html_log_file="${LOG_DIR}/multi_gpu_${test_name}_log.html"
+        
+        # Run the test
+        python3 -m pytest \
+            --html="$html_log_file" \
+            --json-report \
+            --json-report-file="$json_log_file" \
+            --reruns 3 \
+            "$test_file"
+
+    done
 
     # Merge individual HTML reports into one.
     python3 -m pytest_html_merger \
