@@ -19,14 +19,16 @@ import json
 import threading
 from datetime import datetime
 
+
 @pytest.fixture(autouse=True)
 def add_imports(doctest_namespace):
-  import jax
-  import numpy
-  doctest_namespace["jax"] = jax
-  doctest_namespace["lax"] = jax.lax
-  doctest_namespace["jnp"] = jax.numpy
-  doctest_namespace["np"] = numpy
+    import jax
+    import numpy
+
+    doctest_namespace["jax"] = jax
+    doctest_namespace["lax"] = jax.lax
+    doctest_namespace["jnp"] = jax.numpy
+    doctest_namespace["np"] = numpy
 
 
 # A pytest hook that runs immediately before test collection (i.e. when pytest
@@ -50,15 +52,16 @@ def add_imports(doctest_namespace):
 # in test code to this "magic" hook. TPU tests should not specify more xdist
 # workers than the number of TPU chips.
 def pytest_collection() -> None:
-  if not os.environ.get("JAX_ENABLE_TPU_XDIST", None):
-    return
-  # When running as an xdist worker, will be something like "gw0"
-  xdist_worker_name = os.environ.get("PYTEST_XDIST_WORKER", "")
-  if not xdist_worker_name.startswith("gw"):
-    return
-  xdist_worker_number = int(xdist_worker_name[len("gw"):])
-  os.environ.setdefault("TPU_VISIBLE_CHIPS", str(xdist_worker_number))
-  os.environ.setdefault("ALLOW_MULTIPLE_LIBTPU_LOAD", "true")
+    if not os.environ.get("JAX_ENABLE_TPU_XDIST", None):
+        return
+    # When running as an xdist worker, will be something like "gw0"
+    xdist_worker_name = os.environ.get("PYTEST_XDIST_WORKER", "")
+    if not xdist_worker_name.startswith("gw"):
+        return
+    xdist_worker_number = int(xdist_worker_name[len("gw") :])
+    os.environ.setdefault("TPU_VISIBLE_CHIPS", str(xdist_worker_number))
+    os.environ.setdefault("ALLOW_MULTIPLE_LIBTPU_LOAD", "true")
+
 
 # Thread-safe logging for parallel test execution
 class ThreadSafeTestLogger:
@@ -67,39 +70,40 @@ class ThreadSafeTestLogger:
         self.global_lock = threading.Lock()
         self.base_dir = "./logs"
         os.makedirs(self.base_dir, exist_ok=True)
-    
+
     def get_file_lock(self, test_file):
         """Get or create a lock for a specific test file"""
         with self.global_lock:
             if test_file not in self.locks:
                 self.locks[test_file] = threading.Lock()
             return self.locks[test_file]
-    
+
     def get_test_file_name(self, session):
         """Extract the test file name from the session"""
-        if hasattr(session, 'config') and hasattr(session.config, 'args'):
+        if hasattr(session, "config") and hasattr(session.config, "args"):
             for arg in session.config.args:
-                if arg.endswith('.py') and 'tests/' in arg:
-                    return os.path.basename(arg).replace('.py', '')
-        return 'unknown_test'
-    
-    def log_running_test(self, test_file, test_name, start_time):
+                if arg.endswith(".py") and "tests/" in arg:
+                    return os.path.basename(arg).replace(".py", "")
+        return "unknown_test"
+
+    def log_running_test(self, test_file, test_name, nodeid, start_time):
         """Log the currently running test for abort detection"""
         lock = self.get_file_lock(test_file)
         with lock:
             log_data = {
                 "test_file": test_file,
                 "test_name": test_name,
+                "nodeid": nodeid,
                 "start_time": start_time,
                 "status": "running",
                 "pid": os.getpid(),
-                "gpu_id": os.environ.get("HIP_VISIBLE_DEVICES", "unknown")
+                "gpu_id": os.environ.get("HIP_VISIBLE_DEVICES", "unknown"),
             }
-            
+
             log_file = f"{self.base_dir}/{test_file}_last_running.json"
-            with open(log_file, 'w') as f:
+            with open(log_file, "w") as f:
                 json.dump(log_data, f, indent=2)
-    
+
     def clear_running_test(self, test_file):
         """Clear the running test log when test completes successfully"""
         lock = self.get_file_lock(test_file)
@@ -108,19 +112,22 @@ class ThreadSafeTestLogger:
             if os.path.exists(log_file):
                 os.remove(log_file)
 
+
 # Global logger instance
 test_logger = ThreadSafeTestLogger()
+
 
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_protocol(item, nextitem):
     """Hook that runs around each test to track running tests"""
     test_file = test_logger.get_test_file_name(item.session)
     test_name = item.name
+    nodeid = item.nodeid
     start_time = datetime.now().isoformat()
-    
+
     # Log that this test is starting
-    test_logger.log_running_test(test_file, test_name, start_time)
-    
+    test_logger.log_running_test(test_file, test_name, nodeid, start_time)
+
     try:
         # Run the actual test
         outcome = yield
@@ -134,25 +141,32 @@ def pytest_runtest_protocol(item, nextitem):
             # Only clear if test completed normally (not aborted)
             test_logger.clear_running_test(test_file)
 
+
 @pytest.hookimpl(tryfirst=True)
 def pytest_sessionstart(session):
     """Called after the Session object has been created"""
-    print(f"Starting test session on GPU {os.environ.get('HIP_VISIBLE_DEVICES', 'unknown')}")
+    print(
+        f"Starting test session on GPU {os.environ.get('HIP_VISIBLE_DEVICES', 'unknown')}"
+    )
+
 
 @pytest.hookimpl(trylast=True)
 def pytest_sessionfinish(session, exitstatus):
     """Called after whole test run finished, just log any remaining aborts"""
     test_file = test_logger.get_test_file_name(session)
-    
+
     # Check if there's a remaining running test log (indicates abort)
     log_file = f"{test_logger.base_dir}/{test_file}_last_running.json"
     if os.path.exists(log_file):
         try:
-            with open(log_file, 'r') as f:
+            with open(log_file, "r") as f:
                 abort_data = json.load(f)
-            
+
             print(f"Detected aborted test: {abort_data['test_name']} in {test_file}")
-            print(f"Last running file preserved for run_single_gpu.py to process: {log_file}")
-            
+            print(
+                f"Last running file preserved for run_single_gpu.py to process: {log_file}"
+            )
+
         except Exception as e:
             print(f"Error reading abort detection file for {test_file}: {e}")
+
