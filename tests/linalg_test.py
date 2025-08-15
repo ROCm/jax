@@ -1479,6 +1479,8 @@ class ScipyLinalgTest(jtu.JaxTestCase):
     dtype=float_types + complex_types,
   )
   def testLuGrad(self, shape, dtype):
+    if jtu.is_device_rocm():
+        self.skipTest("Skip on ROCm: testLuGrad. Test aborts due to HIP runtime issue")
     rng = jtu.rand_default(self.rng())
     a = rng(shape, dtype)
     lu = vmap(jsp.linalg.lu) if len(shape) > 2 else jsp.linalg.lu
@@ -1864,6 +1866,8 @@ class ScipyLinalgTest(jtu.JaxTestCase):
     dtype=float_types + complex_types,
   )
   def testIssue2131(self, n, dtype):
+    if jtu.is_device_rocm():
+        self.skipTest("Skip on ROCm: testIssue2131. Test aborts due to HIP runtime issue")
     args_maker_zeros = lambda: [np.zeros((n, n), dtype)]
     osp_fun = lambda a: osp.linalg.expm(a)
     jsp_fun = lambda a: jsp.linalg.expm(a)
@@ -1899,6 +1903,8 @@ class ScipyLinalgTest(jtu.JaxTestCase):
     dtype=float_types + complex_types,
   )
   def testExpmFrechet(self, n, dtype):
+    if jtu.is_device_rocm():
+        self.skipTest("Skip on ROCm: testExpmFrechet. Test aborts due to HIP runtime issue")
     rng = jtu.rand_small(self.rng())
     if dtype == np.float64 or dtype == np.complex128:
       target_norms = [1.0e-2, 2.0e-1, 9.0e-01, 2.0, 3.0]
@@ -1937,6 +1943,9 @@ class ScipyLinalgTest(jtu.JaxTestCase):
     dtype=float_types + complex_types,
   )
   def testExpmGrad(self, n, dtype):
+    if jtu.is_device_rocm():
+        self.skipTest("Skip on ROCm: testExpmGrad. Test aborts due to HIP runtime issue")
+
     rng = jtu.rand_small(self.rng())
     a = rng((n, n), dtype)
     if dtype == np.float64 or dtype == np.complex128:
