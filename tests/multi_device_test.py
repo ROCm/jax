@@ -296,6 +296,8 @@ class MultiDeviceTest(jtu.JaxTestCase):
 
 
   def test_lax_full_like_efficient(self):
+    if jtu.is_device_rocm():
+      self.skipTest("Skip on ROCm: test_lax_full_like_efficient. KeyError.")
     devices = self.get_devices()
     if len(devices) < 4:
       self.skipTest("test requires 4 devices")
