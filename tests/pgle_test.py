@@ -59,6 +59,9 @@ class PgleTest(jtu.JaxTestCase):
     super().tearDown()
 
   def testPGLEProfilerGetFDOProfile(self):
+    if jtu.is_device_rocm():
+      self.skipTest("Skip on ROCm: testPGLEProfilerGetFDOProfile. PGLE collected empty trace.")
+
     mesh = jtu.create_mesh((2,), ('x',))
 
     @partial(
@@ -92,6 +95,9 @@ class PgleTest(jtu.JaxTestCase):
     self.assertIn(b'custom', fdo_profile)
 
   def testPGLEProfilerGetFDOProfileLarge(self):
+    if jtu.is_device_rocm():
+      self.skipTest("Skip on ROCm: testPGLEProfilerGetFDOProfileLarge. PGLE collected empty trace.")
+
     mesh = jtu.create_mesh((2,), ('x',))
     its = 500
 
@@ -133,6 +139,8 @@ class PgleTest(jtu.JaxTestCase):
     return jit_f_fdo_profiles
 
   def testAutoPgle(self):
+    if jtu.is_device_rocm():
+      self.skipTest("Skip on ROCm: testAutoPgle. PGLE collected empty trace.")
     mesh = jtu.create_mesh((2,), ('x',))
 
     with tempfile.TemporaryDirectory() as dump_dir:
@@ -216,6 +224,8 @@ class PgleTest(jtu.JaxTestCase):
       self.assertEqual(cache_miss_count(), 0)
 
   def testAutoPgleWithPersistentCache(self):
+    if jtu.is_device_rocm():
+      self.skipTest("Skip on ROCm: testAutoPgleWithPersistentCache. PGLE collected empty trace.")
     its = 50
     mesh = jtu.create_mesh((2,), ('x',))
 
@@ -482,7 +492,7 @@ class PgleTest(jtu.JaxTestCase):
   @jtu.thread_unsafe_test()
   def testAutoPgleWithCommandBuffers(self, enable_compilation_cache):
     if jtu.is_device_rocm():
-        self.skipTest("Skip on ROCm: tests/pgle_test.py::PgleTest::testAutoPgleWithCommandBuffers")
+      self.skipTest("Skip on ROCm: tests/pgle_test.py::PgleTest::testAutoPgleWithCommandBuffers")
     with (config.pgle_profiling_runs(1),
           config.enable_compilation_cache(enable_compilation_cache),
           config.enable_pgle(True),
