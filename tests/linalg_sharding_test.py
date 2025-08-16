@@ -113,6 +113,8 @@ class LinalgShardingTest(jtu.JaxTestCase):
   )
   @jtu.run_on_devices("gpu", "cpu")
   def test_batch_axis_sharding(self, fun_and_shapes, dtype):
+    if jtu.is_device_rocm():
+      self.skipTest("Skip on ROCm: test_batch_axis_sharding. hipBlas resource allocation failed.")
     fun, shapes = self.get_fun_and_shapes(fun_and_shapes)
     args = self.get_args(shapes, dtype, batch_size=8)
 
