@@ -22,7 +22,7 @@ limitations under the License.
 
 namespace jax {
 
-using BlasHandlePool = HandlePool<gpublasHandle_t, gpuStream_t>;
+using BlasHandlePool = HandlePool<gpublasHandle_t, gpuStream_t, BlasTag>;
 
 template <>
 absl::StatusOr<BlasHandlePool::Handle> BlasHandlePool::Borrow(
