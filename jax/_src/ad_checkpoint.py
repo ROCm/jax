@@ -784,6 +784,10 @@ def _remat_lowering(
     policy,
 ):
   jaxpr_args: Sequence[mlir.IrValues]
+  # (Ruturaj4): Force CSE prevention to be True.
+  # This may reduce certain optimizations
+  # but avoids suspected slowdown/NaN issues in backward passes.
+  prevent_cse = True
   if differentiated and prevent_cse:
     arg_types = map(mlir.aval_to_ir_type, ctx.avals_in)
     flat_args = mlir.flatten_ir_values(args)
