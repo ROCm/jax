@@ -14,6 +14,7 @@
 
 from collections.abc import Sequence
 import importlib
+import os
 import re
 from types import ModuleType
 import warnings
@@ -56,6 +57,10 @@ def import_from_plugin(
 def check_plugin_version(
     plugin_name: str, jaxlib_version: str, plugin_version: str
 ) -> bool:
+  # Environment variable override to skip version check entirely
+  if os.environ.get('JAX_SKIP_VERSION_CHECK', '').lower() in ('1', 'true', 'yes'):
+    return True
+
   # Regex to match a dotted version prefix 0.1.23.456.789 of a PEP440 version.
   # PEP440 allows a number of non-numeric suffixes, which we allow also.
   # We currently do not allow an epoch.
@@ -67,15 +72,46 @@ def check_plugin_version(
       raise ValueError(f"Unable to parse version string '{v}'")
     return tuple(int(x) for x in m.group(0).split("."))
 
-  if _parse_version(jaxlib_version) != _parse_version(plugin_version):
-    warnings.warn(
-        f"JAX plugin {plugin_name} version {plugin_version} is installed, but "
-        "it is not compatible with the installed jaxlib version "
-        f"{jaxlib_version}, so it will not be used.",
-        RuntimeWarning,
-    )
-    return False
-  return True
+  # Check if this is a ROCm plugin/build
+  is_rocm = 'rocm' in plugin_name.lower() or 'rocm' in jaxlib_version.lower()
+
+  if is_rocm:
+    # For ROCm: allow different patch versions but require matching major.minor
+    jaxlib_parsed = _parse_version(jaxlib_version)
+    plugin_parsed = _parse_version(plugin_version)
+
+    # Ensure we have at least major.minor for comparison
+    if len(jaxlib_parsed) < 2 or len(plugin_parsed) < 2:
+      warnings.warn(
+          f"JAX ROCm plugin {plugin_name} version {plugin_version} or jaxlib "
+          f"version {jaxlib_version} is malformed (missing major.minor), "
+          "so the plugin will not be used.",
+          RuntimeWarning,
+      )
+      return False
+
+    # Compare major.minor versions (first two components)
+    if jaxlib_parsed[:2] != plugin_parsed[:2]:
+      warnings.warn(
+          f"JAX ROCm plugin {plugin_name} version {plugin_version} has "
+          f"major.minor version {plugin_parsed[0]}.{plugin_parsed[1]} which "
+          f"does not match jaxlib major.minor version "
+          f"{jaxlib_parsed[0]}.{jaxlib_parsed[1]}, so it will not be used.",
+          RuntimeWarning,
+      )
+      return False
+    return True
+  else:
+    # For non-ROCm: strict version matching (original behavior)
+    if _parse_version(jaxlib_version) != _parse_version(plugin_version):
+      warnings.warn(
+          f"JAX plugin {plugin_name} version {plugin_version} is installed, but "
+          "it is not compatible with the installed jaxlib version "
+          f"{jaxlib_version}, so it will not be used.",
+          RuntimeWarning,
+      )
+      return False
+    return True
 
 
 def maybe_import_plugin_submodule(
