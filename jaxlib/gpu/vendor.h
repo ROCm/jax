@@ -434,6 +434,7 @@ typedef hipDoubleComplex gpublasDoubleComplex;
 // Create unique opaque pointer types for proper singleton separation - BLAS and SOLVER only
 typedef struct hipblasHandle_* gpublasHandle_t;
 typedef struct hipsolverHandle_* gpusolverDnHandle_t;
+typedef struct hipsparseHandle_* gpusparseHandle_t;
 
 typedef hipblasFillMode_t gpublasFillMode_t;
 typedef hipsolverFillMode_t gpusolverFillMode_t;
@@ -468,7 +469,7 @@ typedef hipsolverSyevjInfo_t gpuSyevjInfo_t;
 typedef hipsolverEigMode_t gpusolverEigMode_t;
 typedef hipsolverStatus_t gpusolverStatus_t;
 typedef hipsparseIndexType_t gpusparseIndexType_t;
-typedef hipsparseHandle_t gpusparseHandle_t;
+// typedef hipsparseHandle_t gpusparseHandle_t;
 typedef hipsparseOperation_t gpusparseOperation_t;
 typedef hipsparseStatus_t gpusparseStatus_t;
 typedef hipsparseSpMatDescr_t gpusparseSpMatDescr_t;
@@ -625,8 +626,11 @@ typedef hipsparseDnVecDescr_t gpusparseDnVecDescr_t;
 #define GPUBLAS_OP_C HIPBLAS_OP_C
 
 #define gpusparseCooSetStridedBatch hipsparseCooSetStridedBatch
-#define gpusparseCreate hipsparseCreate
+
+#define gpusparseCreate(handle) hipsparseCreate(reinterpret_cast<hipsparseHandle_t*>(handle))
 #define gpusparseSetStream hipsparseSetStream
+
+
 #define gpusparseCreateCoo hipsparseCreateCoo
 #define gpusparseCreateCsr hipsparseCreateCsr
 #define gpusparseCreateDnMat hipsparseCreateDnMat
