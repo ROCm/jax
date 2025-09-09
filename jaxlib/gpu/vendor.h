@@ -469,7 +469,6 @@ typedef hipsolverSyevjInfo_t gpuSyevjInfo_t;
 typedef hipsolverEigMode_t gpusolverEigMode_t;
 typedef hipsolverStatus_t gpusolverStatus_t;
 typedef hipsparseIndexType_t gpusparseIndexType_t;
-// typedef hipsparseHandle_t gpusparseHandle_t;
 typedef hipsparseOperation_t gpusparseOperation_t;
 typedef hipsparseStatus_t gpusparseStatus_t;
 typedef hipsparseSpMatDescr_t gpusparseSpMatDescr_t;
@@ -629,8 +628,6 @@ typedef hipsparseDnVecDescr_t gpusparseDnVecDescr_t;
 
 #define gpusparseCreate(handle) hipsparseCreate(reinterpret_cast<hipsparseHandle_t*>(handle))
 #define gpusparseSetStream hipsparseSetStream
-
-
 #define gpusparseCreateCoo hipsparseCreateCoo
 #define gpusparseCreateCsr hipsparseCreateCsr
 #define gpusparseCreateDnMat hipsparseCreateDnMat
