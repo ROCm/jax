@@ -654,7 +654,6 @@ inline hipsparseStatus_t gpusparseCreate(gpusparseHandle_t* handle) {
     return hipsparseCreate(reinterpret_cast<hipsparseHandle_t*>(handle));
 }
 #define gpusparseSetStream hipsparseSetStream
-
 #define gpusparseCreateCoo hipsparseCreateCoo
 #define gpusparseCreateCsr hipsparseCreateCsr
 #define gpusparseCreateDnMat hipsparseCreateDnMat
