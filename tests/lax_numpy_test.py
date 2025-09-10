@@ -2585,9 +2585,6 @@ class LaxBackedNumpyTests(jtu.JaxTestCase):
     a2_shape=one_dim_array_shapes,
   )
   def testPolyMul(self, a1_shape, a2_shape, dtype):
-    if jtu.is_device_rocm() and str(self).split()[0] == "testPolyMul1":
-      self.skipTest("Skip on ROCm: testPolyMul")
-
     rng = jtu.rand_default(self.rng())
     np_fun = lambda arg1, arg2: np.polymul(arg1, arg2)
     jnp_fun_np = lambda arg1, arg2: jnp.polymul(arg1, arg2, trim_leading_zeros=True)

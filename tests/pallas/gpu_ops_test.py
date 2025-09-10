@@ -235,12 +235,12 @@ class FusedAttentionTest(PallasBaseTest):
       head_dim=(32, 64, 128,),
       block_sizes=(
           (
-              ("block_q", 64),
-              ("block_k", 64),
-              ("block_q_dkv", 16),
-              ("block_kv_dkv", 16),
-              ("block_q_dq", 16),
-              ("block_kv_dq", 64),
+              ("block_q", 128),
+              ("block_k", 128),
+              ("block_q_dkv", 128),
+              ("block_kv_dkv", 128),
+              ("block_q_dq", 128),
+              ("block_kv_dq", 128),
           ),
           (
               ("block_q", 32),
@@ -291,11 +291,6 @@ class FusedAttentionTest(PallasBaseTest):
       causal,
       use_segment_ids,
   ):
-    test_name = str(self).split()[0]
-    skip_suffix_list = [4, 6, 7, 8, 9]
-    if jtu.is_device_rocm() and self.INTERPRET and any(test_name.endswith(str(suffix)) for suffix in skip_suffix_list):
-      self.skipTest("Skip on ROCm: tests/pallas/gpu_ops_test.py::FusedAttentionTest::test_fused_attention_bwd[4, 6, 7, 8, 9]")
-
     k1, k2, k3 = random.split(random.key(0), 3)
     q = random.normal(
         k1, (batch_size, seq_len, num_heads, head_dim), dtype=jnp.float16
