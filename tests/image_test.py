@@ -160,9 +160,6 @@ class ImageTest(jtu.JaxTestCase):
   )
   def testResizeGradients(self, dtype, image_shape, target_shape, method,
                            antialias):
-    if jtu.is_device_rocm():
-        self.skipTest("Skip on ROCm: testResizeGradients. Test aborts due to HIP runtime issue")
-
     rng = jtu.rand_default(self.rng())
     args_maker = lambda: (rng(image_shape, dtype),)
     jax_fn = partial(image.resize, shape=target_shape, method=method,
