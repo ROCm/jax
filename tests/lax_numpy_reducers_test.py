@@ -671,9 +671,6 @@ class JaxNumpyReducerTests(jtu.JaxTestCase):
   @jax.numpy_dtype_promotion('standard')  # This test explicitly exercises mixed type promotion
   @jax.default_matmul_precision('float32')
   def testCov(self, shape, dtype, y_shape, y_dtype, rowvar, ddof, bias, fweights, aweights):
-    if jtu.is_device_rocm():
-        self.skipTest("Skip on ROCm: testCov. Test aborts due to HIP runtime issue")
-
     rng = jtu.rand_default(self.rng())
     wrng = jtu.rand_positive(self.rng())
     wdtype = np.real(dtype(0)).dtype
