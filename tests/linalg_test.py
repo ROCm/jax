@@ -1006,7 +1006,7 @@ class NumpyLinalgTest(jtu.JaxTestCase):
   )
   @jax.default_matmul_precision("float32")
   def testQr(self, shape, dtype, full_matrices):
-    if jtu.is_device_rocm():
+    if jtu.is_device_rocm() and self._testMethodName in {"testQr5", "testQr8"} :
       self.skipTest("Skip on ROCm: tests/linalg_test.py::NumpyLinalgTest::testQr")
 
     if (jtu.test_device_matches(["cuda"]) and

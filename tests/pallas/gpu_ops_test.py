@@ -176,8 +176,6 @@ class FusedAttentionTest(PallasBaseTest):
       use_segment_ids,
   ):
 
-    if jtu.is_device_rocm() and batch_size == 2 and seq_len == 384 and  num_heads == 8 and head_dim == 64 and block_sizes == (('block_q', 128), ('block_k', 128)) and causal and use_fwd and use_segment_ids:
-      self.skipTest("Skip on ROCm: tests/pallas/gpu_ops_test.py::FusedAttentionTest::test_fused_attention_fwd4")
     k1, k2, k3 = random.split(random.key(0), 3)
     q = random.normal(
         k1, (batch_size, seq_len, num_heads, head_dim), dtype=jnp.float16
