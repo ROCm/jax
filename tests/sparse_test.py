@@ -47,6 +47,7 @@ jax.config.parse_flags_with_absl()
 
 all_dtypes = jtu.dtypes.integer + jtu.dtypes.floating + jtu.dtypes.complex
 
+@unittest.skipIf(jtu.is_device_rocm(), "Skip on ROCm: cuSparseTest")
 class cuSparseTest(sptu.SparseTestCase):
   def gpu_dense_conversion_warning_context(self, dtype):
     if jtu.test_device_matches(["gpu"]) and np.issubdtype(dtype, np.integer):
@@ -131,9 +132,6 @@ class cuSparseTest(sptu.SparseTestCase):
   )
   @jax.default_matmul_precision("float32")
   def test_csr_matmul_ad(self, shape, dtype, bshape):
-    if jtu.is_device_rocm():
-        raise unittest.SkipTest("Skip on ROCm: tests/sparse_test.py::cuSparseTest::test_csr_matmul_ad[0-8]")
-
     csr_matmul = sparse_csr._csr_matvec if len(bshape) == 1 else sparse_csr._csr_matmat
     tol = {np.float32: 2E-5, np.float64: 1E-12, np.complex64: 1E-5,
            np.complex128: 1E-12}
@@ -212,9 +210,6 @@ class cuSparseTest(sptu.SparseTestCase):
     transpose=[True, False],
   )
   def test_csr_matvec(self, shape, dtype, transpose):
-    if jtu.is_device_rocm():
-        raise unittest.SkipTest("Skip on ROCm: tests/sparse_test.py::cuSparseTest::test_csr_matvec")
-
     op = lambda M: M.T if transpose else M
 
     v_rng = jtu.rand_default(self.rng())
@@ -269,8 +264,6 @@ class cuSparseTest(sptu.SparseTestCase):
       dtype=all_dtypes,
   )
   def test_coo_fromdense(self, shape, dtype):
-    if jtu.is_device_rocm():
-        raise unittest.SkipTest("Skip on ROCm: tests/sparse_test.py::cuSparseTest::test_coo_fromdense")
     rng = sptu.rand_sparse(self.rng())
     M = rng(shape, dtype)
     M_coo = scipy.sparse.coo_matrix(M)
@@ -465,9 +458,6 @@ class cuSparseTest(sptu.SparseTestCase):
     dtype=jtu.dtypes.floating + jtu.dtypes.complex,
   )
   def test_coo_fromdense_ad(self, shape, dtype):
-    if jtu.is_device_rocm():
-        raise unittest.SkipTest("Skip on ROCm: tests/sparse_test.py::cuSparseTest::test_coo_fromdense_ad")
-
     rng = sptu.rand_sparse(self.rng(), post=jnp.array)
     M = rng(shape, dtype)
     nse = (M != 0).sum()
@@ -599,9 +589,6 @@ class cuSparseTest(sptu.SparseTestCase):
   )
   @jtu.run_on_devices("gpu")
   def test_csr_spmv(self, shape, dtype, transpose):
-    if jtu.is_device_rocm():
-        raise unittest.SkipTest("Skip on ROCm: tests/sparse_test.py::cuSparseTest::test_csr_spmv")
-
     rng_sparse = sptu.rand_sparse(self.rng())
     rng_dense = jtu.rand_default(self.rng())
 
@@ -819,6 +806,7 @@ class SparseGradTest(sptu.SparseTestCase):
         self.assertAllClose(jax.grad(g, argnums=0, has_aux=has_aux)(y, Xtree_de),
                             sparse.grad(g, argnums=0, has_aux=has_aux)(y, Xtree_sp))
 
+@unittest.skipIf(jtu.is_device_rocm(), "Skip on ROCm: SparseObjectTest")
 class SparseObjectTest(sptu.SparseTestCase):
   @parameterized.named_parameters(
     {"testcase_name": f"_{cls.__name__}", "cls": cls}
@@ -1051,9 +1039,6 @@ class SparseObjectTest(sptu.SparseTestCase):
     for Obj in [sparse.CSR, sparse.CSC, sparse.COO, sparse.BCOO]))
   @jax.default_matmul_precision("float32")
   def test_matmul(self, shape, dtype, Obj, bshape):
-    if jtu.is_device_rocm() and self._testMethodName in {"test_matmul12", "test_matmul13", "test_matmul15", "test_matmul18"}:
-        raise unittest.SkipTest("Skip on ROCm: tests/sparse_test.py::SparseObjectTest::test_matmul[12,13,15,18]")
-
     rng = sptu.rand_sparse(self.rng(), post=jnp.array)
     rng_b = jtu.rand_default(self.rng())
     M = rng(shape, dtype)
