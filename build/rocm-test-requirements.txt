@@ -19,7 +19,7 @@ pytest-reportlog
 wheel
 rich
 setuptools
-matplotlib;
+matplotlib
 opt-einsum
 auditwheel
 
