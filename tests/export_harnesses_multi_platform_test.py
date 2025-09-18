@@ -79,7 +79,7 @@ class PrimitiveTest(jtu.JaxTestCase):
                "operator to work around missing XLA support for pair-reductions")
   )
   def test_prim(self, harness: test_harnesses.Harness):
-    if jtu.is_device_rocm() and "multi_array_shape" in harness.fullname:
+    if jtu.is_device_rocm() and harness.group_name == "qr" and "multi_array_shape" in harness.fullname and len(harness.params['shape']) == 3:
       self.skipTest("Skip on ROCm: test_prim_multi_array_shape")
 
     if "eigh_" in harness.fullname:
@@ -194,7 +194,7 @@ class PrimitiveTest(jtu.JaxTestCase):
     self.export_and_compare_to_native(f, x)
 
   def test_random_with_threefry_gpu_kernel_lowering(self):
-    if jtu.is_device_rocm() and jtu.get_rocm_version() > (6, 5):
+    if jtu.is_device_rocm() and jtu.get_rocm_version() > (6, 5, 0):
         self.skipTest("Skip on ROCm: test_random_with_threefry_gpu_kernel_lowering")
 
     # On GPU we use a custom call for threefry2x32

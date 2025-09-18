@@ -1006,7 +1006,7 @@ class NumpyLinalgTest(jtu.JaxTestCase):
   )
   @jax.default_matmul_precision("float32")
   def testQr(self, shape, dtype, full_matrices):
-    if jtu.is_device_rocm():
+    if jtu.is_device_rocm() and self._testMethodName in {"testQr5", "testQr8"} :
       self.skipTest("Skip on ROCm: tests/linalg_test.py::NumpyLinalgTest::testQr")
 
     if (jtu.test_device_matches(["cuda"]) and
@@ -1479,6 +1479,8 @@ class ScipyLinalgTest(jtu.JaxTestCase):
     dtype=float_types + complex_types,
   )
   def testLuGrad(self, shape, dtype):
+    if (jtu.is_device_rocm() and jtu.get_rocm_version() < (7,0,2)):
+        self.skipTest("Skip on ROCm: testLuGrad. Test aborts due to HIP runtime issue")
     rng = jtu.rand_default(self.rng())
     a = rng(shape, dtype)
     lu = vmap(jsp.linalg.lu) if len(shape) > 2 else jsp.linalg.lu
@@ -1709,6 +1711,8 @@ class ScipyLinalgTest(jtu.JaxTestCase):
     dtype=int_types + float_types + complex_types
   )
   def testExpm(self, n, batch_size, dtype):
+    if (jtu.is_device_rocm() and jtu.get_rocm_version() < (7,0,2)):
+        self.skipTest("Skip on ROCm: testExpm. Test aborts due to HIP runtime issue")
     if (jtu.test_device_matches(["cuda"]) and
         _is_required_cuda_version_satisfied(12000)):
       self.skipTest("Triggers a bug in cuda-12 b/287345077")
@@ -1861,6 +1865,8 @@ class ScipyLinalgTest(jtu.JaxTestCase):
     dtype=float_types + complex_types,
   )
   def testIssue2131(self, n, dtype):
+    if (jtu.is_device_rocm() and jtu.get_rocm_version() < (7,0,2)):
+        self.skipTest("Skip on ROCm: testIssue2131. Test aborts due to HIP runtime issue")
     args_maker_zeros = lambda: [np.zeros((n, n), dtype)]
     osp_fun = lambda a: osp.linalg.expm(a)
     jsp_fun = lambda a: jsp.linalg.expm(a)
@@ -1896,6 +1902,8 @@ class ScipyLinalgTest(jtu.JaxTestCase):
     dtype=float_types + complex_types,
   )
   def testExpmFrechet(self, n, dtype):
+    if (jtu.is_device_rocm() and jtu.get_rocm_version() < (7,0,2)):
+        self.skipTest("Skip on ROCm: testExpmFrechet. Test aborts due to HIP runtime issue")
     rng = jtu.rand_small(self.rng())
     if dtype == np.float64 or dtype == np.complex128:
       target_norms = [1.0e-2, 2.0e-1, 9.0e-01, 2.0, 3.0]
@@ -1934,6 +1942,8 @@ class ScipyLinalgTest(jtu.JaxTestCase):
     dtype=float_types + complex_types,
   )
   def testExpmGrad(self, n, dtype):
+    if (jtu.is_device_rocm() and jtu.get_rocm_version() < (7,0,2)):
+        self.skipTest("Skip on ROCm: testExpmGrad. Test aborts due to HIP runtime issue")
     rng = jtu.rand_small(self.rng())
     a = rng((n, n), dtype)
     if dtype == np.float64 or dtype == np.complex128:

@@ -203,6 +203,9 @@ class JaxVersionTest(unittest.TestCase):
       self.assertValidVersion(version)
 
   def testVersions(self):
+    if jtu.is_device_rocm():
+      self.skipTest("Skip on ROCm: tests/version_test.py::JaxVersionTest::testVersions")
+
     check_jaxlib_version(jax_version="1.2.3", jaxlib_version="1.2.3",
                          minimum_jaxlib_version="1.2.3")
 
