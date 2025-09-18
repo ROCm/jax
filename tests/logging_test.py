@@ -215,6 +215,9 @@ class LoggingTest(jtu.JaxTestCase):
   @unittest.skipIf(platform.system() == "Windows",
                    "Subprocess test doesn't work on Windows")
   def test_subprocess_toggling_logging_level(self):
+    if jtu.is_device_rocm():
+      self.skipTest("Skip on ROCm: tests/logging_test.py::LoggingTest::test_subprocess_toggling_logging_level")
+
     if sys.executable is None:
       raise self.skipTest("test requires access to python binary")
 

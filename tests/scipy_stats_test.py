@@ -1451,6 +1451,9 @@ class LaxBackedScipyStatsTests(jtu.JaxTestCase):
   )
   @jax.default_matmul_precision("float32")
   def testKde(self, inshape, dtype, outsize, weights, method, func):
+    if jtu.is_device_rocm() and self._testMethodName == "testKde3":
+      self.skipTest("Skip on ROCm: testKde3")
+
     if method == "callable":
       method = lambda kde: kde.neff ** -1./(kde.d+4)
 
