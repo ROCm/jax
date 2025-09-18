@@ -3631,7 +3631,7 @@ class ShapePolyHarnessesTest(jtu.JaxTestCase):
     if jtu.is_device_rocm() and "vmap_qr_multi_array" in harness.fullname and harness.dtype == np.float32:
         raise unittest.SkipTest("Skip on ROCm: shape_poly_test vmap_qr_multi_array for comple64 (note: when printed out, harness.dtype is np.float32.)")
     if jtu.is_device_rocm() and "vmap_scatter_min_no_xla_unique_indices_shape_float32_4_2_3_5_scatterindices_0_4_updateshape_4_3_dimension_numbers_ScatterDimensionNumbers_update_window_dims_0_1_inserted_window_dims_1_3_scatter_dims_to_operand_dims_1_3_operand_batching_dims_scatter_indices_batching_dims_indicesaresorted_False_uniqueindices_True_mode_GatherScatterMode_PROMISE_IN_BOUNDS_enablexla_True" in harness.fullname:
-        raise unittest.SkipTest("Skip on ROCm: vmap_scatter_min_no_xla_unique_indices_shape_float32_4_2_3_5_scatterindices_0_4_updateshape_4_3_dimension_numbers_ScatterDimensionNumbers_update_window_dims_0_1_inserted_window_dims_1_3_scatter_dims_to_operand_dims_1_3_operand_batching_dims_scatter_indices_batching_dims_indicesaresorted_False_uniqueindices_True_mode_GatherScatterMode_PROMISE_IN_BOUNDS_enablexla_True")
+        raise unittest.SkipTest("Skip on ROCm: vmap_scatter_min_no_xla_unique_indices. Test aborts.")
     # We do not expect the associative scan error on TPUs
     if harness.expect_error == expect_error_associative_scan and jtu.test_device_matches(["tpu"]):
       harness.expect_error = None
