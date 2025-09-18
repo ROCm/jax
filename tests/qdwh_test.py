@@ -64,6 +64,8 @@ class QdwhTest(jtu.JaxTestCase):
     self._testHermitian(h, tol)
 
   def _testQdwh(self, a, dynamic_shape=None):
+    if (jtu.is_device_rocm() and jtu.get_rocm_version() < (7,0,2)):
+        self.skipTest("Skip on ROCm: testQdwh. Test aborts due to HIP runtime issue")
     """Computes the polar decomposition and tests its basic properties."""
     eps = jnp.finfo(a.dtype).eps
     u, h, iters, conv = qdwh.qdwh(a, dynamic_shape=dynamic_shape)

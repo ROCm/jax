@@ -529,7 +529,7 @@ class OpsTest(PallasBaseTest):
   @hp.given(select_n_strategy(max_cases=2, min_rank=2, max_rank=4,
                               min_size_exp=1))
   def test_select_n(self, args):
-    if jtu.is_device_rocm():
+    if jtu.is_device_rocm() and not self.INTERPRET:
         self.skipTest("Skip on ROCm: test_select_n")
     pred, *cases = args
     scalar_pred = not pred.shape
@@ -562,13 +562,15 @@ class OpsTest(PallasBaseTest):
   @hp.given(hps.data())
   @jtu.skip_if_mosaic_gpu_exceeds_shared_memory(device_patterns="RTX PRO 6000 Blackwell")
   def test_unary_primitives(self, name, func, shape_dtype_strategy, data):
-    if jtu.is_device_rocm() and name in {"logistic", "reciprocal"}:
-        self.skipTest("Skip on ROCm: test_unary_primitives_[logistic,reciprocal]")
     if name in ["abs", "log1p", "pow2", "reciprocal", "relu", "sin", "sqrt"]:
       self.skip_if_mosaic_gpu()
 
     if self.INTERPRET:
       self.skipTest("This hypothesis test is slow, even more so in interpret mode.")
+
+    if jtu.is_device_rocm() and name in {"logistic", "reciprocal"}:
+      self.skipTest("Skip on ROCm: test_unary_primitives_[logistic,reciprocal]")
+
     # We want exact equality here to match how JAX lowers to XLA
     tol = 0.
     if jtu.test_device_matches(["tpu"]):
@@ -1668,9 +1670,6 @@ class OpsTest(PallasBaseTest):
 
   @parameterized.parameters("float16", "bfloat16", "float32")
   def test_approx_tanh(self, dtype):
-    if jtu.is_device_rocm():
-        self.skipTest("Skip on ROCm: test_approx_tanh")
-
     self.skip_if_mosaic_gpu()
 
     if jtu.test_device_matches(["tpu"]):
@@ -1678,6 +1677,10 @@ class OpsTest(PallasBaseTest):
 
     if self.INTERPRET:
       self.skipTest("approx_tanh is not supported in interpret mode")
+
+    if jtu.is_device_rocm():
+      self.skipTest("Skip on ROCm: test_approx_tanh")
+
 
     if (dtype == "bfloat16" and
         not jtu.is_cuda_compute_capability_at_least("9.0")):
@@ -2004,16 +2007,6 @@ class OpsTest(PallasBaseTest):
   @jtu.skip_if_triton_exceeds_shared_memory(device_patterns="RTX PRO 6000 Blackwell")
   @jtu.skip_if_mosaic_gpu_exceeds_shared_memory(device_patterns="RTX PRO 6000 Blackwell")
   def test_dot(self, lhs_and_rhs_shape, dtype, trans_x, trans_y):
-    test_name = str(self).split()[0]
-    skip_numbers = list(range(12, 20))
-    if jtu.is_device_rocm() and jtu.get_rocm_version() == (7, 0) and test_name in {f"test_dot{i}" for i in skip_numbers}:
-        self.skipTest("Skip on ROCm: test_dot[12-19]")
-    if (
-        jtu.is_device_rocm() and
-        jtu.get_rocm_version() < (6, 5)
-    ):
-      # TODO(psanal35): Investigate the root cause
-      self.skipTest("ROCm <6.5 issue: some test cases fail (fixed in ROCm 6.5.0)")
     self.skip_if_mosaic_gpu()
 
     # TODO(apaszke): Remove after 12 weeks have passed.
@@ -2447,8 +2440,6 @@ class OpsTest(PallasBaseTest):
       dtype=["float16", "float32", "int32", "uint32"],
   )
   def test_cumsum(self, dtype, axis):
-    if jtu.is_device_rocm():
-        self.skipTest("Skip on ROCm: test_cumsum")
     self.skip_if_mosaic_gpu()
 
     if jtu.test_device_matches(["tpu"]):
