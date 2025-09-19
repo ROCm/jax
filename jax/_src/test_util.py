@@ -414,8 +414,9 @@ def get_rocm_version():
   version_path = Path(rocm_path) / ".info" / "version"
   try:
     version_str = version_path.read_text().strip()
-    major, minor, *_ = version_str.split(".")
-    return int(major), int(minor)
+    major, minor, *tail = version_str.split(".")
+    patch = 0 if len(tail) == 0 else tail[0]
+    return int(major), int(minor), int(patch)
   except FileNotFoundError:
     raise unittest.SkipTest("ROCm was not installed")
 
