@@ -414,10 +414,9 @@ def get_rocm_version():
   version_path = Path(rocm_path) / ".info" / "version"
   try:
     version_str = version_path.read_text().strip()
-    version_parts = version_str.split(".")
-    if not (2 <= len(version_parts) <= 4):
-        raise ValueError(f"ROCm version string must have 2 to 4 parts, got: {version_str}")
-    return tuple(int(x) for x in version_parts)
+    major, minor, *tail = version_str.split(".")
+    patch = 0 if len(tail) == 0 else tail[0]
+    return int(major), int(minor), int(patch)
   except FileNotFoundError:
     raise unittest.SkipTest("ROCm was not installed")
 
