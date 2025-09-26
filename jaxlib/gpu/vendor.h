@@ -502,8 +502,10 @@ typedef hipsparseDnVecDescr_t gpusparseDnVecDescr_t;
 #define GPU_R_64F HIP_R_64F
 
 // Wrapper functions for BLAS handles to ensure unique types
+namespace{
 inline hipblasStatus_t gpublasCreate(gpublasHandle_t* handle) {
     return hipblasCreate(reinterpret_cast<hipblasHandle_t*>(handle));
+}
 }
 #define gpublasSetStream hipblasSetStream
 
@@ -557,8 +559,10 @@ inline hipblasStatus_t gpublasCreate(gpublasHandle_t* handle) {
 #define GPUDNN_BIDIRECTIONAL miopenRNNbidirection
 
 // Wrapper functions for SOLVER handles to ensure unique types
-inline hipsolverStatus_t gpusolverDnCreate(gpusolverDnHandle_t* handle) {
-    return hipsolverCreate(reinterpret_cast<hipsolverHandle_t*>(handle));
+namespace{
+  inline hipsolverStatus_t gpusolverDnCreate(gpusolverDnHandle_t* handle) {
+      return hipsolverCreate(reinterpret_cast<hipsolverHandle_t*>(handle));
+}
 }
 #define gpusolverDnSetStream hipsolverSetStream
 
@@ -650,8 +654,10 @@ inline hipsolverStatus_t gpusolverDnCreate(gpusolverDnHandle_t* handle) {
 #define gpusparseCooSetStridedBatch hipsparseCooSetStridedBatch
 
 // Wrapper functions for BLAS handles to ensure unique types
-inline hipsparseStatus_t gpusparseCreate(gpusparseHandle_t* handle) {
-    return hipsparseCreate(reinterpret_cast<hipsparseHandle_t*>(handle));
+namespace{
+  inline hipsparseStatus_t gpusparseCreate(gpusparseHandle_t* handle) {
+      return hipsparseCreate(reinterpret_cast<hipsparseHandle_t*>(handle));
+}
 }
 #define gpusparseSetStream hipsparseSetStream
 
