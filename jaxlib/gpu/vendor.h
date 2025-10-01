@@ -560,8 +560,9 @@ inline hipblasStatus_t gpublasCreate(gpublasHandle_t* handle) {
 
 // Wrapper functions for SOLVER handles to ensure unique types
 namespace{
-  inline hipsolverStatus_t gpusolverDnCreate(gpusolverDnHandle_t* handle) {
-      return hipsolverCreate(reinterpret_cast<hipsolverHandle_t*>(handle));
+inline hipsolverStatus_t gpusolverDnCreate(gpusolverDnHandle_t* handle) {
+    return hipsolverCreate(reinterpret_cast<hipsolverHandle_t*>(handle));
+}
 }
 }
 #define gpusolverDnSetStream hipsolverSetStream
@@ -655,8 +656,9 @@ namespace{
 
 // Wrapper functions for BLAS handles to ensure unique types
 namespace{
-  inline hipsparseStatus_t gpusparseCreate(gpusparseHandle_t* handle) {
-      return hipsparseCreate(reinterpret_cast<hipsparseHandle_t*>(handle));
+inline hipsparseStatus_t gpusparseCreate(gpusparseHandle_t* handle) {
+    return hipsparseCreate(reinterpret_cast<hipsparseHandle_t*>(handle));
+}
 }
 }
 #define gpusparseSetStream hipsparseSetStream
