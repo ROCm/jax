@@ -488,6 +488,7 @@ inline hipblasStatus_t gpublasCreate(gpublasHandle_t* handle) {
     return hipblasCreate(reinterpret_cast<hipblasHandle_t*>(handle));
 }
 }
+
 #define gpublasSetStream hipblasSetStream
 
 #define gpublasSgeqrfBatched hipblasSgeqrfBatched
@@ -544,7 +545,8 @@ namespace{
   inline hipsolverStatus_t gpusolverDnCreate(gpusolverDnHandle_t* handle) {
       return hipsolverCreate(reinterpret_cast<hipsolverHandle_t*>(handle));
 }
-}
+
+
 #define gpusolverDnSetStream hipsolverSetStream
 
 #define gpusolverDnCreateSyevjInfo hipsolverCreateSyevjInfo
@@ -639,7 +641,7 @@ namespace{
   inline hipsparseStatus_t gpusparseCreate(gpusparseHandle_t* handle) {
       return hipsparseCreate(reinterpret_cast<hipsparseHandle_t*>(handle));
 }
-}
+
 #define gpusparseSetStream hipsparseSetStream
 
 #define gpusparseCreateCoo hipsparseCreateCoo

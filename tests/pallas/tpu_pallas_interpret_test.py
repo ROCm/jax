@@ -92,8 +92,6 @@ class InterpretTest(jtu.JaxTestCase):
       self.skipTest(f'requires 1 device, found {self.num_devices}')
 
   def test_matmul_example(self):
-    if jtu.is_device_rocm():
-        self.skipTest("Skip on ROCm: test_matmul_example")
     def matmul_kernel(x_ref, y_ref, z_ref):
       z_ref[...] = x_ref[...] @ y_ref[...]
 

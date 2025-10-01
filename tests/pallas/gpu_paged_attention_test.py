@@ -123,10 +123,6 @@ class PagedAttentionKernelTest(PallasBaseTest):
       attn_logits_soft_cap,
   ):
 
-    test_name = str(self).split()[0]
-    skip_numbers = {0, 1, 3, 5, 6, 7, 9}
-    if jtu.is_device_rocm() and test_name in {f"test_paged_attention{i}" for i in skip_numbers}:
-      self.skipTest("Skip on ROCm: tests/pallas/gpu_paged_attention_test.py::PagedAttentionKernelTest::test_paged_attention0")
     max_kv_len = 2048
     seq_lens = np.asarray([3, 256, 513, 1023, 2048], dtype=jnp.int32)
     q, k_pages, v_pages, block_tables = _generate_qkv(

@@ -740,8 +740,8 @@ class DistributionsTest(RandomTestBase):
   )
   @jax.default_matmul_precision("float32")
   def testOrthogonal(self, n, shape, dtype, m):
-    if jtu.is_device_rocm() and not (n == 0 or m == 0):
-      self.skipTest("Skip on ROCm: testOrthogonal[1-3, 8-9]")
+    if jtu.is_device_rocm() and self._testMethodName in {"testOrthogonal1", "testOrthogonal7", "testOrthogonal8", "testOrthogonal9"}:
+      self.skipTest("Skip on ROCm: testOrthogonal[1,7-9]")
 
     if m is None:
       m = n
