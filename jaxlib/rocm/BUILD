@@ -357,7 +357,7 @@ nanobind_extension(
         "//jaxlib:kernel_nanobind_helpers",
         "@local_config_rocm//rocm:hip_runtime",
         "@local_config_rocm//rocm:rocm_headers",
-        "@local_config_rocm//rocm:hip",
+        "@local_config_rocm//rocm:rocm_hip",
         "@nanobind",
     ],
 )
@@ -475,7 +475,7 @@ nanobind_extension(
         "@com_google_absl//absl/status:statusor",
         "@com_google_absl//absl/strings:string_view",
         "@local_config_rocm//rocm:hip_runtime",
-        "@local_config_rocm//rocm:hip",
+        "@local_config_rocm//rocm:rocm_hip",
         "@nanobind",
     ],
 )
