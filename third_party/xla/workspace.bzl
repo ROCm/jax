@@ -21,8 +21,8 @@ load("//third_party:repo.bzl", "tf_http_archive", "tf_mirror_urls")
 #    curl -L https://github.com/ROCm/xla/archive/<git hash>.tar.gz | sha256sum
 #    and update XLA_SHA256 with the result.
 
-XLA_COMMIT = "28f10a0878344a44d4259e12d1793b104ba4d3b7"
-XLA_SHA256 = "7d32a26205d3827b8e002334e8439c6c6f14d67d2f842f09b0921ec3752df870"
+XLA_COMMIT = "ff74b5fda7dec651c9ed3d7a2bab4365ca25d61f"
+XLA_SHA256 = "414d0037cf4a36c0179b1e4d87517875110afd689eff3e8a8e100b202c354cbd"
 
 def repo():
     tf_http_archive(
