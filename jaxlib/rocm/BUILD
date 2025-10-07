@@ -563,7 +563,7 @@ nanobind_extension(
         "//jaxlib/gpu:gpu_plugin_extension",
         "@com_google_absl//absl/log",
         "@com_google_absl//absl/strings",
-        "@local_config_rocm//rocm:rocm_hip",
+        "@local_config_rocm//rocm:hip",
         "@local_config_rocm//rocm:rocm_headers",
         "@nanobind",
     ],
