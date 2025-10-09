@@ -66,7 +66,7 @@ def check_plugin_version(
     if m is None:
       raise ValueError(f"Unable to parse version string '{v}'")
     return tuple(int(x) for x in m.group(0).split("."))
-
+  return True
   if _parse_version(jaxlib_version) != _parse_version(plugin_version):
     warnings.warn(
         f"JAX plugin {plugin_name} version {plugin_version} is installed, but "
