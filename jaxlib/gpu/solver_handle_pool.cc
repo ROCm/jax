@@ -14,7 +14,6 @@ limitations under the License.
 ==============================================================================*/
 
 #include "jaxlib/gpu/solver_handle_pool.h"
-
 #include "absl/status/statusor.h"
 #include "absl/synchronization/mutex.h"
 #include "jaxlib/gpu/gpu_kernel_helpers.h"
@@ -40,7 +39,7 @@ template <>
     pool->handles_[stream].pop_back();
   }
   if (stream) {
-    JAX_RETURN_IF_ERROR(JAX_AS_STATUS(gpusolverDnSetStream(handle, stream)));
+      JAX_RETURN_IF_ERROR(JAX_AS_STATUS(gpusolverDnSetStream(handle, stream)));
   }
   return Handle(pool, handle, stream);
 }

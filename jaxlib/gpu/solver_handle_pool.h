@@ -26,14 +26,14 @@ limitations under the License.
 
 namespace jax {
 
-using SolverHandlePool = HandlePool<gpusolverDnHandle_t, gpuStream_t>;
+using SolverHandlePool = HandlePool<gpusolverDnHandle_t, gpuStream_t, SolverTag>;
 
 template <>
 absl::StatusOr<SolverHandlePool::Handle> SolverHandlePool::Borrow(
     gpuStream_t stream);
 
 #ifdef JAX_GPU_CUDA
-using SpSolverHandlePool = HandlePool<cusolverSpHandle_t, gpuStream_t>;
+using SpSolverHandlePool = HandlePool<cusolverSpHandle_t, gpuStream_t, SolverTag>;
 
 template <>
 absl::StatusOr<SpSolverHandlePool::Handle> SpSolverHandlePool::Borrow(
