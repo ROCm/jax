@@ -17,7 +17,7 @@ wheel
 # JAX's own libraries. We include these in the requirements so you can
 # bazel test without building jaxlib and without manually updating the
 # the requirements files.
-jaxlib; python_version<"3.14"
+#jaxlib; python_version<"3.14"
 
 jax-cuda12-plugin; sys_platform == "linux" and python_version<"3.14"
 jax-cuda13-plugin
@@ -29,3 +29,8 @@ libtpu ; sys_platform == "linux" and platform_machine == "x86_64"
 
 # Platform-specific dependencies that are being ignored by pip-compile
 colorama>=0.4.4 ; sys_platform == "win32"
+
+jaxlib == 0.7.1
+/dockerx/rocm/rocm-jax/wheelhouse/jax_rocm7_pjrt-0.7.1-py3-none-manylinux_2_28_x86_64.whl
+/dockerx/rocm/rocm-jax/wheelhouse/jax_rocm7_plugin-0.7.1-cp312-cp312-manylinux_2_28_x86_64.whl
+

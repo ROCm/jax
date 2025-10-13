@@ -31,8 +31,10 @@ python_init_repositories(
         "jaxlib*",
         "jax_cuda*",
         "jax-cuda*",
+	"jax_rocm*",
+	"jax-rocm*"
     ],
-    local_wheel_workspaces = ["//jaxlib:jax.bzl"],
+    #local_wheel_workspaces = ["//jaxlib:jax.bzl"],
     requirements = {
         "3.11": "//build:requirements_lock_3_11.txt",
         "3.12": "//build:requirements_lock_3_12.txt",

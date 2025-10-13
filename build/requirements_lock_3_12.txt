@@ -24,10 +24,6 @@ cloudpickle==3.1.1 \
     --hash=sha256:b216fa8ae4019d5482a8ac3c95d8f6346115d8835911fd4aefd1a445e4242c64 \
     --hash=sha256:c8c5a44295039331ee9dad40ba100a9c7297b6f988e50e87ccdf3765a668350e
     # via -r build/test-requirements.txt
-colorama==0.4.6 ; sys_platform == "win32" \
-    --hash=sha256:08695f5cb7ed6e0531a20572697297273c47b8cae5a63ffc6d6ed5c201be6e44 \
-    --hash=sha256:4f1d9991f5acc0ca119f9d443620b77f9d6b33703e51011c16baf57afb285fc6
-    # via -r build/requirements.in
 contourpy==1.3.2 \
     --hash=sha256:0475b1f6604896bc7c53bb070e355e9321e1bc0d381735421a2d2068ec56531f \
     --hash=sha256:106fab697af11456fcba3e352ad50effe493a90f893fca6c2ca5c033820cea92 \
@@ -173,7 +169,7 @@ jax-cuda12-pjrt==0.7.0 ; sys_platform == "linux" \
     # via
     #   -r build/requirements.in
     #   jax-cuda12-plugin
-jax-cuda12-plugin[with-cuda]==0.7.0 ; sys_platform == "linux" and python_version < "3.14" \
+jax-cuda12-plugin==0.7.0 ; sys_platform == "linux" and python_version < "3.14" \
     --hash=sha256:265a4bf238c048f98929e0dad9764246d12497bdd8cfdf2e22783a69d73cc63e \
     --hash=sha256:72fdea8480d8814cb7894cb02f4a89e97a4974c96a630ea8d7c7e8e8201319d1 \
     --hash=sha256:ab7ec6433892218f25bdd5a2d1375da9087e981dfa09827ac7f373ccdbbf2c4d \
@@ -189,21 +185,37 @@ jax-cuda13-pjrt==0.0.1rc0 \
 jax-cuda13-plugin==0.0.1rc0 \
     --hash=sha256:5fa66ef5de34cffc838199d193bffc11701807e66831f914bdc1d786ed4dc26f
     # via -r build/requirements.in
-jaxlib==0.7.0 ; python_version < "3.14" \
-    --hash=sha256:005213b6dcbd20b0bd65580b740255950150b489e1a5306f65d8e49f9114ab85 \
-    --hash=sha256:074a025664cf439b5965dccaaf20c4aae6cc955dddd74e85342568aba40dda47 \
-    --hash=sha256:0782b8a1cf813c432c4dac0fa8aa2a50e94105db0e9b6b8948a6e20e4e81d677 \
-    --hash=sha256:3a8f329f054d2e08093cd5a4af9328cce12c3b5fab4bda5e2c5cdadc63b5ed2d \
-    --hash=sha256:534fb3272b90e2c7f8ed9a4229a69b5e5c19b02fa14516ccc5eef9d01f248546 \
-    --hash=sha256:5b7393c8694a17ed522e9553e06791dd76b4789b3448d085d0ed4ffbad77a2e7 \
-    --hash=sha256:996b53c6b200ff95e5991d51ec01f095733323867596826ffbc0c560bb27f5ee \
-    --hash=sha256:9df5ba4c8712c555ecf32eb2574391f643e5ca0ecaca2178084b8c4bf824b433 \
-    --hash=sha256:a0bc3a08248c0a36913ac8af93f4c632ec111d6ee7ffe7b6dae63d2f2d6233d5 \
-    --hash=sha256:be9055e35ce6bde3e909f55b4cb6edb7147d0ac2db08cf986d5c3410986afa5d \
-    --hash=sha256:df003e5a31ce15e1f2ed8826195a45906ac822e9d304aaef567770c2df1cd67e \
-    --hash=sha256:df31664a53c13a9263bca0e8c39e0380a0ccae0b1c125376df63a480d9cb2087 \
-    --hash=sha256:e6f06c5050803f9d149c3ba4fdf85a62e1dae78a31ecb6f25744004977b492a9 \
-    --hash=sha256:ffcb4b1e3e012106f43b306d70d0f6a36262824a324f89f7f22bf28867fbe81c
+jax-rocm7-pjrt @ file:///dockerx/rocm/rocm-jax/wheelhouse/jax_rocm7_pjrt-0.7.1-py3-none-manylinux_2_28_x86_64.whl \
+    --hash=sha256:209b5ff3108842218b39a7588b4e22845812b9c30c4677c16898bffb13595abf
+    # via
+    #   -r build/requirements.in
+    #   jax-rocm7-plugin
+jax-rocm7-plugin @ file:///dockerx/rocm/rocm-jax/wheelhouse/jax_rocm7_plugin-0.7.1-cp312-cp312-manylinux_2_28_x86_64.whl \
+    --hash=sha256:eb243d053e25da8903e5a45a3177f5969af1dec5eaa7cc8289ea547a3bf01ccf
+    # via -r build/requirements.in
+jaxlib==0.7.1 \
+    --hash=sha256:023df41212ae4fda869338370f9532bfcd98ccfaee909bb95ea540d6053df547 \
+    --hash=sha256:127c07c727703e5d59f84f655169bec849f4422e52f8546349cecc30a8a13e1d \
+    --hash=sha256:1ea54e6182d85b82496fbc58bbe51042bea3ee3e1e0d444b3cff446c245bebd5 \
+    --hash=sha256:2a27379e5ed29765980ef32d4d77f57dd0e1dd965803ac674554044ac23cd3ec \
+    --hash=sha256:38ac46ec17c0a86b428590d04559629357fc6dc3a3c76569f022b982c36fc1af \
+    --hash=sha256:3f32c3e4c167b7327c342e82d3df84079714ea0b43718be871d039999670b3c9 \
+    --hash=sha256:407347dd5846248ee40db33da26f2b18c7d135249ff06c0271a2e33efd8fb3fe \
+    --hash=sha256:58558fa29fd7d6342c066f837e58fcba335182837a959affc128660c089702de \
+    --hash=sha256:6057a602632bd3299d6c7ffbbb3f1ef2c7573ccbed9eb06cc92042b96e2ca5d4 \
+    --hash=sha256:66b33cc15040af5b8d16d3006811eb31372e9f4cfe09393d6cea91795366bfa4 \
+    --hash=sha256:72dd9c3e95457a5a54f00e47ec14863b5e61540b944c0df13bf10c259b4d5d73 \
+    --hash=sha256:74abd3135797f82440dd3711a35cba16c430d1bba65474b85bb70e41733a52e9 \
+    --hash=sha256:944f7555960d69f1d1c435fff0a76e4edd6a878fe47fe1781f7a0d63b61072e5 \
+    --hash=sha256:9766817cfa51743a48fac78c087605c30bf1a91caf11371ca8c41261e6f3a0c8 \
+    --hash=sha256:9fb189c3b39470c4394ffcb18b71e47cffc5bf85e8fcb1e33692686b0c3e04dd \
+    --hash=sha256:ab4510fbaeafac6c794ab335f23e71200d824c48f6a0ab20553db8deab8805c5 \
+    --hash=sha256:b350f519a86eff5a4b1ee014c7faa36585f47f3d63787d1f3e9bdffe9cc41a66 \
+    --hash=sha256:c4023863b14f280516f24ecb7539b4300a3236ea81ed69ad82595beceed1ba1f \
+    --hash=sha256:ce6a1ba6019764870c27507aca18e526998ad3ad4bea2dd61e19d0499c3b8b04 \
+    --hash=sha256:d52817a42c130d0c330f48edcb3a3e455dc984b6ce53f3182c37aa0fe960109b \
+    --hash=sha256:eaf5f68f53bf4dcb93b6512538547667625588e4f3ccaeef048788fd18d8c0d5 \
+    --hash=sha256:f0f1f52956b8c2518ab000a4d3d8c21be777e1d47f926ba03640e391061a41ee
     # via -r build/requirements.in
 kiwisolver==1.4.8 \
     --hash=sha256:01c3d31902c7db5fb6182832713d3b4122ad9317c2c5877d0539227d96bb2e50 \
