@@ -529,6 +529,7 @@ inline hipblasStatus_t gpublasCreate(gpublasHandle_t* handle) {
     return hipblasCreate(reinterpret_cast<hipblasHandle_t*>(handle));
 }
 }
+
 #define gpublasSetStream hipblasSetStream
 #define gpublasSgeqrfBatched hipblasSgeqrfBatched
 #define gpublasDgeqrfBatched hipblasDgeqrfBatched
@@ -579,11 +580,13 @@ inline hipblasStatus_t gpublasCreate(gpublasHandle_t* handle) {
 #define GPUDNN_LSTM miopenLSTM
 #define GPUDNN_BIDIRECTIONAL miopenRNNbidirection
 
+// Wrapper functions for SOLVER handles to ensure unique types
 namespace{
 inline hipsolverStatus_t gpusolverDnCreate(gpusolverDnHandle_t* handle) {
     return hipsolverCreate(reinterpret_cast<hipsolverHandle_t*>(handle));
 }
 }
+
 #define gpusolverDnSetStream hipsolverSetStream
 #define gpusolverDnCreateSyevjInfo hipsolverCreateSyevjInfo
 #define gpusolverDnDestroySyevjInfo hipsolverDestroySyevjInfo
@@ -683,11 +686,13 @@ inline hipsolverStatus_t gpusolverDnCreate(gpusolverDnHandle_t* handle) {
 #define GPUBLAS_OP_C HIPBLAS_OP_C
 
 #define gpusparseCooSetStridedBatch hipsparseCooSetStridedBatch
+
 namespace{
 inline hipsparseStatus_t gpusparseCreate(gpusparseHandle_t* handle) {
     return hipsparseCreate(reinterpret_cast<hipsparseHandle_t*>(handle));
 }
 }
+
 #define gpusparseSetStream hipsparseSetStream
 #define gpusparseCreateCoo hipsparseCreateCoo
 #define gpusparseCreateCsr hipsparseCreateCsr
