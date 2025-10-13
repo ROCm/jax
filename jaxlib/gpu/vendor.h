@@ -579,6 +579,7 @@ inline hipblasStatus_t gpublasCreate(gpublasHandle_t* handle) {
 #define GPUDNN_LSTM miopenLSTM
 #define GPUDNN_BIDIRECTIONAL miopenRNNbidirection
 
+// Wrapper functions for SOLVER handles to ensure unique types
 namespace{
 inline hipsolverStatus_t gpusolverDnCreate(gpusolverDnHandle_t* handle) {
     return hipsolverCreate(reinterpret_cast<hipsolverHandle_t*>(handle));
