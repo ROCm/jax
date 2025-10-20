@@ -302,15 +302,15 @@ build:rbe --remote_download_toplevel
 test:rbe --test_env=USER=anon
 
 # RBE for tests
-test:rocm_rbe --bes_backend="grpcs://wardite.cluster.engflow.com"
-test:rocm_rbe --bes_results_url="https://wardite.cluster.engflow.com/invocation/"
-test:rocm_rbe --remote_executor="grpcs://wardite.cluster.engflow.com"
-test:rocm_rbe --host_platform="//platform/linux_x64:linux_x64_gpu"
-test:rocm_rbe --extra_execution_platforms="//platform/linux_x64:linux_x64_gpu"
-test:rocm_rbe --platforms="//platform/linux_x64:linux_x64_gpu"
-test:rocm_rbe --bes_timeout=600s
-test:rocm_rbe --tls_client_certificate="/dockerx/rocm/rocm-jax/ci-cert.crt"
-test:rocm_rbe --tls_client_key="/dockerx/rocm/rocm-jax/ci-cert.key"
+build:rocm_rbe --bes_backend="grpcs://wardite.cluster.engflow.com"
+build:rocm_rbe --bes_results_url="https://wardite.cluster.engflow.com/invocation/"
+build:rocm_rbe --remote_executor="grpcs://wardite.cluster.engflow.com"
+build:rocm_rbe --host_platform="//platform/linux_x64:linux_x64_gpu"
+build:rocm_rbe --extra_execution_platforms="//platform/linux_x64:linux_x64_gpu"
+build:rocm_rbe --platforms="//platform/linux_x64:linux_x64_gpu"
+build:rocm_rbe --bes_timeout=600s
+build:rocm_rbe --tls_client_certificate="/dockerx/rocm/rocm-jax/ci-cert.crt"
+build:rocm_rbe --tls_client_key="/dockerx/rocm/rocm-jax/ci-cert.key"
 
 # RBE configs for Linux x86
 # Set the remote worker pool
