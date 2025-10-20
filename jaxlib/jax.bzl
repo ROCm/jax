@@ -304,7 +304,7 @@ def jax_multiplatform_test(
             shard_count = test_shards,
             tags = test_tags,
             main = main,
-            exec_properties = tf_exec_properties({"tags": test_tags}),
+            exec_properties = {},#tf_exec_properties({"tags": test_tags}),
         )
 
 def jax_generate_backend_suites(backends = []):

@@ -305,9 +305,9 @@ test:rbe --test_env=USER=anon
 test:rocm_rbe --bes_backend="grpcs://wardite.cluster.engflow.com"
 test:rocm_rbe --bes_results_url="https://wardite.cluster.engflow.com/invocation/"
 test:rocm_rbe --remote_executor="grpcs://wardite.cluster.engflow.com"
-test:rocm_rbe --host_platform="//platform/linux_x64"
-test:rocm_rbe --extra_execution_platforms="//platform/linux_x64"
-test:rocm_rbe --platforms="//platform/linux_x64"
+test:rocm_rbe --host_platform="//platform/linux_x64:linux_x64_gpu"
+test:rocm_rbe --extra_execution_platforms="//platform/linux_x64:linux_x64_gpu"
+test:rocm_rbe --platforms="//platform/linux_x64:linux_x64_gpu"
 test:rocm_rbe --bes_timeout=600s
 test:rocm_rbe --tls_client_certificate="/dockerx/rocm/rocm-jax/ci-cert.crt"
 test:rocm_rbe --tls_client_key="/dockerx/rocm/rocm-jax/ci-cert.key"
@@ -327,9 +327,9 @@ build:rbe_linux_x86_64_base --host_linkopt=-lm
 #build:rbe_linux_x86_64_base --host_platform="@ubuntu20.04-clang_manylinux2014-cuda12.3-cudnn9.1_config_platform//:platform"
 #build:rbe_linux_x86_64_base --extra_execution_platforms="@ubuntu20.04-clang_manylinux2014-cuda12.3-cudnn9.1_config_platform//:platform"
 #build:rbe_linux_x86_64_base --platforms="@ubuntu20.04-clang_manylinux2014-cuda12.3-cudnn9.1_config_platform//:platform"
-build:rbe_linux_x86_64_base --host_platform="//platform/linux_x64"
-build:rbe_linux_x86_64_base --extra_execution_platforms="//platform/linux_x64"
-build:rbe_linux_x86_64_base --platforms="//platform/linux_x64"
+build:rbe_linux_x86_64_base --host_platform="//platform/linux_x64:linux_x64_gpu"
+build:rbe_linux_x86_64_base --extra_execution_platforms="//platform/linux_x64:linux_x64_gpu"
+build:rbe_linux_x86_64_base --platforms="//platform/linux_x64:linux_x64_gpu"
 
 build:rbe_linux_x86_64 --config=rbe_linux_x86_64_base
 build:rbe_linux_x86_64 --config=ci_linux_x86_64
@@ -340,20 +340,22 @@ build:rbe_linux_x86_64_cuda --repo_env=REMOTE_GPU_TESTING=1
 
 build:rocm_rbe --bes_backend="grpcs://wardite.cluster.engflow.com"
 build:rocm_rbe --bes_results_url="https://wardite.cluster.engflow.com/invocation/"
-build:rocm_rbe --host_platform="//platform/linux_x64"
-build:rocm_rbe --extra_execution_platforms="//platform/linux_x64"
-build:rocm_rbe --platforms="//platform/linux_x64"
+build:rocm_rbe --host_platform="//platform/linux_x64:linux_x64_gpu"
+build:rocm_rbe --extra_execution_platforms="//platform/linux_x64:linux_x64_gpu"
+build:rocm_rbe --platforms="//platform/linux_x64:linux_x64_gpu"
 build:rocm_rbe --bes_timeout=600s
 build:rocm_rbe --spawn_strategy=local
 build:rocm_rbe --tls_client_certificate="/dockerx/rocm/rocm-jax/ci-cert.crt"
 build:rocm_rbe --tls_client_key="/dockerx/rocm/rocm-jax/ci-cert.key"
 build:rocm_rbe --remote_cache=grpcs://wardite.cluster.engflow.com
+build:rocm_rbe --repo_env=REMOTE_GPU_TESTING=1
 
 test:rocm_rbe --jobs=200
 test:rocm_rbe --remote_executor=grpcs://wardite.cluster.engflow.com
 test:rocm_rbe --remote_timeout=3600
 test:rocm_rbe --strategy=TestRunner=remote,local
 test:rocm_rbe --worker_sandboxing=true
+test:rocm_rbe --repo_env=REMOTE_GPU_TESTING=1
 
 # RBE configs for Windows
 # Set the remote worker pool
@@ -362,9 +364,9 @@ common:rbe_windows_amd64 --remote_instance_name=projects/tensorflow-testing/inst
 build:rbe_windows_amd64 --config=rbe
 
 # Set the host, execution, and target platform
-build:rbe_windows_amd64 --host_platform="@xla//tools/toolchains/win:x64_windows-clang-cl"
-build:rbe_windows_amd64 --extra_execution_platforms="@xla//tools/toolchains/win:x64_windows-clang-cl"
-build:rbe_windows_amd64 --platforms="@xla//tools/toolchains/win:x64_windows-clang-cl"
+#build:rbe_windows_amd64 --host_platform="@xla//tools/toolchains/win:x64_windows-clang-cl"
+#build:rbe_windows_amd64 --extra_execution_platforms="@xla//tools/toolchains/win:x64_windows-clang-cl"
+#build:rbe_windows_amd64 --platforms="@xla//tools/toolchains/win:x64_windows-clang-cl"
 
 build:rbe_windows_amd64 --shell_executable=C:\\tools\\msys64\\usr\\bin\\bash.exe
 build:rbe_windows_amd64 --enable_runfiles
