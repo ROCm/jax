@@ -192,8 +192,10 @@ def _gpu_test_deps():
             "//jax_plugins:gpu_plugin_only_test_deps",
         ],
         "//jax:config_build_jaxlib_false": [
-            "//jaxlib/tools:pypi_jax_cuda_plugin_with_cuda_deps",
-            "//jaxlib/tools:pypi_jax_cuda_pjrt_with_cuda_deps",
+            "//jaxlib/tools:rocm_plugin_kernels_wheel",
+            "//jaxlib/tools:rocm_plugin_pjrt_wheel",
+            #"//jaxlib/tools:pypi_jax_cuda_plugin_with_cuda_deps",
+            #"//jaxlib/tools:pypi_jax_cuda_pjrt_with_cuda_deps",
         ],
         "//jax:config_build_jaxlib_wheel": [
             "//jaxlib/tools:jax_cuda_plugin_py_import",
@@ -300,7 +302,7 @@ def jax_multiplatform_test(
             shard_count = test_shards,
             tags = test_tags,
             main = main,
-            exec_properties = tf_exec_properties({"tags": test_tags}),
+            exec_properties = {} #tf_exec_properties({"tags": test_tags}),
         )
 
 def jax_generate_backend_suites(backends = []):
