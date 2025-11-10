@@ -46,7 +46,7 @@ namespace jax {
 namespace {
 
 struct TritonCompilationResult {
-  std::string asm_text;
+  std::string asm_or_path;
   int64_t smem_bytes;
   int cluster_dim_x;
   int cluster_dim_y;
@@ -72,10 +72,16 @@ absl::StatusOr<TritonCompilationResult> CompileTritonToASM(
   args.num_ctas = num_ctas;
   args.num_stages = num_stages;
   RETURN_STATUS_IF_PJRT_ERROR(triton_ext->compile(&args), c_api);
-  auto asm_text = std::string(args.out_asm, args.out_asm_size);
-  delete[] args.out_asm;
+  std::string asm_or_path;
+  if (args.out_asm) {
+    asm_or_path = std::string(args.out_asm, args.out_asm_size);
+    delete[] args.out_asm;
+  } else {
+    asm_or_path = std::string(args.out_path, args.out_path_size);
+    delete[] args.out_path;
+  }
   return TritonCompilationResult{
-      .asm_text = asm_text,
+      .asm_or_path = asm_or_path,
       .smem_bytes = args.out_smem_bytes,
       .cluster_dim_x = args.out_cluster_dim_x,
       .cluster_dim_y = args.out_cluster_dim_y,
@@ -210,7 +216,7 @@ void BuildGpuPluginExtension(nanobind::module_& m) {
   tsl::ImportNumpy();
 
   nb::class_<TritonCompilationResult>(m, "TritonCompilationResult")
-      .def_ro("asm", &TritonCompilationResult::asm_text)
+      .def_ro("asm_or_path", &TritonCompilationResult::asm_or_path)
       .def_ro("smem_bytes", &TritonCompilationResult::smem_bytes)
       .def_ro("cluster_dim_x", &TritonCompilationResult::cluster_dim_x)
       .def_ro("cluster_dim_y", &TritonCompilationResult::cluster_dim_y)
