@@ -407,6 +407,10 @@ rocm_nanobind_extension(
         "@xla//xla/ffi/api:ffi",
         "@xla//xla/python:safe_static_init",
     ],
+    linkopts = [
+        "-L/opt/rocm/lib",
+        "-lamdhip64",
+    ],
 )
 
 cc_library(
