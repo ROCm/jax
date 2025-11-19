@@ -730,7 +730,8 @@ async def main():
       dst_dir = os.path.join(output_path, wheel_dir)
       utils.copy_dir_recursively(src_dir, dst_dir)
     else:
-      wheel_version_suffix = "dev0+selfbuilt"
+      rocm_version_extra = os.environ.get('ROCM_VERSION_EXTRA', '')
+      wheel_version_suffix = f"+rocm{rocm_version_extra}"
       if wheel_type == "release":
         wheel_version_suffix = custom_wheel_version_suffix
       elif wheel_type in ["nightly", "custom"]:
