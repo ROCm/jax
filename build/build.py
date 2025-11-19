@@ -746,16 +746,29 @@ async def main():
         python_tag = "py"
       else:
         python_tag = "cp"
+
+      logger.info(f"ALL ARGS: {args}")
+      logger.info(f"Using ROCm path: {args.rocm_path} - {wheel_version_suffix} -{custom_wheel_version_suffix}") 
+      if args.rocm_path:
+        rocm_tag = args.rocm_path.split("-")[-1]
+        logger.info(f"Using ROCm tag: {rocm_tag}")
+      else:
+        rocm_tag = None
+
+      logger.info(f"Final wheel version suffix: {wheel_version_suffix}")
+      logger.info(f"Copying wheel files for {wheel_dir} with suffix {wheel_version_suffix} and python tag {python_tag} - Bazel dir: {bazel_dir} - output path: {output_path}")
       utils.copy_individual_files(
           bazel_dir,
           output_path,
           f"{wheel_dir}*{wheel_version_suffix}-{python_tag}*.whl",
-      )
+          rocm_tag=rocm_tag,
+      ) 
       if wheel == "jax":
         utils.copy_individual_files(
             bazel_dir,
             output_path,
             f"{wheel_dir}*{wheel_version_suffix}.tar.gz",
+            rocm_tag=rocm_tag,
         )
 
   # Exit with success if all wheels in the list were built successfully.

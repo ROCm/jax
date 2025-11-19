@@ -265,13 +265,20 @@ def copy_dir_recursively(src, dst):
   logging.info("Editable wheel path: %s" % dst)
 
 
-def copy_individual_files(src: str, dst: str, glob_pattern: str):
+def copy_individual_files(src: str, dst: str, glob_pattern: str, rocm_tag: str):
   os.makedirs(dst, exist_ok=True)
   logging.debug(
     f"Copying files matching pattern {glob_pattern!r} from {src!r} to {dst!r}"
   )
   for f in glob.glob(os.path.join(src, glob_pattern)):
-    dst_file = os.path.join(dst, os.path.basename(f))
+    logging.debug(f"Found file to copy: {f!r}")
+    if rocm_tag:
+      f_list = f.split("-")
+      f_list[2] = f_list[2]+"+rocm"+rocm_tag
+      new_f = "-".join(f_list)
+    else:
+      new_f = f
+    dst_file = os.path.join(dst, os.path.basename(new_f))
     if os.path.exists(dst_file):
       os.remove(dst_file)
     shutil.copy2(f, dst_file)
