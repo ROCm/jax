@@ -112,6 +112,64 @@ class PagedAttentionKernelTest(PallasBaseTest):
   def setUp(self):
     super().setUp()
 
+  def _estimate_shared_memory_bytes(self, block_h, pages_per_compute_block, 
+                                     page_size, head_dim, dtype):
+    """Estimate shared memory usage for paged attention kernel."""
+    dtype_size = jnp.dtype(dtype).itemsize
+    # Approximate calculation based on kernel's memory usage
+    # Q block: block_h * head_dim
+    # K/V blocks: pages_per_compute_block * page_size * head_dim
+    # Plus accumulators and intermediate values
+    block_k = pages_per_compute_block * page_size
+    estimated = dtype_size * (
+        block_h * head_dim +  # Q
+        2 * block_k * head_dim +  # K and V
+        block_h * block_k +  # logits/attention weights
+        block_h * 8  # accumulators (m, l, etc.) in float32
+    )
+    return estimated
+
+  def _adjust_params_for_shared_memory(self, block_h, pages_per_compute_block, 
+                                       page_size, head_dim, dtype):
+    """Adjust parameters to fit within device shared memory limits.
+    
+    Uses XLA's DeviceDescription.shared_memory_per_block_optin() to query
+    the actual device capability rather than hardcoding values.
+    """
+    try:
+      device = jax.local_devices()[0]
+      # Query XLA DeviceDescription for max shared memory per block
+      # This is exposed from stream_executor::DeviceDescription::shared_memory_per_block_optin()
+      max_smem = device.shared_memory_per_block_optin
+    except (AttributeError, IndexError):
+      # Fallback if XLA doesn't expose shared_memory_per_block_optin (older versions)
+      # or if no devices are available. Use conservative 48KB (safe for most GPUs).
+      max_smem = 48 * 1024
+    
+    estimated = self._estimate_shared_memory_bytes(
+        block_h, pages_per_compute_block, page_size, head_dim, dtype)
+    
+    # If within limits, no adjustment needed
+    if estimated <= max_smem:
+      return block_h, pages_per_compute_block, page_size
+    
+    # Try to reduce parameters to fit
+    while estimated > max_smem:
+      if pages_per_compute_block > 2:
+        pages_per_compute_block = pages_per_compute_block // 2
+      elif page_size > 8:
+        page_size = page_size // 2
+      elif block_h > 8:
+        block_h = block_h // 2
+      else:
+        # Can't reduce further, will need to skip
+        return None, None, None
+      
+      estimated = self._estimate_shared_memory_bytes(
+          block_h, pages_per_compute_block, page_size, head_dim, dtype)
+    
+    return block_h, pages_per_compute_block, page_size
+
   @jtu.sample_product(
       dtype=(jnp.float16,),
       page_size=(8, 16, 32),
@@ -202,16 +260,15 @@ class PagedAttentionKernelTest(PallasBaseTest):
         and not jtu.is_cuda_compute_capability_at_least("8.9")):
       self.skipTest("Skipping since float8_e4m3fn is not supported on < sm89")
     
-    # Some ROCm devices have lower shared memory limits (e.g., 65536 bytes observed)
-    # causing "Shared memory size limit exceeded: requested 86016, available: 65536"
-    # Adjust parameters to fit within device limits while maintaining test quality
+    # Check and adjust parameters if needed to fit device limits for ROCm
     if jtu.is_device_rocm():
-      if block_h == 32:
-        block_h = 16  # Reduce to fit in ROCm's shared memory
-      if pages_per_compute_block == 8:
-        pages_per_compute_block = 4  # Reduce to fit in ROCm's shared memory
-      if page_size == 32:
-        page_size = 16  # Reduce to fit in ROCm's shared memory
+      adjusted = self._adjust_params_for_shared_memory(
+          block_h, pages_per_compute_block, page_size, head_dim, dtype)
+      
+      if adjusted == (None, None, None):
+        self.skipTest("Cannot adjust parameters to fit ROCm device shared memory limits")
+      
+      block_h, pages_per_compute_block, page_size = adjusted
     
     max_kv_len = 2048
     seq_lens = np.asarray([3, 256, 513, 1023, 2048], dtype=jnp.int32)
