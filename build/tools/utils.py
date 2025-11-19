@@ -271,8 +271,8 @@ def copy_individual_files(src: str, dst: str, glob_pattern: str, rocm_tag: str):
     f"Copying files matching pattern {glob_pattern!r} from {src!r} to {dst!r}"
   )
   for f in glob.glob(os.path.join(src, glob_pattern)):
-    logging.debug(f"Found file to copy: {f!r}")
     if rocm_tag:
+      logging.info(f"Adding Rocm tag {rocm_tag} to file {f}")
       f_list = f.split("-")
       f_list[2] = f_list[2]+"+rocm"+rocm_tag
       new_f = "-".join(f_list)

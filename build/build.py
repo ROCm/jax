@@ -747,16 +747,12 @@ async def main():
       else:
         python_tag = "cp"
 
-      logger.info(f"ALL ARGS: {args}")
-      logger.info(f"Using ROCm path: {args.rocm_path} - {wheel_version_suffix} -{custom_wheel_version_suffix}") 
       if args.rocm_path:
         rocm_tag = args.rocm_path.split("-")[-1]
         logger.info(f"Using ROCm tag: {rocm_tag}")
       else:
         rocm_tag = None
 
-      logger.info(f"Final wheel version suffix: {wheel_version_suffix}")
-      logger.info(f"Copying wheel files for {wheel_dir} with suffix {wheel_version_suffix} and python tag {python_tag} - Bazel dir: {bazel_dir} - output path: {output_path}")
       utils.copy_individual_files(
           bazel_dir,
           output_path,
