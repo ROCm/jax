@@ -201,6 +201,18 @@ class PagedAttentionKernelTest(PallasBaseTest):
     if (quant_dtype == jnp.float8_e4m3fn
         and not jtu.is_cuda_compute_capability_at_least("8.9")):
       self.skipTest("Skipping since float8_e4m3fn is not supported on < sm89")
+    
+    # Some ROCm devices have lower shared memory limits (e.g., 65536 bytes observed)
+    # causing "Shared memory size limit exceeded: requested 86016, available: 65536"
+    # Adjust parameters to fit within device limits while maintaining test quality
+    if jtu.is_device_rocm():
+      if block_h == 32:
+        block_h = 16  # Reduce to fit in ROCm's shared memory
+      if pages_per_compute_block == 8:
+        pages_per_compute_block = 4  # Reduce to fit in ROCm's shared memory
+      if page_size == 32:
+        page_size = 16  # Reduce to fit in ROCm's shared memory
+    
     max_kv_len = 2048
     seq_lens = np.asarray([3, 256, 513, 1023, 2048], dtype=jnp.int32)
     q, k_pages, v_pages, block_tables = _generate_qkv(
@@ -218,7 +230,7 @@ class PagedAttentionKernelTest(PallasBaseTest):
 
     k_, k_scales = (_quantize(k_pages, quant_dtype)
                     if quantize_k else (k_pages, None))
-    v_, v_scales = (_quantize(k_pages, quant_dtype)
+    v_, v_scales = (_quantize(v_pages, quant_dtype)
                     if quantize_v else (v_pages, None))
 
     o = paged_attention.paged_attention(
