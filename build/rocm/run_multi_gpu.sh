@@ -20,18 +20,25 @@ set -euxo pipefail
 LOG_DIR="./logs"
 
 # --------------------------------------------------------------------------------
-# Function to detect number of AMD/ATI GPUs using lspci.
+# Function to detect number of ROCm-enabled GPUs using rocm-smi.
+# Uses rocm-smi instead of lspci to ensure only functional GPUs with
+# amdgpu driver loaded are counted. This matches what JAX can actually use.
 # --------------------------------------------------------------------------------
 detect_amd_gpus() {
-    # Make sure lspci is installed.
-    if ! command -v lspci &>/dev/null; then
-        echo "Error: lspci command not found. Aborting."
+    # Make sure rocm-smi is installed.
+    if ! command -v rocm-smi &>/dev/null; then
+        echo "Error: rocm-smi command not found. Please ensure ROCm is installed."
         exit 1
     fi
-    # Count AMD/ATI GPU controllers.
+    # Count ROCm-enabled GPU devices.
     local count
-    count=$(lspci | grep -c 'controller.*AMD/ATI')
-    echo "$count"
+    count=$(rocm-smi --showid 2>/dev/null | grep -c "Device Name:" || echo "0")
+    if [[ "$count" -eq 0 ]]; then
+        echo "Warning: rocm-smi returned no GPUs. Check if amdgpu driver is loaded."
+        echo "1"  # Fallback to 1 GPU
+    else
+        echo "$count"
+    fi
 }
 
 # --------------------------------------------------------------------------------

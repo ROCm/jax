@@ -197,9 +197,24 @@ def run_parallel(all_testmodules, p, c):
 
 
 def find_num_gpus():
-    cmd = [r"lspci|grep 'controller\|accel'|grep 'AMD/ATI'|wc -l"]
-    _, _, stdout = run_shell_command(cmd, shell=True)
-    return int(stdout)
+    """Detect number of ROCm-enabled GPUs using rocm-smi.
+    
+    Uses rocm-smi instead of lspci to ensure only functional GPUs with
+    amdgpu driver loaded are counted. This matches what JAX can actually use.
+    """
+    # Try rocm-smi first (only shows ROCm-functional GPUs)
+    cmd = ["rocm-smi", "--showid"]
+    return_code, stderr, stdout = run_shell_command(cmd, shell=False)
+    if return_code == 0:
+        # Count lines containing "Device Name:" (one per GPU)
+        count = stdout.count("Device Name:")
+        if count > 0:
+            return count
+    
+    # Fallback: assume 1 GPU if rocm-smi fails
+    print("Warning: rocm-smi failed or returned no GPUs, assuming 1 GPU")
+    print(f"stderr: {stderr}")
+    return 1
 
 
 def main(args):
