@@ -572,8 +572,8 @@ def make_ir_context() -> ir.Context:
   # multi threaded execution aborts the process if we try to register a new
   # dialect after this point. The dialect registry in a context is not thread
   # safe, and a fatal error is much better than a data race.
-  if jaxlib_version >= (0, 8):
-    jax_mlir_ext.enter_multi_threaded_execution(context)
+  # if jaxlib_version >= (0, 8):
+  #  jax_mlir_ext.enter_multi_threaded_execution(context)
   return context
 
 

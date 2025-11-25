@@ -256,6 +256,7 @@ nanobind_pywrap_extension(
         "@nanobind",
         "@shardy//shardy/dialect/sdy/ir:dialect",
         "@shardy//shardy/integrations/c:sdy_capi",
+        "@stablehlo//:vhlo_ops",
         "@xla//xla/pjrt:status_casters",
         "@xla//xla/python:nb_absl_span",
         "@xla//xla/service/spmd/shardy/integrations/c:xla_sdy_capi",
