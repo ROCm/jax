@@ -1019,6 +1019,10 @@ class OpsTest(PallasBaseTest):
       self.skipTest("Not supported on TPU") # set this b/c this how the test was
       # originally configured. Have no way to test it.
 
+    if jtu.test_device_matches(["cuda"]):
+      self.skipTest("Not tested on CUDA") # set this b/c this how the test was
+      # originally configured. Have no way to test cuda.
+
     size = len(self.IS_FINITE_TEST_VALUES)
 
     @functools.partial(
