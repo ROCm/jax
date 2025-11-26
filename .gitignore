@@ -30,3 +30,7 @@ jax.iml
 /include/
 /lib/
 /share/
+
+/compile_commands.json
+/strace.txt
+/external
