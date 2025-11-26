@@ -1004,6 +1004,10 @@ class OpsTest(PallasBaseTest):
       # The original test worked only on fp32@TPU, have no way to test CUDA
       self.skipTest("Not tested on CUDA, todo for the respective team")
 
+    if jtu.test_device_matches(["cuda"]):
+      self.skipTest("Not tested on CUDA") # set this b/c this how the test was
+      # originally configured. Have no way to test cuda.
+
     size = len(self.IS_FINITE_TEST_VALUES)
 
     @functools.partial(
