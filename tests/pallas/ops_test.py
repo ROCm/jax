@@ -1009,9 +1009,15 @@ class OpsTest(PallasBaseTest):
       -0.2, jnp.inf, -jnp.inf, jnp.nan, 0.0, 1.0, -1.0, 0.5,
   ]
 
-  def test_is_finite(self):
-    if jtu.test_device_matches(["gpu"]):
-      self.skipTest("Not supported on GPU")
+  @parameterized.named_parameters(
+      (dtype.__name__, dtype)
+      for dtype in (jnp.float32, jnp.float16, jnp.bfloat16)
+      # other dtypes are TBD once is_nan and is_inf supports them
+  )
+  def test_is_finite(self, dtype):
+    if jtu.test_device_matches(["tpu"]) and dtype != jnp.float32:
+      self.skipTest("Not supported on TPU") # set this b/c this how the test was
+      # originally configured. Have no way to test it.
 
     size = len(self.IS_FINITE_TEST_VALUES)
 
@@ -1022,14 +1028,24 @@ class OpsTest(PallasBaseTest):
     def kernel(x_ref, o_ref):
       o_ref[...] = lax.is_finite(x_ref[...])
 
-    x = jnp.array(self.IS_FINITE_TEST_VALUES, dtype=jnp.float32)
+    x = jnp.array(self.IS_FINITE_TEST_VALUES, dtype=dtype)
     out = kernel(x)
     expected = lax.is_finite(x)
     self.assertArraysEqual(out, expected)
 
-  def test_is_finite_scalar(self):
-    if jtu.test_device_matches(["gpu"]):
-      self.skipTest("Not supported on GPU")
+  @parameterized.named_parameters(
+      (dtype.__name__, dtype)
+      for dtype in (jnp.float32, jnp.float16, jnp.bfloat16)
+      # other dtypes are TBD once is_nan and is_inf supports them
+  )
+  def test_is_finite_scalar(self, dtype):
+    if jtu.test_device_matches(["tpu"]) and dtype != jnp.float32:
+      self.skipTest("Not tested on TPU") # set this b/c this how the test was
+      # originally configured. Have no way to test tpu.
+
+    if jtu.test_device_matches(["cuda"]):
+      self.skipTest("Not tested on CUDA") # set this b/c this how the test was
+      # originally configured. Have no way to test cuda.
 
     size = len(self.IS_FINITE_TEST_VALUES)
 
@@ -1043,7 +1059,7 @@ class OpsTest(PallasBaseTest):
       for i in range(8):
         o_ref[i] = jnp.isfinite(x_ref[i])
 
-    x = jnp.array(self.IS_FINITE_TEST_VALUES, dtype=jnp.float32)
+    x = jnp.array(self.IS_FINITE_TEST_VALUES, dtype=dtype)
     out = kernel(x)
     expected = lax.is_finite(x)
     self.assertArraysEqual(out, expected)
