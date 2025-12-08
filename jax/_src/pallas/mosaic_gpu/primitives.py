@@ -53,8 +53,13 @@ import jax.numpy as jnp
 import numpy as np
 
 
-WARP_SIZE = 32
-WARPGROUP_SIZE = 128
+# PR_REVIEW_TODO: is below a correct way to branch on the platform?
+if "rocm" in jax.devices()[0].client.platform_version:
+  WARP_SIZE = 64
+  WARPGROUP_SIZE = WARP_SIZE*4
+else:
+  WARP_SIZE = 32
+  WARPGROUP_SIZE = 128
 
 
 _Ref = state.AbstractRef | state_types.TransformedRef
@@ -514,7 +519,7 @@ def _copy_gmem_to_smem_lowering(
     if bytes % WARPGROUP_SIZE:
       raise NotImplementedError(
           "Only copies transferring a number of bytes divisible by the"
-          " warpgroup size are supported"
+          f" warpgroup size ({WARPGROUP_SIZE}) are supported"
       )
     if for_warpgroup:
       # We arrive uniformly from each thread in the WG, so we need to divide the
