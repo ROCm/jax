@@ -30,12 +30,11 @@ limitations under the License.
 #include <optional>
 #include <string>
 #include <string_view>
-#include <system_error>  // NOLINT
+#include <system_error> // NOLINT
 #include <tuple>
 #include <utility>
 #include <vector>
 
-#include "jaxlib/mosaic/gpu/library_paths.h"
 #include "absl/base/call_once.h"
 #include "absl/base/no_destructor.h"
 #include "absl/base/optimization.h"
@@ -51,6 +50,7 @@ limitations under the License.
 #include "absl/strings/str_join.h"
 #include "absl/strings/str_split.h"
 #include "absl/synchronization/mutex.h"
+#include "jaxlib/mosaic/gpu/library_paths.h"
 
 // these `#if 0` are tmp and should be REMOVED for the PR.
 #if 0
@@ -58,12 +58,6 @@ limitations under the License.
 #include "third_party/gpus/cuda/include/cuda.h"
 #endif
 
-#include "llvm/ADT/SmallVector.h"
-#include "llvm/Support/CodeGen.h"
-#include "llvm/Support/Debug.h"
-#include "llvm/Support/FileSystem.h"
-#include "llvm/Support/TargetSelect.h"
-#include "llvm/Support/raw_ostream.h"
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
 #include "mlir/Conversion/ComplexToLLVM/ComplexToLLVM.h"
 #include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
@@ -71,6 +65,12 @@ limitations under the License.
 #include "mlir/Conversion/IndexToLLVM/IndexToLLVM.h"
 #include "mlir/Conversion/MathToLLVM/MathToLLVM.h"
 #include "mlir/Conversion/MemRefToLLVM/MemRefToLLVM.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/CodeGen.h"
+#include "llvm/Support/Debug.h"
+#include "llvm/Support/FileSystem.h"
+#include "llvm/Support/TargetSelect.h"
+#include "llvm/Support/raw_ostream.h"
 
 #if 0
 // a question to Google dev team: perhaps we need a vendor abstracted file for
@@ -117,10 +117,6 @@ limitations under the License.
 #include "mlir/Target/LLVMIR/Dialect/NVVM/NVVMToLLVMIRTranslation.h"
 #endif
 
-#include "mlir/Target/LLVMIR/Dialect/Builtin/BuiltinToLLVMIRTranslation.h"
-#include "mlir/Target/LLVMIR/Dialect/GPU/GPUToLLVMIRTranslation.h"
-#include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
-#include "mlir/Transforms/Passes.h"
 #include "jaxlib/gpu/vendor.h"
 #include "jaxlib/mosaic/dialect/gpu/mosaic_gpu.h"
 #include "jaxlib/mosaic/gpu/assembly_to_binary.h"
@@ -131,6 +127,10 @@ limitations under the License.
 #include "jaxlib/mosaic/gpu/passes.h"
 #include "jaxlib/mosaic/gpu/serde.h"
 #include "jaxlib/mosaic/gpu/target.h"
+#include "mlir/Target/LLVMIR/Dialect/Builtin/BuiltinToLLVMIRTranslation.h"
+#include "mlir/Target/LLVMIR/Dialect/GPU/GPUToLLVMIRTranslation.h"
+#include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
+#include "mlir/Transforms/Passes.h"
 #include "xla/executable_run_options.h"
 #include "xla/ffi/ffi.h"
 #include "xla/ffi/ffi_api.h"
@@ -146,17 +146,17 @@ limitations under the License.
 #include "xla/stream_executor/cuda/ptx_compiler_support.h"
 #endif
 
-#include "xla/tsl/platform/statusor.h"
 #include "tsl/platform/path.h"
 #include "tsl/profiler/lib/traceme.h"
+#include "xla/tsl/platform/statusor.h"
 
 namespace {
 
 namespace ffi = xla::ffi;
 namespace se = stream_executor;
 
-using MosaicInitFunc = void(void****);
-using MosaicHostFunc = void(void**);
+using MosaicInitFunc = void(void ****);
+using MosaicHostFunc = void(void **);
 
 #if 0
 // Mirrors `--xla_gpu_cuda_data_dir`'s default value.
@@ -530,22 +530,20 @@ absl::StatusOr<std::pair<std::unique_ptr<mlir::ExecutionEngine>, bool>> Compile(
 #endif
 
 class CompiledKernel {
- public:
-  CompiledKernel(std::unique_ptr<mlir::ExecutionEngine> engine, void* ctx,
-                 MosaicHostFunc* host_launch, bool is_comm_used)
-      : engine_(std::move(engine)),
-        ctx_(ctx),
-        host_launch_(host_launch),
+public:
+  CompiledKernel(std::unique_ptr<mlir::ExecutionEngine> engine, void *ctx,
+                 MosaicHostFunc *host_launch, bool is_comm_used)
+      : engine_(std::move(engine)), ctx_(ctx), host_launch_(host_launch),
         is_comm_used_(is_comm_used) {}
 
-  std::tuple<void*, MosaicHostFunc*, bool> GetHostLaunch() {
+  std::tuple<void *, MosaicHostFunc *, bool> GetHostLaunch() {
     return std::make_tuple(ctx_, host_launch_, is_comm_used_);
   }
 
- private:
+private:
   std::unique_ptr<mlir::ExecutionEngine> engine_;
-  void* ctx_;  // TODO(apaszke): Destroy this properly
-  MosaicHostFunc* host_launch_;
+  void *ctx_; // TODO(apaszke): Destroy this properly
+  MosaicHostFunc *host_launch_;
   bool is_comm_used_;
 };
 
@@ -785,7 +783,7 @@ XLA_FFI_DEFINE_HANDLER(kMosaicGpuExecute, MosaicGpuExecute,
                            .Attr<std::string_view>("module")
                            .Attr<bool>("use_custom_barrier")
                            .Ctx<xla::RunId>(),
-                           {ffi::Traits::kCmdBufferCompatible});
+                       {ffi::Traits::kCmdBufferCompatible});
 
 XLA_FFI_REGISTER_HANDLER(ffi::GetXlaFfiApi(), "mosaic_gpu_v2", "CUDA",
                          {
@@ -795,23 +793,23 @@ XLA_FFI_REGISTER_HANDLER(ffi::GetXlaFfiApi(), "mosaic_gpu_v2", "CUDA",
                              /*execute=*/kMosaicGpuExecute,
                          });
 
-}  // namespace
+} // namespace
 
 extern "C" {
 
-__attribute__((visibility("default"))) void** MosaicGpuCompile(
-    const char* module) {
+__attribute__((visibility("default"))) void **
+MosaicGpuCompile(const char *module) {
   auto compiled = CompileAndInit(module);
   if (!compiled.ok()) {
     return nullptr;
   }
   auto [ctx, launch, is_comm_used] = compiled->GetHostLaunch();
-  auto tuple_ptr = std::unique_ptr<void*>(new void*[3]);
+  auto tuple_ptr = std::unique_ptr<void *>(new void *[3]);
   if (!tuple_ptr) {
     return nullptr;
   }
   tuple_ptr.get()[0] = ctx;
-  tuple_ptr.get()[1] = reinterpret_cast<void*>(launch);
+  tuple_ptr.get()[1] = reinterpret_cast<void *>(launch);
   tuple_ptr.get()[2] = new CompiledKernel(std::move(*compiled));
   if (!tuple_ptr.get()[2]) {
     return nullptr;
@@ -819,9 +817,10 @@ __attribute__((visibility("default"))) void** MosaicGpuCompile(
   return tuple_ptr.release();
 }
 
-__attribute__((visibility("default"))) void MosaicGpuUnload(void** tuple_ptr) {
-  delete std::launder<CompiledKernel>(reinterpret_cast<CompiledKernel*>(tuple_ptr[2]));
+__attribute__((visibility("default"))) void MosaicGpuUnload(void **tuple_ptr) {
+  delete std::launder<CompiledKernel>(
+      reinterpret_cast<CompiledKernel *>(tuple_ptr[2]));
   delete[] tuple_ptr;
 }
 
-}  // extern "C"
+} // extern "C"
