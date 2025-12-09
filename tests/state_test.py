@@ -17,6 +17,7 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from functools import partial
 import itertools as it
+import unittest
 from typing import Any, NamedTuple, Union
 
 from absl.testing import absltest
@@ -522,8 +523,8 @@ class StatePrimitivesTest(jtu.JaxTestCase):
         wrap_init(f, 1 + len(idx_avals)), [ref_aval, *idx_avals])
     jaxpr_, consts_ = discharge_state(stateful_jaxpr, stateful_consts)
     f_batched = jax.vmap(partial(core.eval_jaxpr, jaxpr_, consts_),
-                         in_axes=(ref_bdim, *idx_bdims),
-                         out_axes=[out_bdim, ref_bdim])
+                          in_axes=(ref_bdim, *idx_bdims),
+                          out_axes=[out_bdim, ref_bdim])
     vmap_of_discharge_ans = f_batched(a, *idxs)
 
     self.assertAllClose(discharge_of_vmap_ans, vmap_of_discharge_ans,
@@ -885,8 +886,34 @@ def vmappable_index_params(draw, *, op_type: str):
     else:
       ref_bdim = draw(hps.one_of(hps.none(),
         hps.integers(min_value=0, max_value=len(index_param.ref_shape))))
-    slice_bdim = draw(hps.integers(
-      min_value=0, max_value=len(index_param.slice_shape)))
+    
+    # Compute slice_bdim based on the batching rule logic (see _get_vmap in primitives.py)
+    # Check if any dimensions are actually being indexed with integers
+    has_int_indexing = any(index_param.indexed_dims)
+    
+    if not has_int_indexing:
+      # No integer indexing: batch dimension stays at ref_dim position
+      # This corresponds to primitives.py: out_bdim = ref_dim (in the except ValueError branch)
+      if ref_bdim is not None:
+        slice_bdim = ref_bdim
+      else:
+        # ref not batched - shouldn't happen for "get" since something must be batched
+        slice_bdim = 0
+    else:
+      # Has integer indexing: need to check contiguity
+      int_indexer_positions = [i for i, b in enumerate(index_param.indexed_dims) if b]
+      int_indexers_contiguous = (
+          len(int_indexer_positions) <= 1 or
+          all(int_indexer_positions[i+1] - int_indexer_positions[i] == 1
+              for i in range(len(int_indexer_positions) - 1))
+      )
+      if not int_indexers_contiguous:
+        # Non-contiguous integer indexers get moved to front, batch dim = 0
+        slice_bdim = 0
+      else:
+        # Contiguous integer indexers: batch dim is at position of first integer index
+        # (accounting for the batch index that gets inserted)
+        slice_bdim = int_indexer_positions[0] if int_indexer_positions else 0
 
   bat_ref_shape = maybe_tuple_insert(index_param.ref_shape, ref_bdim, axis_size)
   bat_ref_aval = shaped_array_ref(bat_ref_shape, np.float32)
@@ -979,14 +1006,7 @@ class StateHypothesisTest(jtu.JaxTestCase):
     idx_avals = get_vmap_param.vmap_index_param.index_param.idx_avals
     ref = get_vmap_param.bat_ref
 
-    f_batched = jax.vmap(f, in_axes=(ref_bdim, *idx_bdims), out_axes=[out_bdim])
-    stateful_jaxpr, _, stateful_consts = pe.trace_to_jaxpr_dynamic(
-        wrap_init(f_batched, 1 + len(bat_non_slice_idx_avals)),
-        [bat_ref_aval, *bat_non_slice_idx_avals])
-    jaxpr, consts = discharge_state(stateful_jaxpr, stateful_consts)
-    discharge_of_vmap_ans = core.eval_jaxpr(jaxpr, consts, ref, *non_slice_idx)
-
-    # vmap-of-discharge
+    # vmap-of-discharge (compute this first as the reference)
     stateful_jaxpr, _, stateful_consts = pe.trace_to_jaxpr_dynamic(
         wrap_init(f, 1 + len(idx_avals)), [ref_aval, *idx_avals])
     jaxpr_, consts_ = discharge_state(stateful_jaxpr, stateful_consts)
@@ -994,6 +1014,14 @@ class StateHypothesisTest(jtu.JaxTestCase):
                           in_axes=(ref_bdim, *idx_bdims),
                           out_axes=[out_bdim, ref_bdim])
     vmap_of_discharge_ans = f_batched(ref, *non_slice_idx)
+
+    # discharge-of-vmap
+    f_batched = jax.vmap(f, in_axes=(ref_bdim, *idx_bdims), out_axes=[out_bdim])
+    stateful_jaxpr, _, stateful_consts = pe.trace_to_jaxpr_dynamic(
+        wrap_init(f_batched, 1 + len(bat_non_slice_idx_avals)),
+        [bat_ref_aval, *bat_non_slice_idx_avals])
+    jaxpr, consts = discharge_state(stateful_jaxpr, stateful_consts)
+    discharge_of_vmap_ans = core.eval_jaxpr(jaxpr, consts, ref, *non_slice_idx)
 
     self.assertAllClose(discharge_of_vmap_ans, vmap_of_discharge_ans,
                         check_dtypes=False)
