@@ -16,7 +16,13 @@ load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("@rules_cc//cc:cc_test.bzl", "cc_test")
 load("@rules_python//python:defs.bzl", "py_library")
-load("//jaxlib:jax.bzl", "if_oss", "nanobind_extension")
+load(
+    "//jaxlib:jax.bzl",
+    "if_oss",
+    "nanobind_extension",
+    "if_cuda_is_configured",
+    "if_rocm_is_configured"
+)
 
 package(
     default_applicable_licenses = [],
@@ -253,7 +259,7 @@ cc_library(
 )
 
 cc_library(
-    name = "custom_call",
+    name = "custom_call_cuda",
     srcs = ["custom_call.cc"],
     linkopts = if_oss(
         [],  # We use a version script to ensure symbol visibility in the OSS build.
@@ -338,6 +344,25 @@ cc_library(
         "@xla//xla/stream_executor/cuda:ptx_compiler_support",
         "@xla//xla/tsl/platform:statusor",
     ],
+    alwayslink = True,
+)
+
+cc_library(
+    name = "custom_call",
+    # needs to be visible when building pjrt for ROCm, whose build system is external to the repo.
+    visibility = ["//visibility:public"],
+    linkopts = if_oss(
+        [],  # We use a version script to ensure symbol visibility in the OSS build.
+        [
+            "-Wl,--export-dynamic-symbol='MosaicGpuCompile'",
+            "-Wl,--export-dynamic-symbol='MosaicGpuUnload'",
+        ],
+    ),
+    deps = if_cuda_is_configured([
+        ":custom_call_cuda",
+    ]) + if_rocm_is_configured([
+        "//jaxlib/mosaic/gpu/rocm:custom_call",
+    ]),
     alwayslink = True,
 )
 
