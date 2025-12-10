@@ -50,10 +50,10 @@ limitations under the License.
 #include "absl/strings/str_join.h"
 #include "absl/strings/str_split.h"
 #include "absl/synchronization/mutex.h"
-#include "jaxlib/mosaic/gpu/library_paths.h"
 
 // these `#if 0` are tmp and should be REMOVED for the PR.
 #if 0
+#include "jaxlib/mosaic/gpu/library_paths.h"
 // note, given the vendor.h isolation this probably shouldn't be included at all
 #include "third_party/gpus/cuda/include/cuda.h"
 #endif
@@ -118,15 +118,19 @@ limitations under the License.
 #endif
 
 #include "jaxlib/gpu/vendor.h"
-#include "jaxlib/mosaic/dialect/gpu/mosaic_gpu.h"
-#include "jaxlib/mosaic/gpu/assembly_to_binary.h"
-#include "jaxlib/mosaic/gpu/dump.h"
-#include "jaxlib/mosaic/gpu/gpu_module_to_assembly.h"
-#include "jaxlib/mosaic/gpu/launch_lowering.h"
+// #include "jaxlib/mosaic/dialect/gpu/mosaic_gpu.h"
+// #include "jaxlib/mosaic/gpu/assembly_to_binary.h"
+// #include "jaxlib/mosaic/gpu/dump.h"
+// #include "jaxlib/mosaic/gpu/gpu_module_to_assembly.h"
+// #include "jaxlib/mosaic/gpu/launch_lowering.h"
+
+#if 0
 #include "jaxlib/mosaic/gpu/nvshmem.h"
-#include "jaxlib/mosaic/gpu/passes.h"
-#include "jaxlib/mosaic/gpu/serde.h"
-#include "jaxlib/mosaic/gpu/target.h"
+#endif
+
+// #include "jaxlib/mosaic/gpu/passes.h"
+// #include "jaxlib/mosaic/gpu/serde.h"
+// #include "jaxlib/mosaic/gpu/target.h"
 #include "mlir/Target/LLVMIR/Dialect/Builtin/BuiltinToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/GPU/GPUToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
@@ -597,8 +601,9 @@ absl::StatusOr<std::pair<std::string, std::string>> GetHostAndInitFuncNames(
 }
 #endif
 
+absl::StatusOr<CompiledKernel> CompileAndInit(const char *module) {
+  return absl::InternalError("TODO");
 #if 0
-absl::StatusOr<CompiledKernel> CompileAndInit(const char* module) {
   mlir::MLIRContext context(mlir::MLIRContext::Threading::DISABLED);
   context.allowUnregisteredDialects(true);
   InitContext(&context);
@@ -640,8 +645,8 @@ absl::StatusOr<CompiledKernel> CompileAndInit(const char* module) {
   reinterpret_cast<MosaicInitFunc*>(*init)(init_args);
   return CompiledKernel(std::move(maybe_engine.value().first), kernel_ptr,
                         reinterpret_cast<MosaicHostFunc*>(*host), is_comm_used);
-}
 #endif
+}
 
 #if 0
 // Each compiled kernel has a unique init func, and each kernel is used from
@@ -712,12 +717,13 @@ XLA_REGISTER_CUSTOM_CALL_TARGET_WITH_SYM("mosaic_gpu", &MosaicGPUCustomCall,
                                          "CUDA");
 #endif
 
-#if 0
 absl::Status MosaicGpuExecute(gpuStream_t stream, ffi::RemainingArgs inputs,
                               ffi::RemainingRets results,
                               std::string_view kernel_hash,
                               std::string_view module, bool use_custom_barrier,
                               xla::RunId run_id) {
+  return absl::OkStatus();
+#if 0
   // Updated version using the new FFI API supporting custom barrier
   // for distributed kernels
   if (use_custom_barrier) {
@@ -771,8 +777,8 @@ absl::Status MosaicGpuExecute(gpuStream_t stream, ffi::RemainingArgs inputs,
   }
   std::get<1>(ctx_kernel_comm)(args);
   return absl::OkStatus();
-}
 #endif
+}
 
 XLA_FFI_DEFINE_HANDLER(kMosaicGpuExecute, MosaicGpuExecute,
                        ffi::Ffi::Bind<ffi::ExecutionStage::kExecute>()
@@ -785,7 +791,7 @@ XLA_FFI_DEFINE_HANDLER(kMosaicGpuExecute, MosaicGpuExecute,
                            .Ctx<xla::RunId>(),
                        {ffi::Traits::kCmdBufferCompatible});
 
-XLA_FFI_REGISTER_HANDLER(ffi::GetXlaFfiApi(), "mosaic_gpu_v2", "CUDA",
+XLA_FFI_REGISTER_HANDLER(ffi::GetXlaFfiApi(), "mosaic_gpu_v2", "ROCM",
                          {
                              /*instantiate=*/nullptr,
                              /*prepare=*/nullptr,
