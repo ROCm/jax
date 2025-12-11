@@ -620,9 +620,6 @@ async def main():
       )
 
   if "rocm" in args.wheels:
-    print("ERROR: This repo is not used for building the ROCm JAX plugins. Please use the new plugin repo: https://github.com/ROCm/rocm-jax"
-    exit(1)
-
     wheel_build_command_base.append("--config=rocm_base")
     wheel_build_command_base.append("--config=rocm")
     if clang_local:
