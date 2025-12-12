@@ -49,17 +49,18 @@ limitations under the License.
 #include "absl/strings/str_join.h"
 #include "absl/strings/str_split.h"
 #include "absl/synchronization/mutex.h"
-#include "jaxlib/gpu/vendor.h"
-#include "jaxlib/mosaic/dialect/gpu/mosaic_gpu.h"
-#include "jaxlib/mosaic/gpu/assembly_to_binary.h"
-#include "jaxlib/mosaic/gpu/dump.h"
-#include "jaxlib/mosaic/gpu/gpu_module_to_assembly.h"
-#include "jaxlib/mosaic/gpu/launch_lowering.h"
-#include "jaxlib/mosaic/gpu/library_paths.h"
-#include "jaxlib/mosaic/gpu/nvshmem.h"
-#include "jaxlib/mosaic/gpu/passes.h"
-#include "jaxlib/mosaic/gpu/serde.h"
-#include "jaxlib/mosaic/gpu/target.h"
+
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/CodeGen.h"
+#include "llvm/Support/Debug.h"
+#include "llvm/Support/FileSystem.h"
+#include "llvm/Support/TargetSelect.h"
+#include "llvm/Support/raw_ostream.h"
+
+#if defined(JAX_GPU_CUDA)
+#include "third_party/gpus/cuda/include/cuda.h"
+#endif // defined(JAX_GPU_CUDA)
+
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
 #include "mlir/Conversion/ComplexToLLVM/ComplexToLLVM.h"
 #include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
@@ -67,10 +68,13 @@ limitations under the License.
 #include "mlir/Conversion/IndexToLLVM/IndexToLLVM.h"
 #include "mlir/Conversion/MathToLLVM/MathToLLVM.h"
 #include "mlir/Conversion/MemRefToLLVM/MemRefToLLVM.h"
-#include "mlir/Conversion/NVVMToLLVM/NVVMToLLVM.h"
 #include "mlir/Conversion/Passes.h"
 #include "mlir/Conversion/UBToLLVM/UBToLLVM.h"
 #include "mlir/Conversion/VectorToLLVM/ConvertVectorToLLVM.h"
+#if defined(JAX_GPU_CUDA)
+#include "mlir/Conversion/NVVMToLLVM/NVVMToLLVM.h"
+#endif
+
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Arith/Transforms/Passes.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
@@ -78,14 +82,18 @@ limitations under the License.
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/GPU/Transforms/Passes.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
-#include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Dialect/LLVMIR/Transforms/Passes.h"
 #include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/MemRef/Transforms/Passes.h"
-#include "mlir/Dialect/NVGPU/IR/NVGPUDialect.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
+
+#if defined(JAX_GPU_CUDA)
+#include "mlir/Dialect/LLVMIR/NVVMDialect.h"
+#include "mlir/Dialect/NVGPU/IR/NVGPUDialect.h"
+#endif // defined(JAX_GPU_CUDA)
+
 #include "mlir/ExecutionEngine/ExecutionEngine.h"
 #include "mlir/ExecutionEngine/OptUtils.h"
 #include "mlir/IR/AsmState.h"
@@ -101,9 +109,25 @@ limitations under the License.
 #include "mlir/Target/LLVMIR/Dialect/Builtin/BuiltinToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/GPU/GPUToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
-#include "mlir/Target/LLVMIR/Dialect/NVVM/NVVMToLLVMIRTranslation.h"
 #include "mlir/Transforms/Passes.h"
-#include "third_party/gpus/cuda/include/cuda.h"
+#if defined(JAX_GPU_CUDA)
+#include "mlir/Target/LLVMIR/Dialect/NVVM/NVVMToLLVMIRTranslation.h"
+#endif // defined(JAX_GPU_CUDA)
+
+#include "jaxlib/gpu/vendor.h"
+// #include "jaxlib/mosaic/dialect/gpu/mosaic_gpu.h"
+// #include "jaxlib/mosaic/gpu/assembly_to_binary.h"
+// #include "jaxlib/mosaic/gpu/dump.h"
+// #include "jaxlib/mosaic/gpu/gpu_module_to_assembly.h"
+// #include "jaxlib/mosaic/gpu/launch_lowering.h"
+#include "jaxlib/mosaic/gpu/library_paths.h"
+#include "jaxlib/mosaic/gpu/passes.h"
+// #include "jaxlib/mosaic/gpu/serde.h"
+// #include "jaxlib/mosaic/gpu/target.h"
+#if defined(JAX_GPU_CUDA)
+#include "jaxlib/mosaic/gpu/nvshmem.h"
+#endif // defined(JAX_GPU_CUDA)
+
 #include "tsl/platform/path.h"
 #include "tsl/profiler/lib/traceme.h"
 #include "xla/executable_run_options.h"
@@ -111,19 +135,16 @@ limitations under the License.
 #include "xla/ffi/ffi_api.h"
 #include "xla/service/custom_call_status.h"
 #include "xla/service/custom_call_target_registry.h"
+#if defined(JAX_GPU_CUDA)
 #include "xla/service/gpu/llvm_gpu_backend/nvptx_libdevice_path.h"
 #include "xla/stream_executor/cuda/assemble_compilation_provider.h"
 #include "xla/stream_executor/cuda/compilation_provider.h"
 #include "xla/stream_executor/cuda/compilation_provider_options.h"
 #include "xla/stream_executor/cuda/cuda_compute_capability.h"
 #include "xla/stream_executor/cuda/ptx_compiler_support.h"
+#endif // defined(JAX_GPU_CUDA)
+
 #include "xla/tsl/platform/statusor.h"
-#include "llvm/ADT/SmallVector.h"
-#include "llvm/Support/CodeGen.h"
-#include "llvm/Support/Debug.h"
-#include "llvm/Support/FileSystem.h"
-#include "llvm/Support/TargetSelect.h"
-#include "llvm/Support/raw_ostream.h"
 
 namespace {
 
@@ -136,6 +157,7 @@ using MosaicHostFunc = void(void **);
 // Mirrors `--xla_gpu_cuda_data_dir`'s default value.
 constexpr std::string_view kDefaultCudaDataDir = "./cuda_sdk_lib";
 
+#if defined(JAX_GPU_CUDA)
 absl::StatusOr<std::string>
 GetPtxIsaVersion(const se::cuda::CompilationProvider &compilation_provider) {
   TF_ASSIGN_OR_RETURN(int ptxas_latest_version,
@@ -150,7 +172,9 @@ GetPtxIsaVersion(const se::cuda::CompilationProvider &compilation_provider) {
   int final_version = std::min(ptxas_latest_version, llvm_latest_version);
   return absl::StrFormat("ptx%d", final_version);
 }
+#endif // defined(JAX_GPU_CUDA)
 
+#if defined(JAX_GPU_CUDA)
 mlir::FailureOr<mlir::OpPassManager>
 GetPassPipeline(mlir::MLIRContext *ctx,
                 const se::cuda::CompilationProvider *compilation_provider,
@@ -241,7 +265,9 @@ GetPassPipeline(mlir::MLIRContext *ctx,
       )",
                       sm, ptx_isa, absl::StrJoin(libraries_to_link, ",")));
 }
+#endif // defined(JAX_GPU_CUDA)
 
+#if defined(JAX_GPU_CUDA)
 mlir::LogicalResult RunPasses(mlir::OpPassManager &&passes,
                               mlir::ModuleOp module,
                               const mosaic::gpu::DumpOptions &dump_opts) {
@@ -273,7 +299,9 @@ mlir::LogicalResult RunPasses(mlir::OpPassManager &&passes,
   }
   return pm.run(module);
 }
+#endif // defined(JAX_GPU_CUDA)
 
+#if defined(JAX_GPU_CUDA)
 void InitContext(mlir::MLIRContext *context) {
   mlir::DialectRegistry registry;
   registry.insert<mlir::arith::ArithDialect, mlir::cf::ControlFlowDialect,
@@ -302,7 +330,9 @@ void InitContext(mlir::MLIRContext *context) {
   context->appendDialectRegistry(registry);
   context->loadAllAvailableDialects();
 }
+#endif // defined(JAX_GPU_CUDA)
 
+#if defined(JAX_GPU_CUDA)
 bool is_nvshmem_used(mlir::ModuleOp module) {
   constexpr std::string_view prefix1 = "nvshmem_";
   constexpr std::string_view prefix2 = "nvshmemx_";
@@ -384,7 +414,9 @@ absl::StatusOr<se::CudaComputeCapability> GetCudaComputeCapability() {
                                        ? FeatureExtension::kAcceleratedFeatures
                                        : FeatureExtension::kNone);
 }
+#endif // defined(JAX_GPU_CUDA)
 
+#if defined(JAX_GPU_CUDA)
 absl::StatusOr<std::pair<std::unique_ptr<mlir::ExecutionEngine>, bool>>
 Compile(mlir::ModuleOp module) {
   tsl::profiler::TraceMe trace("Compile");
@@ -484,6 +516,7 @@ Compile(mlir::ModuleOp module) {
   }
   return std::make_pair(std::move(*maybe_execution_engine), is_comm_used);
 }
+#endif // defined(JAX_GPU_CUDA)
 
 class CompiledKernel {
 public:
@@ -550,6 +583,8 @@ GetHostAndInitFuncNames(mlir::ModuleOp module_op) {
 }
 
 absl::StatusOr<CompiledKernel> CompileAndInit(const char *module) {
+  return absl::InternalError("TODO");
+#if 0
   mlir::MLIRContext context(mlir::MLIRContext::Threading::DISABLED);
   context.allowUnregisteredDialects(true);
   InitContext(&context);
@@ -592,6 +627,7 @@ absl::StatusOr<CompiledKernel> CompileAndInit(const char *module) {
   return CompiledKernel(std::move(maybe_engine.value().first), kernel_ptr,
                         reinterpret_cast<MosaicHostFunc *>(*host),
                         is_comm_used);
+#endif
 }
 
 // Each compiled kernel has a unique init func, and each kernel is used from
@@ -599,6 +635,8 @@ absl::StatusOr<CompiledKernel> CompileAndInit(const char *module) {
 // in the key.
 absl::StatusOr<CompiledKernel *> CachedCompileAndInit(CacheKey key,
                                                       const char *module) {
+  return absl::InternalError("TODO");
+#if 0
   auto cache_and_mutex = GetKernelCache();
   auto *cache = cache_and_mutex.first;
   auto *mutex = cache_and_mutex.second;
@@ -622,8 +660,10 @@ absl::StatusOr<CompiledKernel *> CachedCompileAndInit(CacheKey key,
     cache->insert_or_assign(key, std::move(*compiled));
   }
   return &cache->at(key);
+#endif
 }
 
+#if defined(JAX_GPU_CUDA)
 void MosaicGPUCustomCall(void *stream, void **buffers, char *opaque,
                          size_t opaque_len, XlaCustomCallStatus *status) {
   // Forward-compatible version using the legacy FFI API
@@ -657,6 +697,7 @@ void MosaicGPUCustomCall(void *stream, void **buffers, char *opaque,
 
 XLA_REGISTER_CUSTOM_CALL_TARGET_WITH_SYM("mosaic_gpu", &MosaicGPUCustomCall,
                                          "CUDA");
+#endif // defined(JAX_GPU_CUDA)
 
 absl::Status MosaicGpuExecute(gpuStream_t stream, ffi::RemainingArgs inputs,
                               ffi::RemainingRets results,
@@ -676,8 +717,8 @@ absl::Status MosaicGpuExecute(gpuStream_t stream, ffi::RemainingArgs inputs,
     abort();
   }
   auto hash = *reinterpret_cast<const KernelHash *>(kernel_hash.data());
-  CUcontext ctx;
-  if (cuCtxGetCurrent(&ctx) != CUDA_SUCCESS) {
+  gpuContext_t ctx;
+  if (gpuCtxGetCurrent(&ctx) != gpuSuccess) {
     fprintf(stderr, "Failed to get current CUDA context\n");
     abort();
   }
@@ -710,10 +751,13 @@ absl::Status MosaicGpuExecute(gpuStream_t stream, ffi::RemainingArgs inputs,
   void **buffers_ptr = buffers.data();
   void *args[4] = {&std::get<0>(ctx_kernel_comm), &stream, &buffers_ptr};
 
+  // TODO(Arech): implement custom barrier for AMD
+#if defined(JAX_GPU_CUDA)
   if (is_comm_used) {
     mosaic::gpu::NvshmemApi::Default().barrier_all_on_stream(
         reinterpret_cast<cudaStream_t>(stream));
   }
+#endif // defined(JAX_GPU_CUDA)
   std::get<1>(ctx_kernel_comm)(args);
   return absl::OkStatus();
 }
@@ -729,7 +773,12 @@ XLA_FFI_DEFINE_HANDLER(kMosaicGpuExecute, MosaicGpuExecute,
                            .Ctx<xla::RunId>(),
                        {ffi::Traits::kCmdBufferCompatible});
 
-XLA_FFI_REGISTER_HANDLER(ffi::GetXlaFfiApi(), "mosaic_gpu_v2", "CUDA",
+XLA_FFI_REGISTER_HANDLER(ffi::GetXlaFfiApi(), "mosaic_gpu_v2",
+#if defined(JAX_GPU_CUDA)
+                         "CUDA",
+#elif defined(JAX_GPU_HIP)
+                         "ROCM",
+#endif
                          {
                              /*instantiate=*/nullptr,
                              /*prepare=*/nullptr,
