@@ -31,7 +31,7 @@ td_library(
     srcs = ["mosaic_gpu.td"],
     includes = ["."],
     deps = [
-        "@llvm-project//mlir:BasicPtxBuilderIntTdFiles",
+        "@llvm-project//mlir:BasicPtxBuilderIntTdFiles", # TODO(Arech)
         "@llvm-project//mlir:BuiltinDialectTdFiles",
         "@llvm-project//mlir:ControlFlowInterfacesTdFiles",
         "@llvm-project//mlir:InferTypeOpInterfaceTdFiles",
