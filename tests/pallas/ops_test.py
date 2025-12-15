@@ -2149,6 +2149,16 @@ class OpsTest(PallasBaseTest):
     expected = jax.lax.broadcast_in_dim(x, out_shape, dims)
     np.testing.assert_array_equal(f(x), expected)
 
+  def _estimate_dot_shared_memory_bytes(self, lhs_shape, rhs_shape, dtype, out_shape):
+    """Estimate shared memory usage for dot kernel."""
+    dtype_size = jnp.dtype(dtype).itemsize
+    float32_size = jnp.dtype(jnp.float32).itemsize
+    lhs_bytes = math.prod(lhs_shape) * dtype_size
+    rhs_bytes = math.prod(rhs_shape) * dtype_size
+    # Pallas dot kernels accumulate in float32
+    out_bytes = math.prod(out_shape) * float32_size
+    return lhs_bytes + rhs_bytes + out_bytes
+
   @parameterized.product(
       lhs_and_rhs_shape=[
           ((16, 16), (16, 16)),
@@ -2195,6 +2205,16 @@ class OpsTest(PallasBaseTest):
       self.skipTest("Contraction dimensions do not match")
 
     out_shape = (final_lhs_shape[0], final_rhs_shape[1])
+
+    required_smem = self._estimate_dot_shared_memory_bytes(lhs_shape, rhs_shape, dtype, out_shape)
+    try:
+      device = jax.local_devices()[0]
+      max_smem = getattr(device, 'shared_memory_per_block_optin', 48 * 1024)
+    except (AttributeError, IndexError):
+      max_smem = 48 * 1024
+
+    if required_smem > max_smem:
+      self.skipTest(f"Shared memory size limit exceeded: requested {required_smem}, available {max_smem}")
 
     if jtu.test_device_matches(["tpu"]):
       if dtype == jnp.float16:
