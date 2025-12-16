@@ -277,7 +277,7 @@ cc_library(
         ":dump",
         ":library_paths",  # buildcleaner: keep
         ":passes",
-        #":serde",
+        ":serde",
         #":target",
         "//jaxlib/mosaic/dialect/gpu:mosaic_gpu",
         "@com_google_absl//absl/base",
@@ -351,6 +351,8 @@ cc_library(
         "@xla//xla/stream_executor/cuda:ptx_compiler_support",
     ]) + if_rocm_is_configured([
         "//jaxlib/rocm:hip_vendor",
+        "@xla//xla/stream_executor/rocm:rocm_compute_capability",
+        "@xla//xla/stream_executor/rocm:rocm_driver_wrapper",
     ]),
     alwayslink = True,
 )
