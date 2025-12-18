@@ -1,0 +1,12 @@
+build:rocm --repo_env=HERMETIC_PYTHON_VERSION=3.12
+build:rocm --verbose_failures=true
+build:rocm --override_repository=xla="/home/atheodor/projects/xla"
+build:rocm --config=clang_local
+build:rocm --action_env=CLANG_COMPILER_PATH="/lib/llvm-18/bin/clang-18"
+build:rocm --repo_env=CC="/lib/llvm-18/bin/clang-18"
+build:rocm --repo_env=CXX="/lib/llvm-18/bin/clang++"
+build:rocm --repo_env=BAZEL_COMPILER="/lib/llvm-18/bin/clang-18"
+build:rocm --config=clang
+build:rocm --define=xnn_enable_avxvnniint8=false
+build:rocm --config=mkl_open_source_only
+build:rocm --config=avx_posix
