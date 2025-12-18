@@ -12,4 +12,6 @@ bazel --bazelrc=$SCRIPT_DIR/rocm.bazelrc run \
     --sandbox_debug \
     --verbose_failures \
     --repo_env=HERMETIC_PYTHON_VERSION=3.12 \
-    //build/rocm:deploy_jax_wheel $1
+    ${@:1:$#-1} \
+    -- \
+    //build/rocm:deploy_jax_wheel "${@: -1}"
