@@ -65,26 +65,26 @@ def _run_child_and_get_activity_count(tmpdir: str) -> int:
   outdir = os.path.join(tmpdir, "profile")
 
   code = r"""
-    import os
-    import jax, jax.numpy as jnp
-    from jax import jit
-    import jax.profiler
+import os
+import jax, jax.numpy as jnp
+from jax import jit
+import jax.profiler
 
-    @jit
-    def f(a, b):
-      return jnp.dot(a, b)
+@jit
+def f(a, b):
+  return jnp.dot(a, b)
 
-    a = jnp.ones((1024, 1024), dtype=jnp.float16)
-    b = jnp.ones((1024, 1024), dtype=jnp.float16)
+a = jnp.ones((1024, 1024), dtype=jnp.float16)
+b = jnp.ones((1024, 1024), dtype=jnp.float16)
 
-    # Warm-up compile outside trace.
+# Warm-up compile outside trace.
+f(a, b).block_until_ready()
+
+outdir = os.environ["OUTDIR"]
+with jax.profiler.trace(outdir):
+  for _ in range(5):
     f(a, b).block_until_ready()
-
-    outdir = os.environ["OUTDIR"]
-    with jax.profiler.trace(outdir):
-      for _ in range(5):
-        f(a, b).block_until_ready()
-    """
+"""
 
   env = os.environ.copy()
   env["OUTDIR"] = outdir
