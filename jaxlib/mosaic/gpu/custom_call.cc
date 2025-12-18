@@ -269,7 +269,7 @@ GetPassPipelineCUDA(mlir::MLIRContext *ctx,
 }
 #elif defined(JAX_GPU_HIP)
 mlir::FailureOr<mlir::OpPassManager>
-GetPassPipelineROCM(mlir::MLIRContext *ctx, const se::RocmComputeCapability &cc,
+GetPassPipelineROCM(mlir::MLIRContext *ctx, const se::RocmComputeCapability &cc
                     /*const std::string &sm, const std::string &ptx_isa,
                     const std::string &nvshmem_path*/) {
   static absl::once_flag register_passes_flag;
@@ -309,7 +309,7 @@ GetPassPipelineROCM(mlir::MLIRContext *ctx, const se::RocmComputeCapability &cc,
     mlir::LLVM::registerDIScopeForLLVMFuncOpPass();
     return true;
   });
-  const char *cuda_root = mosaic::gpu::GetCUDARoot();
+  /*const char *cuda_root = mosaic::gpu::GetCUDARoot();
   if (!cuda_root) {
     return mlir::failure();
   }
@@ -317,27 +317,36 @@ GetPassPipelineROCM(mlir::MLIRContext *ctx, const se::RocmComputeCapability &cc,
       ::xla::gpu::nvptx::LibDevicePath(kDefaultCudaDataDir)};
   if (!nvshmem_path.empty()) {
     libraries_to_link.push_back(nvshmem_path);
-  }
+  }*/
+  // TODO(arech): fix this before the PR
+  std::vector<std::string> libraries_to_link{"/opt/rocm/lib"};
   return mlir::parsePassPipeline(
+      // convert-nvgpu-to-nvvm,
+      // convert-nvvm-to-llvm,
+      // nvvm-attach-target{O=3 chip=%1$s fast=false features=+%2$s ftz=false
+      // module= triple=nvptx64-nvidia-cuda},  // sm, ptx_isa
+      // gpu.module(convert-gpu-to-nvvm{has-redux=false index-bitwidth=64
+      // use-bare-ptr-memref-call-conv=false}),
+
       absl::StrFormat(R"(
         builtin.module(
           mosaic-gpu-resolve-trivial-locations,
           arith-expand,
           canonicalize,
           gpu-launch-sink-index-computations,
-          convert-nvgpu-to-nvvm,
+
           gpu-kernel-outlining{data-layout-str=},
           convert-vector-to-scf{full-unroll=false lower-tensors=false target-rank=1},
           convert-scf-to-cf,
-          convert-nvvm-to-llvm,
+
           expand-strided-metadata,
-          nvvm-attach-target{O=3 chip=%1$s fast=false features=+%2$s ftz=false  module= triple=nvptx64-nvidia-cuda},
+          
           lower-affine,
           convert-arith-to-llvm{index-bitwidth=0},
           convert-index-to-llvm{index-bitwidth=64},
           canonicalize{max-iterations=10 max-num-rewrites=-1 region-simplify=normal test-convergence=false top-down=true},
           cse,
-          gpu.module(convert-gpu-to-nvvm{has-redux=false index-bitwidth=64 use-bare-ptr-memref-call-conv=false}),
+          
           gpu.module(canonicalize{max-iterations=10 max-num-rewrites=-1 region-simplify=normal test-convergence=false top-down=true}),
           gpu.module(cse),
           gpu.module(mosaic-byval-insertion),
@@ -345,7 +354,7 @@ GetPassPipelineROCM(mlir::MLIRContext *ctx, const se::RocmComputeCapability &cc,
           gpu.module(reconcile-unrealized-casts),
           mosaic-convert-gpu-to-llvm,
           ensure-debug-info-scope-on-llvm-func{emission-kind=DebugDirectivesOnly},
-          mosaic-gpu-module-to-assembly{libraries-to-link=%3$s},
+          mosaic-gpu-module-to-assembly{libraries-to-link=%1$s},
           convert-math-to-llvm{approximate-log1p=true},
           canonicalize{max-iterations=10 max-num-rewrites=-1 region-simplify=normal test-convergence=false top-down=true},
           cse,
@@ -355,11 +364,10 @@ GetPassPipelineROCM(mlir::MLIRContext *ctx, const se::RocmComputeCapability &cc,
           reconcile-unrealized-casts
         )
       )",
-                      sm, ptx_isa, absl::StrJoin(libraries_to_link, ",")));
+                      absl::StrJoin(libraries_to_link, ",")));
 }
 #endif // defined( vendor )
 
-#if defined(JAX_GPU_CUDA)
 mlir::LogicalResult RunPasses(mlir::OpPassManager &&passes,
                               mlir::ModuleOp module,
                               const mosaic::gpu::DumpOptions &dump_opts) {
@@ -391,7 +399,6 @@ mlir::LogicalResult RunPasses(mlir::OpPassManager &&passes,
   }
   return pm.run(module);
 }
-#endif // defined(JAX_GPU_CUDA)
 
 #if defined(JAX_GPU_CUDA)
 inline void InitContext_CUDA(mlir::MLIRContext *context) {
@@ -584,6 +591,7 @@ Compile(mlir::ModuleOp module) {
   }
 #elif defined(JAX_GPU_HIP)
   TF_ASSIGN_OR_RETURN(se::RocmComputeCapability cc, GetRocmComputeCapability());
+  const bool is_comm_used{false}; // TODO(Arech) should this be fixed?
 #endif // defined( vendor )
 
   const char *dump_llvm = getenv("MOSAIC_GPU_DUMP_LLVM");
@@ -636,9 +644,13 @@ Compile(mlir::ModuleOp module) {
   if (const char *runtime_lib_path = getenv("MOSAIC_GPU_RUNTIME_LIB_PATH")) {
     runtime_libs.emplace_back(runtime_lib_path);
   }
+
+#if defined(JAX_GPU_CUDA)
   if (const char *nvshmem_path = getenv("MOSAIC_GPU_NVSHMEM_SO_PATH")) {
     runtime_libs.emplace_back(nvshmem_path);
   }
+#endif // defined(JAX_GPU_CUDA)
+
   // Create a transformer to run all LLVM optimization passes at the
   // specified optimization level.
   std::function<llvm::Error(llvm::Module *)> transformer =
