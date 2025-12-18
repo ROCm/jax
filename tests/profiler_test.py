@@ -25,6 +25,9 @@ import unittest
 import unittest.mock
 from absl.testing import absltest
 import pathlib
+import importlib
+import json
+import subprocess
 
 import jax
 import jax.numpy as jnp
@@ -48,6 +51,132 @@ except ImportError:
 
 jax.config.parse_flags_with_absl()
 
+
+def _import_xplane_pb2():
+  """Try a few common module paths for XPlane protos and return the module."""
+  candidates = [
+      "tsl.profiler.protobuf.xplane_pb2",
+      # Add more candidates here if your tree uses a different path.
+  ]
+  for name in candidates:
+    try:
+      return importlib.import_module(name)
+    except ModuleNotFoundError:
+      continue
+  raise ModuleNotFoundError(
+      "Could not import xplane_pb2. Add a py_test dep that provides "
+      "`tsl.profiler.protobuf.xplane_pb2` (or extend _import_xplane_pb2())."
+  )
+
+
+def _count_gpu_events_xspace(xplane_pb_path: str) -> int:
+  """Return total number of events across all /device:GPU* planes in XSpace."""
+  xplane_pb2 = _import_xplane_pb2()
+
+  xs = xplane_pb2.XSpace()
+  xs.ParseFromString(pathlib.Path(xplane_pb_path).read_bytes())
+
+  total = 0
+  for plane in xs.planes:
+    # On multi-GPU, plane names may be "/device:GPU:0", "/device:GPU:1", etc.
+    if plane.name.startswith("/device:GPU"):
+      for line in plane.lines:
+        total += len(line.events)
+  return total
+
+
+def _run_child_and_get_xplane(outdir: str, env_overrides: dict) -> str:
+  """Run a minimal JAX trace in a fresh process; return path to *.xplane.pb."""
+  code = r"""
+import glob, json, os
+import jax, jax.numpy as jnp
+from jax import jit
+import jax.profiler
+
+# Keep this minimal and avoid any eager device queries before tracing.
+
+@jit
+def f(a, b):
+  return jnp.dot(a, b)
+
+a = jnp.ones((1024, 1024), dtype=jnp.float16)
+b = jnp.ones((1024, 1024), dtype=jnp.float16)
+
+# Warm-up compile OUTSIDE the trace so the trace mostly captures runtime work.
+f(a, b).block_until_ready()
+
+outdir = os.environ["OUTDIR"]
+with jax.profiler.trace(outdir):
+  # Run a few iterations to ensure we get recorded GPU activity.
+  for _ in range(3):
+    f(a, b).block_until_ready()
+
+pbs = glob.glob(os.path.join(outdir, "**", "*.xplane.pb"), recursive=True)
+assert len(pbs) == 1, pbs
+print(json.dumps({"xplane": pbs[0]}))
+"""
+
+  env = os.environ.copy()
+  env["OUTDIR"] = outdir
+  # You can use "gpu" if that's how your wheel is configured; "rocm" is safer
+  # for forcing ROCm specifically.
+  env.setdefault("JAX_PLATFORMS", "rocm")
+  env.update(env_overrides)
+
+  r = subprocess.run([sys.executable, "-c", code], env=env,
+                     capture_output=True, text=True)
+
+  if r.returncode != 0:
+    raise RuntimeError(
+        "Child process failed.\n"
+        f"STDOUT:\n{r.stdout}\n\nSTDERR:\n{r.stderr}"
+    )
+
+  info = json.loads(r.stdout.splitlines()[-1])
+  return info["xplane"]
+
+
+@jtu.thread_unsafe_test_class()
+class RocmProfilerPositiveControlTest(unittest.TestCase):
+
+  @jtu.run_on_devices("gpu")
+  def test_gpu_events_present_when_configure_happens_early(self):
+    # Skip if not ROCm. (On CUDA this test’s assumptions don’t apply.)
+    backend = jax.lib.xla_bridge.get_backend()
+    if "rocm" not in backend.platform_version.lower():
+      self.skipTest(f"Not ROCm backend: {backend.platform_version}")
+
+    force_configure_so = os.environ.get("FORCE_CONFIGURE_SO")
+    if not force_configure_so:
+      self.skipTest("FORCE_CONFIGURE_SO is not set (need a preload .so).")
+
+    # Ensure the .so exists (helps avoid confusing LD_PRELOAD failures).
+    if not os.path.exists(force_configure_so):
+      self.fail(f"FORCE_CONFIGURE_SO does not exist: {force_configure_so}")
+
+    with tempfile.TemporaryDirectory() as td:
+      outdir = os.path.join(td, "profile")
+
+      # Preload the configure-forcer. Preserve any existing LD_PRELOAD.
+      prev = os.environ.get("LD_PRELOAD", "")
+      ld_preload = force_configure_so if not prev else f"{force_configure_so}:{prev}"
+
+      xplane = _run_child_and_get_xplane(
+          outdir,
+          env_overrides={
+              "LD_PRELOAD": ld_preload,
+              # Optional diagnostics:
+              # "ROCPROFILER_LOG_LEVEL": "trace",
+              # "AMD_LOG_LEVEL": "5",
+          },
+      )
+
+      gpu_events = _count_gpu_events_xspace(xplane)
+      self.assertGreater(
+          gpu_events, 0,
+          f"Expected >0 GPU events when configure happens early; got {gpu_events}. "
+          f"xplane={xplane}"
+      )
 
 # We do not allow multiple concurrent profiler sessions.
 @jtu.thread_unsafe_test_class()
