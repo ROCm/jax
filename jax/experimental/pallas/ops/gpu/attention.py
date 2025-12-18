@@ -56,7 +56,7 @@ class BlockSizes:
   def get_default(cls):
     return BlockSizes(
         block_q=128,
-        block_k=128,
+        block_k=64,
         block_q_dkv=32,
         block_kv_dkv=32,
         block_q_dq=32,
@@ -224,8 +224,8 @@ def mha(
     causal: bool = False,
     block_sizes: BlockSizes = BlockSizes.get_default(),
     backward_pass_impl: str = "triton",
-    num_warps: int | None = None,
-    num_stages: int = 2,
+    num_warps: int | None = 4,
+    num_stages: int = 1,
     grid: tuple[int, ...] | None = None,
     interpret: bool = False,
     debug: bool = False,
