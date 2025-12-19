@@ -448,6 +448,8 @@ constexpr uint32_t kNumThreadsPerWarp = 32;
 
 #elif defined(JAX_GPU_HIP)
 
+#define HIPBLAS_V2 1
+
 // IWYU pragma: begin_exports
 #include "rocm/include/hip/hip_cooperative_groups.h"
 #include "rocm/include/hip/hip_runtime_api.h"
@@ -468,17 +470,11 @@ constexpr uint32_t kNumThreadsPerWarp = 32;
 // MIOpen lib. Remove when MIOpen support is complete.
 #define MIOPEN_STATUS_SUCCESS 0
 
-typedef hipFloatComplex gpuComplex;
+typedef hipComplex gpuComplex;
 typedef hipDoubleComplex gpuDoubleComplex;
 
-#if TF_ROCM_VERSION >= 70000
-typedef hipFloatComplex gpublasComplex;
+typedef hipComplex gpublasComplex;
 typedef hipDoubleComplex gpublasDoubleComplex;
-#else
-typedef hipblasComplex gpublasComplex;
-typedef hipblasDoubleComplex gpublasDoubleComplex;
-#endif  // TF_ROCM_VERSION >= 70000
-
 typedef struct hipsolverHandle_* gpusolverDnHandle_t;
 typedef hipblasFillMode_t gpublasFillMode_t;
 typedef hipsolverFillMode_t gpusolverFillMode_t;
@@ -583,6 +579,7 @@ inline hipblasStatus_t gpublasCreate(gpublasHandle_t* handle) {
 #define GPUDNN_LSTM miopenLSTM
 #define GPUDNN_BIDIRECTIONAL miopenRNNbidirection
 
+// Wrapper functions for SOLVER handles to ensure unique types
 namespace{
 inline hipsolverStatus_t gpusolverDnCreate(gpusolverDnHandle_t* handle) {
     return hipsolverCreate(reinterpret_cast<hipsolverHandle_t*>(handle));
@@ -737,10 +734,10 @@ inline hipsparseStatus_t gpusparseCreate(gpusparseHandle_t* handle) {
 #define GPUSPARSE_INDEX_32I HIPSPARSE_INDEX_32I
 #define GPUSPARSE_INDEX_64I HIPSPARSE_INDEX_64I
 #define GPUSPARSE_DENSETOSPARSE_ALG_DEFAULT HIPSPARSE_DENSETOSPARSE_ALG_DEFAULT
-#define GPUSPARSE_SPMV_COO_ALG HIPSPARSE_MV_ALG_DEFAULT
-#define GPUSPARSE_SPMV_CSR_ALG HIPSPARSE_MV_ALG_DEFAULT
-#define GPUSPARSE_SPMM_COO_ALG HIPSPARSE_SPMM_ALG_DEFAULT
-#define GPUSPARSE_SPMM_CSR_ALG HIPSPARSE_SPMM_ALG_DEFAULT
+#define GPUSPARSE_SPMV_COO_ALG HIPSPARSE_COOMV_ALG
+#define GPUSPARSE_SPMV_CSR_ALG HIPSPARSE_CSRMV_ALG1
+#define GPUSPARSE_SPMM_COO_ALG HIPSPARSE_SPMM_COO_ALG1
+#define GPUSPARSE_SPMM_CSR_ALG HIPSPARSE_SPMM_CSR_ALG1
 #define GPUSPARSE_INDEX_BASE_ZERO HIPSPARSE_INDEX_BASE_ZERO
 #define GPUSPARSE_OPERATION_NON_TRANSPOSE HIPSPARSE_OPERATION_NON_TRANSPOSE
 #define GPUSPARSE_OPERATION_TRANSPOSE HIPSPARSE_OPERATION_TRANSPOSE
@@ -753,7 +750,7 @@ inline hipsparseStatus_t gpusparseCreate(gpusparseHandle_t* handle) {
 #define GPU_STREAM_NON_BLOCKING hipStreamNonBlocking
 
 #define gpuMalloc hipMalloc
-#define gpuGetLastError hipGetLastError
+#define gpuGetLastError hipExtGetLastError
 #define gpuGetErrorString hipGetErrorString
 #define gpuMemcpyAsync hipMemcpyAsync
 #define gpuMemcpyDeviceToDevice hipMemcpyDeviceToDevice

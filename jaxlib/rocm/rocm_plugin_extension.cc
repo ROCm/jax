@@ -24,6 +24,7 @@ limitations under the License.
 #include "jaxlib/gpu/gpu_plugin_extension.h"
 #include "jaxlib/gpu/py_client_gpu.h"
 #include "jaxlib/kernel_nanobind_helpers.h"
+#include "jaxlib/gpu/gpu_kernel_helpers.h"
 
 namespace nb = nanobind;
 
@@ -97,6 +98,13 @@ nb::dict FfiHandlers() {
   return dict;
 }
 
+int ROCmDeviceCount() {
+  int device_count = -1;
+  JAX_THROW_IF_ERROR(JAX_AS_STATUS(hipInit(0)));
+  JAX_THROW_IF_ERROR(JAX_AS_STATUS(hipGetDeviceCount(&device_count)));
+  return device_count;
+}
+
 }  // namespace
 
 NB_MODULE(rocm_plugin_extension, m) {
@@ -123,5 +131,6 @@ NB_MODULE(rocm_plugin_extension, m) {
         return device_ordinal;
       },
       nb::arg("data_value"));
+  m.def("get_device_count", &ROCmDeviceCount);
 }
 }  // namespace jax

@@ -27,7 +27,7 @@ licenses(["notice"])
 
 package(
     default_applicable_licenses = [],
-    default_visibility = ["//:__subpackages__"],
+    default_visibility = ["//visibility:public"],
 )
 
 cc_library(
@@ -404,6 +404,10 @@ nanobind_extension(
         "@nanobind",
         "@xla//xla/ffi/api:ffi",
     ],
+    linkopts = [
+        "-L/opt/rocm/lib",
+        "-lamdhip64",
+    ],
 )
 
 cc_library(
@@ -529,6 +533,7 @@ nanobind_extension(
     srcs = ["rocm_plugin_extension.cc"],
     module_name = "rocm_plugin_extension",
     deps = [
+        ":hip_gpu_kernel_helpers",
         ":py_client_gpu",
         "//jaxlib:kernel_nanobind_helpers",
         "//jaxlib/gpu:gpu_plugin_extension",
