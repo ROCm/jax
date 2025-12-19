@@ -13,12 +13,11 @@ bazel --bazelrc=$SCRIPT_DIR/rocm.bazelrc test \
     --//jax:build_jaxlib=true \
     --test_verbose_timeout_warnings \
     --test_output=errors \
-    --test_filter=CoreTest \
-    --test_filter=JaxprTypeChecks \
-    --test_filter=DynamicShapesTest \
-    --test_filter=testMatmul \
+    --test_filter='CoreTest|JaxprTypeChecks|DynamicShapesTest|testMatmul' \
     $@ \
     -- \
     //tests:core_test_gpu \
+    //tests:linalg_test_gpu \
+    //tests:ffi_test_gpu \
     //tests:linalg_test_gpu \
     //tests:ffi_test_gpu \

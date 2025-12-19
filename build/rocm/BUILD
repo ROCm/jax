@@ -27,9 +27,8 @@ genrule(
 
 sh_binary(
     name = "deploy_jax_wheel",
-    srcs = ["jax_wheel_deployment_script.sh"],
+    srcs = ["jax_wheel_deployment_script"],
     data = [
-        ":jax_wheel_deployment_script",
         "//:jax_wheel.whl",
     ],
 )
