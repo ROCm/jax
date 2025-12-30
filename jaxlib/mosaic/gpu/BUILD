@@ -148,17 +148,23 @@ cc_library(
 cc_library(
     name = "passes",
     srcs = [
-        #"assembly_to_binary.cc",  # TODO(Arech) fix
-        #"gpu_module_to_assembly.cc",# TODO(Arech) fix
-        #"launch_lowering.cc",# TODO(Arech) fix
+        "launch_lowering.cc",# TODO(Arech) fix
         "passes.cc",
-    ],
+    ] + if_cuda_is_configured([
+        "assembly_to_binary.cc",
+        "gpu_module_to_assembly.cc",
+    ]) + if_rocm_is_configured([
+        "rocm_module_to_binary.cc",
+    ]),
     hdrs = [
-        #"assembly_to_binary.h",# TODO(Arech) fix
-        #"gpu_module_to_assembly.h",# TODO(Arech) fix
-        #"launch_lowering.h",# TODO(Arech) fix
+        "launch_lowering.h",# TODO(Arech) fix
         "passes.h",
-    ],
+    ]  + if_cuda_is_configured([
+        "assembly_to_binary.h",
+        "gpu_module_to_assembly.h",
+    ]) + if_rocm_is_configured([
+        "rocm_module_to_binary.h",
+    ]),
     deps = [
         ":dump",
         "//jaxlib/mosaic:pass_boilerplate",
@@ -181,13 +187,15 @@ cc_library(
         "@llvm-project//mlir:TransformUtils",
         "@llvm-project//mlir:VectorDialect",
         "@xla//xla/service/gpu/llvm_gpu_backend:load_ir_module",        
+
+        #"@llvm-project//mlir:NVVMDialect",
     ] + if_cuda_is_configured([
         "@llvm-project//mlir:NVVMDialect",
         "@xla//xla/stream_executor/cuda:compilation_options",
         "@xla//xla/stream_executor/cuda:compilation_provider",
         "@xla//xla/stream_executor/cuda:cuda_compute_capability",
     ]) + if_rocm_is_configured([
-        
+        "@llvm-project//mlir:ROCDLDialect",
     ]),
 )
 
@@ -351,6 +359,9 @@ cc_library(
         "@xla//xla/stream_executor/cuda:ptx_compiler_support",
     ]) + if_rocm_is_configured([
         "//jaxlib/rocm:hip_vendor",
+        "@llvm-project//mlir:ROCDLDialect",
+        "@llvm-project//mlir:ROCDLTarget",
+        "@llvm-project//mlir:ROCDLToLLVMIRTranslation",
         "@xla//xla/stream_executor/rocm:rocm_compute_capability",
         "@xla//xla/stream_executor/rocm:rocm_driver_wrapper",
     ]),

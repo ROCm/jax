@@ -71,8 +71,12 @@ limitations under the License.
 #include "mlir/Conversion/Passes.h"
 #include "mlir/Conversion/UBToLLVM/UBToLLVM.h"
 #include "mlir/Conversion/VectorToLLVM/ConvertVectorToLLVM.h"
+
+// #include "mlir/Conversion/NVVMToLLVM/NVVMToLLVM.h"
 #if defined(JAX_GPU_CUDA)
 #include "mlir/Conversion/NVVMToLLVM/NVVMToLLVM.h"
+#elif defined(JAX_GPU_HIP)
+#include "mlir/Conversion/GPUToROCDL/GPUToROCDLPass.h"
 #endif
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -89,9 +93,12 @@ limitations under the License.
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
 
+// #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #if defined(JAX_GPU_CUDA)
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Dialect/NVGPU/IR/NVGPUDialect.h"
+#elif defined(JAX_GPU_HIP)
+#include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #endif // defined(JAX_GPU_CUDA)
 
 #include "mlir/ExecutionEngine/ExecutionEngine.h"
@@ -105,28 +112,36 @@ limitations under the License.
 #include "mlir/Pass/PassRegistry.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Support/LogicalResult.h"
-#include "mlir/Target/LLVM/NVVM/Target.h"
 #include "mlir/Target/LLVMIR/Dialect/Builtin/BuiltinToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/GPU/GPUToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
 #include "mlir/Transforms/Passes.h"
+
+// #include "mlir/Target/LLVM/NVVM/Target.h"
+// #include "mlir/Target/LLVMIR/Dialect/NVVM/NVVMToLLVMIRTranslation.h"
 #if defined(JAX_GPU_CUDA)
+#include "mlir/Target/LLVM/NVVM/Target.h"
 #include "mlir/Target/LLVMIR/Dialect/NVVM/NVVMToLLVMIRTranslation.h"
+#elif defined(JAX_GPU_HIP)
+#include "mlir/Target/LLVM/ROCDL/Target.h"
+#include "mlir/Target/LLVMIR/Dialect/ROCDL/ROCDLToLLVMIRTranslation.h"
 #endif // defined(JAX_GPU_CUDA)
 
 #include "jaxlib/gpu/vendor.h"
 #include "jaxlib/mosaic/dialect/gpu/mosaic_gpu.h"
-// #include "jaxlib/mosaic/gpu/assembly_to_binary.h"
 #include "jaxlib/mosaic/gpu/dump.h"
-// #include "jaxlib/mosaic/gpu/gpu_module_to_assembly.h"
-// #include "jaxlib/mosaic/gpu/launch_lowering.h"
+#include "jaxlib/mosaic/gpu/launch_lowering.h"
 #include "jaxlib/mosaic/gpu/library_paths.h"
 #include "jaxlib/mosaic/gpu/passes.h"
 #include "jaxlib/mosaic/gpu/serde.h"
 // #include "jaxlib/mosaic/gpu/target.h"
 #if defined(JAX_GPU_CUDA)
+#include "jaxlib/mosaic/gpu/assembly_to_binary.h"
+#include "jaxlib/mosaic/gpu/gpu_module_to_assembly.h"
 #include "jaxlib/mosaic/gpu/nvshmem.h"
-#endif // defined(JAX_GPU_CUDA)
+#elif defined(JAX_GPU_HIP)
+#include "jaxlib/mosaic/gpu/rocm_module_to_binary.h"
+#endif // defined( vendor )
 
 #include "tsl/platform/path.h"
 #include "tsl/profiler/lib/traceme.h"
@@ -273,22 +288,28 @@ GetPassPipelineROCM(mlir::MLIRContext *ctx, const se::RocmComputeCapability &cc
                     /*const std::string &sm, const std::string &ptx_isa,
                     const std::string &nvshmem_path*/) {
   static absl::once_flag register_passes_flag;
-  absl::call_once(register_passes_flag, [&cc]() {
+  absl::call_once(register_passes_flag, [&cc]() -> bool {
     // mosaic::gpu::EnsureLLVMNVPTXTargetIsRegistered();
 
-    llvm::InitializeNativeTarget();
-    llvm::InitializeNativeTarget();
+    // llvm::InitializeNativeTarget();
+    llvm::InitializeNativeTarget(); // TODO(Arech): CUDA have these doubled.
+                                    // Why?
     llvm::InitializeNativeTargetAsmPrinter();
     mlir::registerCanonicalizer();
     mlir::registerCSE();
     mlir::registerStripDebugInfo();
-    mlir::registerConvertNVGPUToNVVMPass();
+    // mlir::registerConvertNVGPUToNVVMPass();
     mlir::registerConvertVectorToSCF();
     mlir::registerSCFToControlFlowPass();
-    mlir::registerConvertNVVMToLLVMPass();
+    // mlir::registerConvertNVVMToLLVMPass();
+
+    mlir::registerConvertAMDGPUToROCDLPass();
+
     mlir::registerArithToLLVMConversionPass();
     mlir::registerConvertIndexToLLVMPass();
-    mlir::registerConvertGpuOpsToNVVMOps();
+    // mlir::registerConvertGpuOpsToNVVMOps();
+    mlir::registerConvertGpuOpsToROCDLOps();
+
     mlir::registerConvertMathToLLVMPass();
     mlir::registerConvertFuncToLLVMPass();
     mlir::registerLowerAffinePass();
@@ -298,9 +319,8 @@ GetPassPipelineROCM(mlir::MLIRContext *ctx, const se::RocmComputeCapability &cc
     mlir::registerConvertToLLVMPass();
     mlir::registerGPUPasses();
     mlir::registerGpuLaunchSinkIndexComputationsPass();
-    // mosaic::gpu::registerGpuModuleToAssemblyPass();
-    // mosaic::gpu::registerAssemblyToBinaryPass(compilation_provider, cc);
-    // mosaic::gpu::registerGpuLaunchLoweringPass();
+    mosaic::gpu::registerRocmModuleToBinaryPass();
+    mosaic::gpu::registerGpuLaunchLoweringPass();
     mosaic::gpu::registerConvertGpuToLLVMPass();
     mosaic::gpu::registerByvalInsertionPass();
     mosaic::gpu::registerLLVMAttrInsertionPass();
@@ -323,30 +343,37 @@ GetPassPipelineROCM(mlir::MLIRContext *ctx, const se::RocmComputeCapability &cc
   return mlir::parsePassPipeline(
       // convert-nvgpu-to-nvvm,
       // convert-nvvm-to-llvm,
+
       // nvvm-attach-target{O=3 chip=%1$s fast=false features=+%2$s ftz=false
       // module= triple=nvptx64-nvidia-cuda},  // sm, ptx_isa
       // gpu.module(convert-gpu-to-nvvm{has-redux=false index-bitwidth=64
       // use-bare-ptr-memref-call-conv=false}),
 
+      // TODO(Arech): proper params to rocdl-attach-target{}
+      // mosaic-rocm-module-to-binary{libraries-to-link=%1$s}
       absl::StrFormat(R"(
         builtin.module(
           mosaic-gpu-resolve-trivial-locations,
           arith-expand,
           canonicalize,
           gpu-launch-sink-index-computations,
-
+          
           gpu-kernel-outlining{data-layout-str=},
           convert-vector-to-scf{full-unroll=false lower-tensors=false target-rank=1},
           convert-scf-to-cf,
-
+          
           expand-strided-metadata,
           
+          rocdl-attach-target{O=3 chip=gfx942 fast=false features= module= triple=amdgcn-amd-amdhsa l=%1$s},
+
           lower-affine,
           convert-arith-to-llvm{index-bitwidth=0},
           convert-index-to-llvm{index-bitwidth=64},
           canonicalize{max-iterations=10 max-num-rewrites=-1 region-simplify=normal test-convergence=false top-down=true},
           cse,
           
+          gpu.module(convert-gpu-to-rocdl{index-bitwidth=64 use-bare-ptr-memref-call-conv=false}),
+
           gpu.module(canonicalize{max-iterations=10 max-num-rewrites=-1 region-simplify=normal test-convergence=false top-down=true}),
           gpu.module(cse),
           gpu.module(mosaic-byval-insertion),
@@ -354,11 +381,10 @@ GetPassPipelineROCM(mlir::MLIRContext *ctx, const se::RocmComputeCapability &cc
           gpu.module(reconcile-unrealized-casts),
           mosaic-convert-gpu-to-llvm,
           ensure-debug-info-scope-on-llvm-func{emission-kind=DebugDirectivesOnly},
-          mosaic-gpu-module-to-assembly{libraries-to-link=%1$s},
           convert-math-to-llvm{approximate-log1p=true},
           canonicalize{max-iterations=10 max-num-rewrites=-1 region-simplify=normal test-convergence=false top-down=true},
           cse,
-          mosaic-gpu-assembly-to-binary,
+          mosaic-rocm-module-to-binary,
           gpu-launch-lowering,
           convert-to-llvm,
           reconcile-unrealized-casts
@@ -436,8 +462,10 @@ inline void InitContext_ROCM(mlir::MLIRContext *context) {
                   mlir::func::FuncDialect, mlir::math::MathDialect,
                   mlir::memref::MemRefDialect, mlir::scf::SCFDialect,
                   mlir::vector::VectorDialect, mlir::gpu::GPUDialect,
-                  // mlir::nvgpu::NVGPUDialect, mlir::NVVM::NVVMDialect,
-                  mlir::LLVM::LLVMDialect, mosaic_gpu::MosaicGPUDialect>();
+                  // mlir::nvgpu::NVGPUDialect,
+                  // mlir::NVVM::NVVMDialect,
+                  mlir::ROCDL::ROCDLDialect, mlir::LLVM::LLVMDialect,
+                  mosaic_gpu::MosaicGPUDialect>();
   // mlir::registerConvertNVVMToLLVMInterface(registry);
   mlir::registerConvertComplexToLLVMInterface(registry);
   mlir::registerConvertMemRefToLLVMInterface(registry);
@@ -454,7 +482,8 @@ inline void InitContext_ROCM(mlir::MLIRContext *context) {
   mlir::registerBuiltinDialectTranslation(registry);
   mlir::registerGPUDialectTranslation(registry);
   mlir::registerLLVMDialectTranslation(registry);
-  // mlir::registerNVVMDialectTranslation(registry);
+  mlir::registerROCDLDialectTranslation(registry);
+
   context->appendDialectRegistry(registry);
   context->loadAllAvailableDialects();
 }
@@ -594,6 +623,10 @@ Compile(mlir::ModuleOp module) {
   const bool is_comm_used{false}; // TODO(Arech) should this be fixed?
 #endif // defined( vendor )
 
+  // 2GOOGLE: the checks for env vars only check if the var is defined, but
+  // ignores actual value, so for instance, setting MOSAIC_GPU_DUMP_LLVM=0
+  // would trigger the same path, as MOSAIC_GPU_DUMP_LLVM=1, which is wrong.
+  // Should I fix it?
   const char *dump_llvm = getenv("MOSAIC_GPU_DUMP_LLVM");
   const char *llvm_debug_only = getenv("MOSAIC_GPU_LLVM_DEBUG_ONLY");
 #ifndef NDEBUG
@@ -796,7 +829,6 @@ absl::StatusOr<CompiledKernel> CompileAndInit(const char *module) {
 // in the key.
 absl::StatusOr<CompiledKernel *> CachedCompileAndInit(CacheKey key,
                                                       const char *module) {
-  return absl::InternalError("TODO");
   auto cache_and_mutex = GetKernelCache();
   auto *cache = cache_and_mutex.first;
   auto *mutex = cache_and_mutex.second;
