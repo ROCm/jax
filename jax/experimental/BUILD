@@ -277,6 +277,7 @@ py_library_providing_imports_info(
         "//jaxlib/mlir:memref_dialect",
         "//jaxlib/mlir:nvgpu_dialect",
         "//jaxlib/mlir:nvvm_dialect",
+        "//jaxlib/mlir:rocdl_dialect",
         "//jaxlib/mlir:pass_manager",
         "//jaxlib/mlir:scf_dialect",
         "//jaxlib/mlir:vector_dialect",

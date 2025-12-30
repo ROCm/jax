@@ -243,6 +243,7 @@ nanobind_pywrap_extension(
         "@llvm-project//mlir:CAPIMemRef",
         "@llvm-project//mlir:CAPINVGPU",
         "@llvm-project//mlir:CAPINVVM",
+        "@llvm-project//mlir:CAPIROCDL",
         "@llvm-project//mlir:CAPISCF",
         "@llvm-project//mlir:CAPITransforms",
         "@llvm-project//mlir:CAPIVector",

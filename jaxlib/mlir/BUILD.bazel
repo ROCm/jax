@@ -291,6 +291,19 @@ symlink_inputs(
     ],
 )
 
+symlink_inputs(
+    name = "rocdl_dialect",
+    rule = py_library,
+    symlinked_inputs = {"srcs": {"dialects": [
+        "@llvm-project//mlir/python:ROCDLOpsPyFiles",
+    ]}},
+    deps = [
+        ":core",
+        ":ir",
+        ":mlir",
+    ],
+)
+
 symlink_files(
     name = "gpu_files",
     srcs = ["@llvm-project//mlir/python:GPUOpsPyFiles"],

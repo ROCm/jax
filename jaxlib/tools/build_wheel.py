@@ -296,6 +296,7 @@ def prepare_wheel(wheel_sources_path: pathlib.Path, *, cpu, wheel_sources):
           f"{source_file_prefix}jaxlib/mlir/dialects/_nvgpu_ops_gen.py",
           f"{source_file_prefix}jaxlib/mlir/dialects/_nvvm_enum_gen.py",
           f"{source_file_prefix}jaxlib/mlir/dialects/_nvvm_ops_gen.py",
+          f"{source_file_prefix}jaxlib/mlir/dialects/_rocdl_ops_gen.py",
           f"{source_file_prefix}jaxlib/mlir/dialects/_llvm_enum_gen.py",
           f"{source_file_prefix}jaxlib/mlir/dialects/_llvm_ops_gen.py",
           f"{source_file_prefix}jaxlib/mlir/dialects/arith.py",
@@ -315,6 +316,7 @@ def prepare_wheel(wheel_sources_path: pathlib.Path, *, cpu, wheel_sources):
           f"{source_file_prefix}jaxlib/mlir/dialects/nvgpu.py",
           f"{source_file_prefix}jaxlib/mlir/dialects/nvvm.py",
           f"{source_file_prefix}jaxlib/mlir/dialects/llvm.py",
+          f"{source_file_prefix}jaxlib/mlir/dialects/rocdl.py",
       ],
   )
   copy_files(

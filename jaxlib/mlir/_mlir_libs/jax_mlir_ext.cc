@@ -39,6 +39,7 @@ limitations under the License.
 #include "mlir-c/Dialect/MemRef.h"  // IWYU pragma: keep
 #include "mlir-c/Dialect/NVGPU.h"  // IWYU pragma: keep
 #include "mlir-c/Dialect/NVVM.h"  // IWYU pragma: keep
+#include "mlir-c/Dialect/ROCDL.h"  // IWYU pragma: keep
 #include "mlir-c/Dialect/SCF.h"  // IWYU pragma: keep
 #include "mlir-c/Dialect/Vector.h"  // IWYU pragma: keep
 #include "mlir-c/IR.h"
@@ -211,6 +212,7 @@ NB_MODULE(_jax_mlir_ext, m) {
     REGISTER_DIALECT(nvgpu);
     REGISTER_DIALECT(nvvm);
     REGISTER_DIALECT(llvm);
+    REGISTER_DIALECT(rocdl);
 #undef REGISTER_DIALECT
 
     mlirMosaicGpuRegisterSerdePass();
