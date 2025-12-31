@@ -39,9 +39,15 @@ import numpy as np
 
 from jax._src.lib import mosaic_gpu_dialect as dialect  # noqa: F401
 
+# PR_REVIEW_TODO: is below a correct way to branch on the platform?
+IS_ROCM = "rocm" in jax.devices()[0].client.platform_version
+if IS_ROCM:
+  WARP_SIZE: int = 64
+  WARPGROUP_SIZE: int = WARP_SIZE*4
+else:
+  WARP_SIZE: int = 32
+  WARPGROUP_SIZE: int = 128
 
-WARP_SIZE: int = 32
-WARPGROUP_SIZE: int = 128
 WARPS_IN_WARPGROUP: int = WARPGROUP_SIZE // WARP_SIZE
 DYNAMIC = -9223372036854775808
 DYNAMIC32 = -2147483648
@@ -371,10 +377,18 @@ block_idx = functools.partial(_3d_to_1d_idx, gpu.block_id, gpu.grid_dim)
 
 def _warp_bcast(val, lane_idx=0):
   i32 = ir.IntegerType.get_signless(32)
-  mask = c(0xFFFFFFFF, i32)
-  return nvvm.shfl_sync(
-      val.type, mask, val, c(lane_idx, i32), c(0x1F, i32), nvvm.ShflKind.idx
-  )
+  if IS_ROCM:
+    if lane_idx == 0:
+      # Optimized path: readfirstlane broadcasts from the first active lane
+      return rocdl.readfirstlane(val.type, val)
+    else:
+      # General path: readlane reads from a specific lane
+      return rocdl.readlane(val.type, val, c(lane_idx, i32))
+  else:
+    mask = c(0xFFFFFFFF, i32)
+    return nvvm.shfl_sync(
+        val.type, mask, val, c(lane_idx, i32), c(0x1F, i32), nvvm.ShflKind.idx
+    )
 
 
 def warp_idx(sync=True):
@@ -403,6 +417,42 @@ class ThreadSubset(enum.IntEnum):
 _ONCE_PER: ThreadSubset | None = None
 
 
+def _ROCDL_elect_sync() -> ir.Value:
+  """AMD wavefront leader election using mbcnt.
+  
+  Elects the first active thread in the wavefront by counting
+  how many active lanes exist before the current lane.
+  If count is 0, this thread is the leader.
+  """
+  i32 = ir.IntegerType.get_signless(32)
+  i64 = ir.IntegerType.get_signless(64)
+  
+  # Get active lane mask (EXEC register) using ballot with all-true predicate
+  # ballot(true) returns the exec mask - a 64-bit value on AMD
+  true_pred = arith.constant(ir.IntegerType.get_signless(1), 1)
+  # TODO(Arech): should there be a support for 32bit wavefronts?
+  assert 64==WARP_SIZE # the below assumes 64bit wf
+  exec_mask = rocdl.ballot(i64, true_pred)
+  
+  # Split exec_mask into low and high 32-bit parts
+  exec_lo = arith.trunci(i32, exec_mask)
+  exec_hi = arith.trunci(i32, arith.shrui(exec_mask, c(32, i64)))
+  
+  # mbcnt_lo: count set bits in low 32 bits of mask below current lane
+  # Result range: 0-31 for lanes 0-31, 0 for lanes 32-63 (they're above bit 31)
+  zero_i32 = c(0, i32)
+  mbcnt_lo_result = rocdl.mbcnt_lo(i32, exec_lo, zero_i32)
+  
+  # mbcnt_hi: continue counting with high 32 bits
+  # Uses mbcnt_lo result as the base to add to
+  # For lanes 0-31: result stays at mbcnt_lo value (high bits don't affect them)
+  # For lanes 32-63: adds count of bits 32 to (lane_id-1)
+  mbcnt_result = rocdl.mbcnt_hi(i32, exec_hi, mbcnt_lo_result)
+  
+  # If count is 0, this is the first active thread (leader)
+  return arith.cmpi(arith.CmpIPredicate.eq, mbcnt_result, zero_i32)
+
+
 def single_thread_predicate(scope: ThreadSubset = ThreadSubset.BLOCK):
   """Returns a predicate that selects a single thread.
 
@@ -411,7 +461,10 @@ def single_thread_predicate(scope: ThreadSubset = ThreadSubset.BLOCK):
       For example, if the scope is BLOCK, only one thread per block will be
       selected.
   """
-  elected = nvvm.elect_sync(ir.IntegerType.get_signless(1))
+  if IS_ROCM:
+    elected = _ROCDL_elect_sync()
+  else:
+    elected = nvvm.elect_sync(ir.IntegerType.get_signless(1))
   if scope == ThreadSubset.WARP:
     return elected
   warp = warp_idx()
