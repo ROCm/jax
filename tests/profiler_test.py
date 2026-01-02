@@ -182,52 +182,6 @@ print(json.dumps({"xplane": pbs[0]}))
     return info["xplane"]
 
 
-@jtu.thread_unsafe_test_class()
-class RocmProfilerMatmulGpuEventsTest(unittest.TestCase):
-    # these tests simply test if there are GPU events when doing matmul on ROCm
-
-    @jtu.run_on_devices("gpu")
-    def test_gpu_events_present_for_many_matmul_shapes(self):
-        # ROCm-only gate using supported API
-        from jax.extend import backend as jax_backend
-
-        be = jax_backend.get_backend()
-        platform_version = getattr(be, "platform_version", "") or ""
-        if "rocm" not in platform_version.lower():
-            self.skipTest(f"Not ROCm backend: {platform_version}")
-
-        # test shapes:
-        shapes = [
-            (8, 8, 8),
-            (8, 32, 32),
-            (8, 128, 128),
-            (8, 256, 8),
-            (8, 512, 8),
-            (8, 1024, 256),
-            (512, 128, 512),
-            (1024, 128, 1024),
-            (1024, 1024, 1024),
-        ]
-
-        # NOTE: This is 15 subprocesses. If it’s too slow for CI, shrink the list
-        # or group some shapes per run.
-        for m, k, n in shapes:
-            with self.subTest(shape=f"{m}x{k}x{n}"):
-                with tempfile.TemporaryDirectory() as td:
-                    outdir = os.path.join(td, "profile")
-                    xplane = _run_child_matmul_trace_and_get_xplane(outdir, m, k, n)
-
-                    tv = _trace_viewer_json_from_xplane(xplane)
-                    traceevents = tv.get("traceEvents", [])
-                    gpu_events = _count_gpu_events_from_traceevents(traceevents)
-
-                    self.assertGreater(
-                        gpu_events,
-                        0,
-                        f"Expected >0 GPU events for matmul {m}x{n}; got {gpu_events}. xplane={xplane}",
-                    )
-
-
 # We do not allow multiple concurrent profiler sessions.
 @jtu.thread_unsafe_test_class()
 class ProfilerTest(unittest.TestCase):
@@ -703,6 +657,46 @@ class ProfilerTest(unittest.TestCase):
             unittest.mock.ANY,
             unittest.mock.ANY,
         )
+
+    # test if there are GPU events when doing profiling via matmul on ROCm
+    @jtu.run_on_devices("gpu")
+    def test_gpu_events_present_for_many_matmul_shapes(self):
+        # ROCm-only gate using supported API
+        from jax.extend import backend as jax_backend
+
+        be = jax_backend.get_backend()
+        platform_version = getattr(be, "platform_version", "") or ""
+        if "rocm" not in platform_version.lower():
+            self.skipTest(f"Not ROCm backend: {platform_version}")
+
+        # test shapes:
+        shapes = [
+            (8, 8, 8),
+            (8, 32, 32),
+            (8, 128, 128),
+            (8, 256, 8),
+            (8, 512, 8),
+            (8, 1024, 256),
+            (512, 128, 512),
+            (1024, 128, 1024),
+            (1024, 1024, 1024),
+        ]
+
+        for m, k, n in shapes:
+            with self.subTest(shape=f"{m}x{k}x{n}"):
+                with tempfile.TemporaryDirectory() as td:
+                    outdir = os.path.join(td, "profile")
+                    xplane = _run_child_matmul_trace_and_get_xplane(outdir, m, k, n)
+
+                    tv = _trace_viewer_json_from_xplane(xplane)
+                    traceevents = tv.get("traceEvents", [])
+                    gpu_events = _count_gpu_events_from_traceevents(traceevents)
+
+                    self.assertGreater(
+                        gpu_events,
+                        0,
+                        f"Expected >0 GPU events for matmul {m}x{n}; got {gpu_events}. xplane={xplane}",
+                    )
 
 
 if __name__ == "__main__":
