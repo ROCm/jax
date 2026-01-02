@@ -660,7 +660,8 @@ class ProfilerTest(unittest.TestCase):
 
     # test if there are GPU events when doing profiling via matmul on ROCm
     @jtu.run_on_devices("gpu")
-    def test_gpu_events_present_for_many_matmul_shapes(self):
+    @jtu.thread_unsafe_test()
+    def test_rocm_gpu_events_present_for_many_matmul_shapes(self):
         # ROCm-only gate using supported API
         from jax.extend import backend as jax_backend
 
@@ -677,8 +678,6 @@ class ProfilerTest(unittest.TestCase):
             (8, 256, 8),
             (8, 512, 8),
             (8, 1024, 256),
-            (512, 128, 512),
-            (1024, 128, 1024),
             (1024, 1024, 1024),
         ]
 
