@@ -54,6 +54,7 @@ from jax._src.internal_test_util.export_back_compat_test_data import cuda_lu_cus
 from jax._src.internal_test_util.export_back_compat_test_data import cuda_svd_cusolver_gesvd
 from jax._src.internal_test_util.export_back_compat_test_data import cuda_tridiagonal_cusolver_sytrd
 from jax._src.internal_test_util.export_back_compat_test_data import cuda_tridiagonal_solve
+from jax._src.internal_test_util.export_back_compat_test_data import rocm_tridiagonal_solve
 from jax._src.internal_test_util.export_back_compat_test_data import tpu_Eigh
 from jax._src.internal_test_util.export_back_compat_test_data import tpu_Lu
 from jax._src.internal_test_util.export_back_compat_test_data import tpu_ApproxTopK
@@ -140,6 +141,7 @@ class CompatTest(bctu.CompatTestBase):
         cuda_tridiagonal_cusolver_sytrd.data_2025_01_09,
         cuda_tridiagonal_solve.data_2025_06_16,
         rocm_eigh_hipsolver_syev.data_2024_08_05,
+        rocm_tridiagonal_solve.data_2026_01_05,
         tpu_Eigh.data, tpu_Lu.data_2023_03_21, tpu_Qr.data_2023_03_17,
         tpu_Sharding.data_2023_03_16, tpu_ApproxTopK.data_2023_04_17,
         tpu_ApproxTopK.data_2023_05_16,
@@ -773,6 +775,24 @@ class CompatTest(bctu.CompatTestBase):
     )
     self.run_one_test(func, data, atol=atol, rtol=rtol)
 
+  @parameterized.named_parameters(
+      dict(testcase_name=f"_dtype={dtype_name}", dtype_name=dtype_name)
+      for dtype_name in ("f32", "f64"))
+  @jax.default_matmul_precision("float32")
+  def test_rocm_gpu_tridiagonal_solve(self, dtype_name):
+    if not jtu.test_device_matches(["rocm"]):
+      self.skipTest("Unsupported platform")
+    if not config.enable_x64.value and dtype_name == "f64":
+      self.skipTest("Test disabled for x32 mode")
+
+    rtol = dict(f32=1e-3, f64=1e-5)[dtype_name]
+    atol = dict(f32=1e-4, f64=1e-12)[dtype_name]
+
+    data = self.load_testdata(
+        rocm_tridiagonal_solve.data_2026_01_05[dtype_name]
+    )
+    self.run_one_test(lax.linalg.tridiagonal_solve, data, atol=atol, rtol=rtol)
+       
   def test_tpu_approx_top_k(self):
     def func():
       x = np.array([3.0, 1.0, 4.0, 2.0, 5.0, 6.0, 7.0])
