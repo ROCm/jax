@@ -175,7 +175,12 @@ test_logger = ThreadSafeTestLogger()
 
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_protocol(item, nextitem):
-    """Hook that runs around each test to track running tests"""
+    """Hook that runs around each test to track running tests for crash detection.
+    
+    This creates a "last_running" file before each test starts and deletes it
+    when the test completes successfully. If the test crashes, the file remains
+    and can be detected by the test runner.
+    """
     test_file = test_logger.get_test_file_name(item.session)
     test_name = item.name
     nodeid = item.nodeid
@@ -185,56 +190,61 @@ def pytest_runtest_protocol(item, nextitem):
     try:
         test_logger.log_running_test(test_file, test_name, nodeid, start_time)
     except Exception as e:
-        print(f"Warning: Could not log test start for {test_name}: {e}")
+        print(f"[TestLogger] WARNING: Failed to log running test: {e}")
+        # Continue anyway - not critical for test execution
 
+    test_completed = False
     try:
-        # Run the actual test
         outcome = yield
         # Test completed (successfully or with normal failure)
-        # Only clear if test completed normally (not aborted)
+        test_completed = True
+        
+        # Clear the crash detection file
         try:
-            if outcome.get_result():
-                test_logger.clear_running_test(test_file)
+            test_logger.clear_running_test(test_file)
         except Exception as e:
-            # If clearing fails, test might have been aborted - that's ok
-            print(f"Note: Could not clear running test log for {test_name}: {e}")
+            print(f"[TestLogger] WARNING: Failed to clear running test log: {e}")
+            
     except Exception as e:
-        # Test was interrupted/aborted - log it but don't raise in teardown
-        print(f"Test {test_name} in {test_file} was interrupted: {str(e)}")
-        # Re-raise to let pytest handle it properly
+        # Test raised exception (might be crash, might be normal exception)
+        print(f"[TestLogger] Test {test_name} exception: {e}")
+        if not test_completed:
+            # Don't clear the file - this might be a crash
+            print(f"[TestLogger] Leaving crash file for detection")
         raise
 
 
 @pytest.hookimpl(tryfirst=True)
 def pytest_sessionstart(session):
     """Called after the Session object has been created"""
-    print(
-        f"Starting test session on GPU {os.environ.get('HIP_VISIBLE_DEVICES', 'unknown')}"
-    )
+    gpu = os.environ.get('HIP_VISIBLE_DEVICES', '?')
+    print(f"Test session starting on GPU {gpu}")
 
 
 @pytest.hookimpl(trylast=True)
 def pytest_sessionfinish(session, exitstatus):
-    """Called after whole test run finished, just log any remaining aborts"""
+    """Called after test run finished.
+    
+    If a crash file still exists, it means a test crashed and the runner
+    will detect it. We just report it here for visibility.
+    """
     test_file = test_logger.get_test_file_name(session)
-
-    # Check if there's a remaining running test log (indicates abort)
     log_file = f"{test_logger.base_dir}/{test_file}_last_running.json"
-    try:
-        if os.path.exists(log_file):
-            try:
-                with open(log_file, "r") as f:
-                    abort_data = json.load(f)
+    
+    if os.path.exists(log_file):
+        try:
+            with open(log_file, "r") as f:
+                abort_data = json.load(f)
+            print(
+                f"\n[CRASH DETECTED] {abort_data.get('nodeid', abort_data.get('test_name', 'unknown'))} "
+                f"(GPU: {abort_data.get('gpu_id', '?')}, PID: {abort_data.get('pid', '?')})"
+            )
+            print(f"[CRASH DETECTED] Crash file will be processed by test runner")
+        except Exception as e:
+            print(f"[TestLogger] WARNING: Crash file exists but unreadable: {e}")
+    else:
+        # Normal completion - no crash
+        pass
 
-                print(f"Detected aborted test: {abort_data['test_name']} in {test_file}")
-                print(
-                    f"Last running file preserved for run_single_gpu.py to process: {log_file}"
-                )
-
-            except Exception as e:
-                print(f"Error reading abort detection file for {test_file}: {e}")
-    except Exception as e:
-        # Handle any unexpected errors gracefully
-        print(f"Warning: Could not check for aborted tests in {test_file}: {e}")
 
 
