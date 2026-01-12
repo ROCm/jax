@@ -17,6 +17,7 @@ import os
 import pytest
 import json
 import threading
+import shutil
 from datetime import datetime
 
 @pytest.fixture(autouse=True)
@@ -76,12 +77,27 @@ def pytest_collection() -> None:
     )
 
 class ThreadSafeTestLogger:
-""Thread-safe logging for parallel test execution and abort detection"""
+    """Thread-safe logging for parallel test execution and abort detection"""
     def __init__(self):
         self.locks = {}
         self.global_lock = threading.Lock()
-        # Use absolute path to avoid working directory issues
         self.base_dir = os.path.abspath("./logs")
+        
+        # Archive old logs if directory exists and is not empty
+        if os.path.exists(self.base_dir) and os.path.isdir(self.base_dir):
+            if os.listdir(self.base_dir):
+                timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+                archived_logs_dir = f"{self.base_dir}_{timestamp}"
+                
+                try:
+                    print(f"[TestLogger] Archiving old logs: {self.base_dir} -> {archived_logs_dir}")
+                    shutil.move(self.base_dir, archived_logs_dir)
+                    print(f"[TestLogger] Old logs archived successfully")
+                except Exception as e:
+                    print(f"[TestLogger] WARNING: Failed to archive old logs: {e}")
+                    # Continue anyway - we'll try to use existing directory
+        
+        # Create fresh logs directory
         try:
             os.makedirs(self.base_dir, exist_ok=True)
             print(f"[TestLogger] Initialized log directory: {self.base_dir}")
@@ -245,6 +261,3 @@ def pytest_sessionfinish(session, exitstatus):
     else:
         # Normal completion - no crash
         pass
-
-
-
