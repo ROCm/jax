@@ -84,12 +84,20 @@ class ThreadSafeTestLogger:
         self.base_dir = os.path.abspath("./logs")
         
         # Archive old logs if directory exists and is not empty
+        # Use a lock file to ensure only one process does the archiving
+        archive_lock_file = "./logs/.archive_in_progress"
+        
         if os.path.exists(self.base_dir) and os.path.isdir(self.base_dir):
-            if os.listdir(self.base_dir):
-                timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-                archived_logs_dir = f"{self.base_dir}_{timestamp}"
-                
+            if os.listdir(self.base_dir) and not os.path.exists(archive_lock_file):
                 try:
+                    # Create lock file to prevent other processes from archiving
+                    os.makedirs(os.path.dirname(archive_lock_file), exist_ok=True)
+                    with open(archive_lock_file, 'w') as f:
+                        f.write(str(os.getpid()))
+                    
+                    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+                    archived_logs_dir = f"{self.base_dir}_{timestamp}"
+                    
                     print(f"[TestLogger] Archiving old logs: {self.base_dir} -> {archived_logs_dir}")
                     shutil.move(self.base_dir, archived_logs_dir)
                     print(f"[TestLogger] Old logs archived successfully")
