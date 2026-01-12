@@ -75,8 +75,8 @@ def pytest_collection() -> None:
         "CUDA_VISIBLE_DEVICES", str(xdist_worker_number % num_cuda_devices)
     )
 
-# Thread-safe logging for parallel test execution and abort detection
 class ThreadSafeTestLogger:
+""Thread-safe logging for parallel test execution and abort detection"""
     def __init__(self):
         self.locks = {}
         self.global_lock = threading.Lock()
@@ -175,7 +175,7 @@ test_logger = ThreadSafeTestLogger()
 
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_protocol(item, nextitem):
-    """Hook that runs around each test to track running tests for crash detection.
+    """Hook that wraps around each test to track running tests for crash detection.
     
     This creates a "last_running" file before each test starts and deletes it
     when the test completes successfully. If the test crashes, the file remains
