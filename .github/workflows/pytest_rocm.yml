@@ -1,0 +1,6 @@
+ name: CI - Pytest ROCm
+
+ on:
+   workflow_call:
+     inputs:
+       runner:
