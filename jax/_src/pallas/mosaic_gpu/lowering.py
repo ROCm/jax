@@ -82,7 +82,8 @@ zip, unsafe_zip = util.safe_zip, zip
 
 partial = functools.partial
 SMEM = gpu_core.SMEM
-WARPGROUP_SIZE = 128
+#WARPGROUP_SIZE = 128
+WARPGROUP_SIZE = mgpu_utils.WARPGROUP_SIZE
 RefOrTmemType = TypeVar("RefOrTmemType", ir.Value, tcgen05.TMEMRef)
 CollectiveAxesType = Sequence[Hashable]
 
