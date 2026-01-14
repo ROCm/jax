@@ -109,7 +109,7 @@ echo "Running ROCm tests..."
 # TODO: Add examples directory to test suite (CUDA tests both: tests examples)
 # TODO: Verify if CSV/HTML report generation should be kept (unique to ROCm)
 # TODO: Verify if log file output should be kept (unique to ROCm)
-"$JAXCI_PYTHON" -m pytest -n $num_processes --tb=short --maxfail=20 \
+"$JAXCI_PYTHON" -m pytest -n $num_processes --tb=short \
 tests \
 --deselect=tests/multi_device_test.py::MultiDeviceTest::test_computation_follows_data \
 --deselect=tests/multiprocess_gpu_test.py::MultiProcessGpuTest::test_distributed_jax_visible_devices \
