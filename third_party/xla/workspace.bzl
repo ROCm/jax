@@ -21,11 +21,11 @@ def repo():
         name = "xla",
         sha256 = XLA_SHA256,
         type = "tar.gz",
-        strip_prefix = "openxla-xla-{commit}".format(commit = XLA_COMMIT[:7]),
+        strip_prefix = "xla-{commit}".format(commit = XLA_COMMIT),
         # We use an automated tool to update the revision.bzl file. GitHub prohibits the crawling of
         # web links (`/archive/`) links so we use the GitHub API endpoint to get the tarball
         # instead.
-        urls = tf_mirror_urls("https://api.github.com/repos/openxla/xla/tarball/{commit}".format(commit = XLA_COMMIT)),
+        urls = tf_mirror_urls("https://github.com/ROCm/xla/archive/{commit}.tar.gz".format(commit = XLA_COMMIT)),
     )
 
     # For development, one often wants to make changes to the TF repository as well
