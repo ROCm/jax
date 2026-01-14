@@ -76,6 +76,9 @@ def pytest_collection() -> None:
         "CUDA_VISIBLE_DEVICES", str(xdist_worker_number % num_cuda_devices)
     )
 
+_USE_ROCM_ABORT_DETECTOR_PLUGIN = bool(os.environ.get("JAX_ROCM_LAST_RUNNING_FILE"))
+
+
 class ThreadSafeTestLogger:
     """Thread-safe logging for parallel test execution and abort detection"""
     def __init__(self):
@@ -171,8 +174,7 @@ class ThreadSafeTestLogger:
                 os.remove(log_file)
 
 
-# Global logger instance
-test_logger = ThreadSafeTestLogger()
+test_logger = ThreadSafeTestLogger() if not _USE_ROCM_ABORT_DETECTOR_PLUGIN else None
 
 
 @pytest.hookimpl(hookwrapper=True)
@@ -183,6 +185,10 @@ def pytest_runtest_protocol(item, nextitem):
     when the test completes successfully. If the test crashes, the file remains
     and can be detected by the test runner.
     """
+    if _USE_ROCM_ABORT_DETECTOR_PLUGIN or test_logger is None:
+        outcome = yield
+        return outcome
+
     test_file = test_logger.get_test_file_name(item.session)
     test_name = item.name
     nodeid = item.nodeid
@@ -230,6 +236,9 @@ def pytest_sessionfinish(session, exitstatus):
     If a crash file still exists, it means a test crashed and the runner
     will detect it. We just report it here for visibility.
     """
+    if _USE_ROCM_ABORT_DETECTOR_PLUGIN or test_logger is None:
+        return
+
     test_file = test_logger.get_test_file_name(session)
     log_file = f"{test_logger.base_dir}/{test_file}_last_running.json"
     
