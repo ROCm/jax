@@ -99,7 +99,9 @@ echo "Final number of processes to run: $num_processes"
 export JAX_ENABLE_CUDA_XDIST="$gpu_count"
 export JAX_ENABLE_ROCM_XDIST="$gpu_count"
 export XLA_PYTHON_CLIENT_ALLOCATOR=platform
-export XLA_FLAGS=--xla_gpu_force_compilation_parallelism=1
+# Adding --xla_gpu_enable_command_buffer to mitigate an issue with the XLA included
+# in the ROCm plugin.
+export XLA_FLAGS="--xla_gpu_force_compilation_parallelism=1 --xla_gpu_enable_command_buffer="
 
 # ==============================================================================
 # Run tests
