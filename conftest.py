@@ -76,7 +76,10 @@ def pytest_collection() -> None:
         "CUDA_VISIBLE_DEVICES", str(xdist_worker_number % num_cuda_devices)
     )
 
-_USE_ROCM_ABORT_DETECTOR_PLUGIN = bool(os.environ.get("JAX_ROCM_LAST_RUNNING_FILE"))
+_USE_ROCM_ABORT_DETECTOR_PLUGIN = bool(
+    os.environ.get("PYTEST_ABORT_LAST_RUNNING_FILE")
+    or os.environ.get("PYTEST_ABORT_LAST_RUNNING_DIR")
+)
 
 
 class ThreadSafeTestLogger:
