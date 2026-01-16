@@ -34,9 +34,6 @@ source ./ci/utilities/install_wheels_locally.sh
 echo "Installed packages:"
 "$JAXCI_PYTHON" -m uv pip freeze
 
-# TODO: Remove the export to avoid picking up the local directory as the jax module.
-export PYTHONSAFEPATH=1
-
 "$JAXCI_PYTHON" -c "import jax; print(jax.default_backend()); print(jax.devices()); print(len(jax.devices()))"
 
 rocm-smi
