@@ -26,6 +26,7 @@ import jax
 from jax import numpy as jnp
 from jax.interpreters import mlir
 from jaxlib.mlir import ir
+from jaxlib.mlir.dialects import amdgpu
 from jaxlib.mlir.dialects import arith
 from jaxlib.mlir.dialects import builtin
 from jaxlib.mlir.dialects import gpu

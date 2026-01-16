@@ -271,6 +271,8 @@ def prepare_wheel(wheel_sources_path: pathlib.Path, *, cpu, wheel_sources):
   copy_files(
       dst_dir=jaxlib_dir / "mlir" / "dialects",
       src_files=[
+          f"{source_file_prefix}jaxlib/mlir/dialects/_amdgpu_enum_gen.py",
+          f"{source_file_prefix}jaxlib/mlir/dialects/_amdgpu_ops_gen.py",
           f"{source_file_prefix}jaxlib/mlir/dialects/_arith_enum_gen.py",
           f"{source_file_prefix}jaxlib/mlir/dialects/_arith_ops_gen.py",
           f"{source_file_prefix}jaxlib/mlir/dialects/_builtin_ops_gen.py",
@@ -299,6 +301,7 @@ def prepare_wheel(wheel_sources_path: pathlib.Path, *, cpu, wheel_sources):
           f"{source_file_prefix}jaxlib/mlir/dialects/_rocdl_ops_gen.py",
           f"{source_file_prefix}jaxlib/mlir/dialects/_llvm_enum_gen.py",
           f"{source_file_prefix}jaxlib/mlir/dialects/_llvm_ops_gen.py",
+          f"{source_file_prefix}jaxlib/mlir/dialects/amdgpu.py",
           f"{source_file_prefix}jaxlib/mlir/dialects/arith.py",
           f"{source_file_prefix}jaxlib/mlir/dialects/builtin.py",
           f"{source_file_prefix}jaxlib/mlir/dialects/cf.py",

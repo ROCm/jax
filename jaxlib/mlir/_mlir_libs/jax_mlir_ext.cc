@@ -30,6 +30,7 @@ limitations under the License.
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Casting.h"
+#include "mlir-c/Dialect/AMDGPU.h"  // IWYU pragma: keep
 #include "mlir-c/Dialect/Arith.h"  // IWYU pragma: keep
 #include "mlir-c/Dialect/ControlFlow.h"
 #include "mlir-c/Dialect/Func.h"  // IWYU pragma: keep
@@ -207,6 +208,7 @@ NB_MODULE(_jax_mlir_ext, m) {
     unwrap(registry)->insert<mlir::vhlo::VhloDialect>();
     
     // For Mosaic GPU
+    REGISTER_DIALECT(amdgpu);
     REGISTER_DIALECT(cf);
     REGISTER_DIALECT(gpu);
     REGISTER_DIALECT(nvgpu);

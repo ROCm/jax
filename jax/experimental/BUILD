@@ -266,6 +266,7 @@ py_library_providing_imports_info(
         "//jax/_src:stages",
         "//jax/_src:util",
         "//jax/_src/lib",
+        "//jaxlib/mlir:amdgpu_dialect",
         "//jaxlib/mlir:arithmetic_dialect",
         "//jaxlib/mlir:builtin_dialect",
         "//jaxlib/mlir:control_flow_dialect",

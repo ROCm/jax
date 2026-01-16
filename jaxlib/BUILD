@@ -67,6 +67,7 @@ pytype_strict_library(
         "//jaxlib/cpu:_lapack",
         "//jaxlib/cpu:_sparse",
         "//jaxlib/mlir",
+        "//jaxlib/mlir:amdgpu_dialect",
         "//jaxlib/mlir:arithmetic_dialect",
         "//jaxlib/mlir:builtin_dialect",
         "//jaxlib/mlir:chlo_dialect",
