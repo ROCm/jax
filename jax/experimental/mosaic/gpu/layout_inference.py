@@ -542,6 +542,7 @@ for op in [
     arith.TruncFOp,
     arith.TruncIOp,
     arith.XOrIOp,
+    arith.SelectOp,
     mlir_math.ExpOp,
     mlir_math.Exp2Op,
     mlir_math.SinOp,
@@ -553,6 +554,7 @@ for op in [
     mlir_math.AbsIOp,
     mlir_math.RoundOp,
     mlir_math.RoundEvenOp,
+    mlir_math.CopySignOp,
 ]:
   _add_constraint_system_derivation_rule(op)(_pointwise_op_constraint_system)
 
@@ -964,7 +966,7 @@ def _wgmma_constraint_system(
   else:
     assert a_tiling is None
     a_var = cs.Variable(a)
-    if ir.IntegerType.get_signless(8) == ir.VectorType(op.a.type).element_type:
+    if utils.bitwidth(op.a.type.element_type) == 8:
       layout = fa.WGMMA_LAYOUT_8BIT
     else:
       layout = fa.WGMMA_LAYOUT

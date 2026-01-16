@@ -427,6 +427,12 @@ class Traced(Stage):
   def out_avals(self):
     return tree_unflatten(self.out_tree, self.jaxpr.out_avals)
 
+  def __call__(self, *args, **kwargs):
+    args_flat = tree_util.tree_leaves_checked(self.in_tree, (args, kwargs))
+    out_flat = core.jaxpr_as_fun(self.jaxpr)(*args_flat)
+    return tree_unflatten(self.out_tree, out_flat)
+
+
   @property
   def lojax(self) -> LoJax:
     if self._lojax is not None:
@@ -834,6 +840,7 @@ class Compiled(Stage):
     else:
       args_flat, in_tree = tree_util.tree_flatten((args, kwargs))
 
+    # TODO(mattjj): improve wrong-number-of-args error
     if in_tree != params.in_tree:
       errs = list(tree_util.equality_errors_pytreedef(in_tree, params.in_tree))
       msg = []

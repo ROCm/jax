@@ -26,12 +26,12 @@ from typing import Any, Generic, NoReturn, Optional, Protocol, Type, TypeVar, ca
 import warnings
 
 from jax._src import deprecations
+from jax._src import logging_config
 from jax._src.lib import _jax
 from jax._src.lib import guard_lib
 from jax._src.lib import jax_jit
 from jax._src.lib import jaxlib_extension_version
 from jax._src.lib import xla_client
-from jax._src import logging_config
 
 config_ext = xla_client._xla.config
 
@@ -1229,11 +1229,32 @@ log_checkpoint_residuals = bool_state(
           'partially evaluated (e.g. for autodiff), printing what residuals '
           'are saved.'))
 
+# Since we want a deprecation warning regardless of value, we need an
+# exemption for when config.py is first loaded.
+_pmap_shmap_merge_initialized = False
+
+
+def _default_pmap_shmap_merge(new_val):
+  del new_val
+  global _pmap_shmap_merge_initialized
+  if _pmap_shmap_merge_initialized:
+    deprecations.warn(
+        'jax-pmap-shmap-merge',
+        (
+            'Setting `jax_pmap_shmap_merge` is deprecated in JAX v0.9.0 and '
+            'will be removed in JAX v0.10.0.'
+        ),
+        stacklevel=3,
+    )
+  _pmap_shmap_merge_initialized = True
+
 pmap_shmap_merge = bool_state(
     name='jax_pmap_shmap_merge',
     default=True,
     upgrade=True,
-    help='If True, pmap and shard_map API will be merged.')
+    help='If True, pmap and shard_map API will be merged.',
+    validator=_default_pmap_shmap_merge,
+)
 
 
 distributed_debug = bool_state(
@@ -2079,27 +2100,7 @@ optional_enum_state(
       logging_config.update_logging_level_global(logging_level=logging_level)
 )
 
-def _default_pmap_no_rank_reduction(new_val):
-  if not new_val:
-    deprecations.warn(
-        'jax-pmap-no-rank-reduction',
-        (
-            'Setting `jax_pmap_no_rank_reduction` to `False` is deprecated in '
-            'JAX v0.7.2 and will be removed in JAX v0.9.0.'
-        ),
-        stacklevel=3,
-    )
 
-pmap_no_rank_reduction = bool_state(
-    name='jax_pmap_no_rank_reduction',
-    default=True,
-    help=(
-        '[deprecated] If True, pmap shards have the same rank as their '
-        'enclosing array. Setting to `False` is deprecated and in the future '
-        'all `pmap` calls will proceed without rank reduction.'
-    ),
-    validator=_default_pmap_no_rank_reduction,
-)
 
 use_shardy_partitioner = bool_state(
     name='jax_use_shardy_partitioner',
@@ -2219,12 +2220,6 @@ jax_ragged_dot_use_ragged_dot_instruction = bool_state(
         ' lowering. Otherwise, rely on the rollout logic in lowering rule for'
         ' ragged_dot_general_p.'
     ),
-)
-
-jax_collectives_common_channel_id = bool_flag(
-    name='jax_collectives_common_channel_id',
-    default=True,
-    help="Should collectives use a common channel ID? Temporary feature flag.",
 )
 
 jax_pallas_verbose_errors = bool_flag(

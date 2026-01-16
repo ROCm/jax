@@ -361,7 +361,7 @@ def _run_scoped_resource_estimator(
           f"Unsupported memory space: {aval.memory_space}")
   return rs + _estimate_resources(ctx, jaxpr)
 
-REDUCE_SCRATCH_ELEMS = 128 * 2  # vector of 2 elements per lane in each WG
+REDUCE_SCRATCH_ELEMS = 128 * 4  # vector of 4 elements per lane in each WG
 
 @_register_resource_estimator(lax.reduce_sum_p)
 @_register_resource_estimator(lax.reduce_max_p)
@@ -508,16 +508,13 @@ class ModuleContext:
     yield tmem_ref
     self.tmem_used_cols -= cols_used
 
-  # TODO(cperivol): Only return the shapes and figure out the sizes when freeing.
   @contextlib.contextmanager
   def scratch_view(self, struct: jax.ShapeDtypeStruct) -> Iterator[ir.Value]:
     """Creates a view into the runtime scratch buffer for the given struct.
 
     This is a low-level API. Use it only if you know what you are doing.
 
-    The function allocates bytes at the top of a stack, which need to be
-    deallocated in a FIFO fashion with :meth:`ModuleContext.stack_free_smem`.
-    After deallocation, the view is invalid and cannot be used.
+    After the context manager exits, the view is invalid and cannot be used.
 
     Args:
       struct: The shape and dtype of the view to create.
@@ -2451,6 +2448,74 @@ def _round_lowering_rule_wg(ctx: LoweringRuleContext, x, rounding_method):
     case _:
       assert_never(rounding_method)
 
+_copysign_p = jax_core.Primitive("_copysign")
+
+
+def _copysign(x1: jax.typing.ArrayLike, x2: jax.typing.ArrayLike) -> jax.Array:
+  return _copysign_p.bind(x1, x2)
+
+
+@_copysign_p.def_abstract_eval
+def _copysign_abstract_eval(x1, x2):
+  return jax_core.ShapedArray(x2.shape, x2.dtype)
+
+
+@register_lowering_rule(_copysign_p, mgpu.LoweringSemantics.Lane)
+def _copysign_lowering_rule(ctx: LoweringRuleContext, x1, x2):
+  [x1_aval, x2_aval] = ctx.avals_in
+  x1 = _ensure_fa(x1, x1_aval.dtype)
+  x2 = _ensure_fa(x2, x2_aval.dtype)
+  return x1.copysign(x2)
+
+
+@register_lowering_rule(_copysign_p, mgpu.LoweringSemantics.Warpgroup)
+def _copysign_lowering_rule(ctx: LoweringRuleContext, x1, x2):
+  [x1_aval, x2_aval] = ctx.avals_in
+  x1 = _ensure_ir_value(x1, x1_aval.dtype)
+  x2 = _ensure_ir_value(x2, x2_aval.dtype)
+  return math_dialect.copysign(x1, x2)
+
+
+@register_lowering_rule(lax.sign_p, mgpu.LoweringSemantics.Lane)
+@register_lowering_rule(lax.sign_p, mgpu.LoweringSemantics.Warpgroup)
+def _sign_lowering_rule(ctx: LoweringRuleContext, x):
+  def sign(x):
+    if jnp.issubdtype(x.dtype, jnp.floating):
+      ones = lax.full(x.shape, 1.0, dtype=x.dtype)
+      zeros = lax.full(x.shape, 0.0, dtype=x.dtype)
+      return lax.select(x != 0, _copysign(ones, x), zeros)
+    if jnp.issubdtype(x.dtype, jnp.signedinteger):
+      return (x > 0).astype(x.dtype) - (x < 0).astype(x.dtype)
+    if jnp.issubdtype(x.dtype, jnp.unsignedinteger):
+      return (x != 0).astype(x.dtype)
+    raise ValueError(f"Unsupported dtype for sign: {x.dtype}")
+
+  return _lower_fun(sign, multiple_results=False)(ctx, x)
+
+
+@register_lowering_rule(lax.erf_p, mgpu.LoweringSemantics.Lane)
+def _erf_lowering_rule(ctx: LoweringRuleContext, x):
+  [x_aval] = ctx.avals_in
+  return _ensure_fa(x, x_aval.dtype).erf()
+
+
+@register_lowering_rule(lax.erf_p, mgpu.LoweringSemantics.Warpgroup)
+def _erf_lowering_rule_wg(ctx: LoweringRuleContext, x):
+  [x_aval] = ctx.avals_in
+  return math_dialect.erf(_ensure_ir_value(x, x_aval.dtype))
+
+
+@register_lowering_rule(lax.atan2_p, mgpu.LoweringSemantics.Lane)
+def _atan2_lowering_rule(ctx: LoweringRuleContext, y, x):
+  y, x = _bcast(y, x, *ctx.avals_in, *ctx.avals_out)
+  return y.atan2(x)
+
+
+@register_lowering_rule(lax.atan2_p, mgpu.LoweringSemantics.Warpgroup)
+def _atan2_lowering_rule_wg(ctx: LoweringRuleContext, y, x):
+  y, x = _bcast_wg(y, x, *ctx.avals_in, *ctx.avals_out)
+  return math_dialect.atan2(y, x)
+
 
 @register_lowering_rule(lax.reshape_p, mgpu.LoweringSemantics.Lane)
 def _reshape_lowering_rule(
@@ -2525,7 +2590,12 @@ def _reduce_lowering_rule(op, ctx: LoweringRuleContext, x, *, axes, **kwargs):
         raise NotImplementedError("Multi-axis reductions not supported")
       reduced_dim = x.layout.tiling.tile_dimension(axes[0])
       if any(reduced_dim[d] for d in x.layout.partitioned_warp_dims):
-        scratch_ty = jax.ShapeDtypeStruct(shape=(REDUCE_SCRATCH_ELEMS,), dtype=x_aval.dtype)
+        size = x.layout.vector_length * 128  # a vector per lane in each WG.
+        if size > REDUCE_SCRATCH_ELEMS:
+          raise NotImplementedError(
+              f"Reduce scratch {size=} exceeds max={REDUCE_SCRATCH_ELEMS}"
+          )
+        scratch_ty = jax.ShapeDtypeStruct(shape=(size,), dtype=x_aval.dtype)
         ctx = ctx.module_ctx.scratch_view(scratch_ty)
       else:
         ctx = contextlib.nullcontext(None)
@@ -2544,14 +2614,14 @@ register_lowering_rule(lax.reduce_min_p, mgpu.LoweringSemantics.Lane)(
     functools.partial(_reduce_lowering_rule, "min")
 )
 
+
 def _reduce_lowering_rule_wg(
-    kind: vector_dialect.CombiningKind,
-    acc: object,
     ctx: LoweringRuleContext,
+    kind: vector_dialect.CombiningKind,
+    acc: int | float,
     x,
-    *,
     axes,
-) -> ir.OpView:
+) -> ir.Value:
   [x_aval] = ctx.avals_in
   [out_aval] = ctx.avals_out
   x = _ensure_ir_value(x, x_aval.dtype)
@@ -2563,24 +2633,23 @@ def _reduce_lowering_rule_wg(
       x = vector_dialect.shape_cast(
           ir.VectorType.get([x_aval.size], out_type), x
       )
-    return vector_dialect.ReductionOp(out_type, kind, x)
+    reduction = vector_dialect.ReductionOp(out_type, kind, x)
+    reduction.attributes["offset"] = ir.IntegerAttr.get(
+        ir.IntegerType.get_signless(32), ctx.module_ctx.smem_used_bytes
+    )
+    return reduction.result
   acc = vector_dialect.broadcast(
       ir.VectorType.get(out_aval.shape, out_type),
       _ensure_ir_value(acc, out_aval.dtype),
   )
-  return vector_dialect.MultiDimReductionOp(kind, x, acc, axes)
+  return vector_dialect.multi_reduction(kind, x, acc, axes)
 
 
 @register_lowering_rule(lax.reduce_sum_p, mgpu.LoweringSemantics.Warpgroup)
 def _reduce_sum_lowering_rule_wg(ctx: LoweringRuleContext, x, *, axes,
                                  out_sharding):
-  op = _reduce_lowering_rule_wg(
-      vector_dialect.CombiningKind.ADD, 0, ctx, x, axes=axes
-  )
-  op.attributes["offset"] = ir.IntegerAttr.get(
-      ir.IntegerType.get_signless(32), ctx.module_ctx.smem_used_bytes
-  )
-  return op.result
+  kind = vector_dialect.CombiningKind.ADD
+  return _reduce_lowering_rule_wg(ctx, kind, 0, x, axes)
 
 
 @register_lowering_rule(lax.reduce_max_p, mgpu.LoweringSemantics.Warpgroup)
@@ -2589,15 +2658,45 @@ def _reduce_max_lowering_rule_wg(ctx: LoweringRuleContext, x, *, axes):
   if jnp.issubdtype(x_aval.dtype, jnp.floating):
     kind = vector_dialect.CombiningKind.MAXIMUMF
     acc = float("-inf")
-  elif jnp.issubdtype(x_aval.dtype, jnp.signedinteger):
-    kind = vector_dialect.CombiningKind.MAXSI
-    acc = np.iinfo(x_aval.dtype).max
-  elif jnp.issubdtype(x_aval.dtype, jnp.unsignedinteger):
-    kind = vector_dialect.CombiningKind.MAXUI
+  elif jnp.issubdtype(x_aval.dtype, jnp.integer):
+    if jnp.issubdtype(x_aval.dtype, jnp.signedinteger):
+      kind = vector_dialect.CombiningKind.MAXSI
+    else:
+      kind = vector_dialect.CombiningKind.MAXUI
+    acc = np.iinfo(x_aval.dtype).min
+  else:
+    raise NotImplementedError(f"Unsupported dtype {x_aval.dtype}")
+  return _reduce_lowering_rule_wg(ctx, kind, acc, x, axes)
+
+
+@register_lowering_rule(lax.reduce_min_p, mgpu.LoweringSemantics.Warpgroup)
+def _reduce_min_lowering_rule_wg(ctx: LoweringRuleContext, x, *, axes):
+  [x_aval] = ctx.avals_in
+  if jnp.issubdtype(x_aval.dtype, jnp.floating):
+    kind = vector_dialect.CombiningKind.MINIMUMF
+    acc = float("inf")
+  elif jnp.issubdtype(x_aval.dtype, jnp.integer):
+    if jnp.issubdtype(x_aval.dtype, jnp.signedinteger):
+      kind = vector_dialect.CombiningKind.MINSI
+    else:
+      kind = vector_dialect.CombiningKind.MINUI
     acc = np.iinfo(x_aval.dtype).max
   else:
     raise NotImplementedError(f"Unsupported dtype {x_aval.dtype}")
-  return _reduce_lowering_rule_wg(kind, acc, ctx, x, axes=axes).result
+  return _reduce_lowering_rule_wg(ctx, kind, acc, x, axes)
+
+
+@register_lowering_rule(lax.reduce_prod_p, mgpu.LoweringSemantics.Warpgroup)
+def _reduce_prod_lowering_rule_wg(ctx: LoweringRuleContext, x, *, axes):
+  [x_aval] = ctx.avals_in
+  if jnp.issubdtype(x_aval.dtype, jnp.floating):
+    acc = 1.0
+  elif jnp.issubdtype(x_aval.dtype, jnp.integer):
+    acc = 1
+  else:
+    raise NotImplementedError(f"Unsupported dtype {x_aval.dtype}")
+  kind = vector_dialect.CombiningKind.MUL
+  return _reduce_lowering_rule_wg(ctx, kind, acc, x, axes)
 
 
 def _block_id(ctx: LoweringRuleContext, dim: gpu_dialect.Dimension) -> ir.Value:
@@ -3738,9 +3837,8 @@ def _semaphore_wait_lowering_rule(ctx: LoweringRuleContext, *args, args_tree):
 
 
 @register_lowering_rule(checkify.check_p, mgpu.LoweringSemantics.Lane)
+@register_lowering_rule(checkify.check_p, mgpu.LoweringSemantics.Warpgroup)
 def _check_lowering_rule(ctx: LoweringRuleContext, *err_args, err_tree, debug):
-  del ctx  # Unused.
-
   if not debug:
     raise NotImplementedError(
         "Non-debug checks are not supported by the Mosaic GPU backend."
@@ -3759,7 +3857,9 @@ def _check_lowering_rule(ctx: LoweringRuleContext, *err_args, err_tree, debug):
   # check_p has an inverted predicate compared to assert, so we need to compute
   # ``not pred`` here.
   minus_one = _ir_constant(-1, mgpu_utils.dtype_to_ir_type(jnp.bool))
-  not_pred = arith_dialect.xori(pred.registers.item(), minus_one)
+  if ctx.module_ctx.lowering_semantics == mgpu.LoweringSemantics.Lane:
+    pred = pred.registers.item()
+  not_pred = arith_dialect.xori(pred, minus_one)
   cf_dialect.assert_(not_pred, exception.fmt_string)
   return []
 

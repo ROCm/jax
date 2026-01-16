@@ -226,6 +226,30 @@ class NDIndexer:
           raise IndexError("Slice entries must be static integers."
                           f" Got {idx.index} at position {position}")
 
+  @staticmethod
+  def is_sharded(arr) -> bool:
+    """Check whether the array is sharded."""
+    return isinstance(arr, array.ArrayImpl) and not dispatch.is_single_device_sharding(arr.sharding)
+
+  def has_partial_slices(self) -> bool:
+    """Check whether the indexer contains partial slices.
+
+    For sharded arrays, partial slices cannot automatically propagate
+    sharding.
+    """
+    for idx in self.indices:
+      if idx.typ == IndexType.INTEGER:
+        return True
+      if idx.typ == IndexType.SLICE:
+        slc = idx.index
+        assert isinstance(slc, slice)
+        axis, = idx.consumed_axes
+        size = self.shape[axis]
+        start, stop, step = slc.indices(self.shape[axis])
+        if abs(step) != 1 or abs(stop - start) != size:
+          return True
+    return False
+
   def expand_bool_indices(self) -> NDIndexer:
     """Returns a new NDIndexer with boolean indices replaced by array indices.
 
@@ -331,21 +355,37 @@ class NDIndexer:
         new_indices.append(idx)
     return NDIndexer(indices=new_indices, shape=self.shape)
 
-  def compute_via_static_slice(self, arr: Array) -> Array:
+  def compute_via_static_slice(self, arr: Array, *,
+                               normalize_indices: bool = True,
+                               mode: str | slicing.GatherScatterMode | None) -> Array:
     """Equivalent of arr[idx] implemented in terms of static :func:`lax.slice` operations.
 
-    This supports only INTEGER, ELLIPSIS, and SLICE indices, and will raise a TypeError
-    if other indices are present.
+    This supports only INTEGER, ELLIPSIS, NONE, and SLICE indices, and will raise a
+    TypeError if other indices are present.
     """
+    if mode is None:
+      parsed_mode = slicing.GatherScatterMode.PROMISE_IN_BOUNDS
+    else:
+      parsed_mode = slicing.GatherScatterMode.from_any(mode)
+
+    if parsed_mode not in [
+        slicing.GatherScatterMode.PROMISE_IN_BOUNDS, slicing.GatherScatterMode.CLIP]:
+      raise ValueError("static_slice requires mode='promise_in_bounds' or mode='clip'")
+
     # Validation of the unmodified user indices.
-    self.validate_static_indices(normalize_indices=True)
+    if parsed_mode == slicing.GatherScatterMode.PROMISE_IN_BOUNDS:
+      self.validate_static_indices(normalize_indices=normalize_indices)
     self.validate_slices()
 
+    # For sharded inputs, indexing (like x[0]) and partial slices (like x[:2] as
+    # opposed to x[:]) lead to incorrect sharding semantics when computed via slice.
+    # TODO(yashkatariya): fix slice with sharding
+    if self.is_sharded(arr) and self.has_partial_slices():
+      raise ValueError("static_slice with partial slices does not support nontrivial array sharding.")
+
     for position, pidx in enumerate(self.indices):
-      if pidx.typ in [IndexType.INTEGER, IndexType.ELLIPSIS, IndexType.SLICE]:
+      if pidx.typ in [IndexType.INTEGER, IndexType.ELLIPSIS, IndexType.SLICE, IndexType.NONE]:
         pass
-      elif pidx.typ == IndexType.NONE:
-        raise TypeError(f"static_slice: got {pidx.index} at position {position}")
       elif pidx.typ in [IndexType.ARRAY, IndexType.BOOLEAN]:
         raise TypeError("static_slice: indices must be static scalars or slices."
                         f" Got {pidx.index} at position {position}")
@@ -358,15 +398,27 @@ class NDIndexer:
     strides: list[int] = []
     rev_axes: list[int] = []
     squeeze_axes: list[int] = []
+    newaxis_dims: list[int] = []
 
     expanded = self.expand_ellipses()
     for pidx in expanded.indices:
-      if pidx.typ in [IndexType.ARRAY, IndexType.BOOLEAN, IndexType.NONE, IndexType.ELLIPSIS]:
+      if pidx.typ in [IndexType.ARRAY, IndexType.BOOLEAN, IndexType.ELLIPSIS]:
         raise RuntimeError(f"Internal: unexpected index encountered: {pidx}")
+      elif pidx.typ == IndexType.NONE:
+        # Expanded axes indices are based on the rank of the array after slicing
+        # (tracked by start_indices) and squeezing (tracked by squeeze_axes), and
+        # expand_dims inserts dimensions in order, so we must also account for
+        # previous expanded dimensions.
+        newaxis_dims.append(len(start_indices) - len(squeeze_axes) + len(newaxis_dims) )
       elif pidx.typ == IndexType.INTEGER:
         assert isinstance(pidx.index, (int, np.integer))
         axis, = pidx.consumed_axes
-        start_index = int(pidx.index + arr.shape[axis] if pidx.index < 0 else pidx.index)
+        start_index = int(pidx.index)
+        if normalize_indices and start_index < 0:
+          start_index += arr.shape[axis]
+        # Normalization & validation have already been handled, so clip start_index
+        # to valid range
+        start_index = min(max(start_index, 0), arr.shape[axis] - 1)
         start_indices.append(start_index)
         limit_indices.append(start_index + 1)
         strides.append(1)
@@ -389,12 +441,112 @@ class NDIndexer:
       else:
         raise TypeError(f"static_slice: unrecognized index {pidx.index}")
     result = arr
-    if start_indices:
-      result = slicing.slice(result, start_indices, limit_indices, strides)
+    optional_strides: list[int] | None = None if all(s == 1 for s in strides) else strides
+    is_trivial_slice = optional_strides is None and all(
+      (start, stop) == (0, size)
+      for start, stop, size in zip(start_indices, limit_indices, arr.shape)
+    )
+    if not is_trivial_slice:
+      result = slicing.slice(result, start_indices, limit_indices, optional_strides)
     if rev_axes:
       result = lax.rev(result, rev_axes)
     if squeeze_axes:
       result = lax.squeeze(result, squeeze_axes)
+    if newaxis_dims:
+      result = lax.expand_dims(result, newaxis_dims)
+    return result
+
+  def compute_via_dynamic_slice(self, arr: Array, *,
+                                normalize_indices: bool = True,
+                                mode: str | slicing.GatherScatterMode | None) -> Array:
+    """Equivalent of arr[idx] implemented in terms of static :func:`lax.dynamic_slice`.
+
+    This supports only INTEGER, ELLIPSIS, NONE, SLICE, and scalar ARRAY indices,
+    and will raise a TypeError if other indices are present.
+    """
+    if mode is not None:
+      parsed_mode = slicing.GatherScatterMode.from_any(mode)
+      if parsed_mode not in [
+          slicing.GatherScatterMode.PROMISE_IN_BOUNDS, slicing.GatherScatterMode.CLIP]:
+        raise ValueError("dynamic_slice requires mode='promise_in_bounds' or mode='clip'")
+
+    # For sharded inputs, indexing (like x[0]) and partial slices (like x[:2] as
+    # opposed to x[:]) lead to incorrect sharding semantics when computed via slice.
+    # TODO(yashkatariya): fix slice with sharding
+    if self.is_sharded(arr) and self.has_partial_slices():
+      raise ValueError("dynamic_slice with partial slices does not support nontrivial array sharding.")
+
+    for position, pidx in enumerate(self.indices):
+      if pidx.typ in [IndexType.INTEGER, IndexType.ELLIPSIS, IndexType.NONE]:
+        pass
+      elif pidx.typ == IndexType.SLICE:
+        assert isinstance(pidx.index, slice)
+        if pidx.index.step is not None and pidx.index.step not in [-1, 1]:
+          raise TypeError("dynamic_slice: only unit steps supported in slice."
+                          f" Got {pidx.index} at position {position}")
+      elif pidx.typ == IndexType.ARRAY:
+        if isinstance(pidx.index, Sequence) or np.shape(pidx.index) != ():  # type: ignore[arg-type]
+          raise TypeError("dynamic_slice: only scalar indices allowed."
+                          f" Got {pidx.index} at position {position}")
+      elif pidx.typ == IndexType.BOOLEAN:
+        raise TypeError("dynamic_slice: indices must be scalars or slices."
+                        f" Got {pidx.index} at position {position}")
+      else:
+        raise TypeError(f"dynamic_slice: unrecognized index {pidx.index} at position {position}.")
+
+    start_indices: list[ArrayLike] = []
+    slice_sizes: list[int] = []
+    rev_axes: list[int] = []
+    squeeze_axes: list[int] = []
+    newaxis_dims: list[int] = []
+
+    expanded = self.expand_ellipses()
+    for pidx in expanded.indices:
+      if pidx.typ in [IndexType.BOOLEAN, IndexType.ELLIPSIS]:
+        raise RuntimeError(f"Internal: unexpected index encountered: {pidx}")
+      elif pidx.typ == IndexType.NONE:
+        # Expanded axes indices are based on the rank of the array after slicing
+        # (tracked by start_indices) and squeezing (tracked by squeeze_axes), and
+        # expand_dims inserts dimensions in order, so we must also account for
+        # previous expanded dimensions.
+        newaxis_dims.append(len(start_indices) - len(squeeze_axes) + len(newaxis_dims))
+      elif pidx.typ in [IndexType.INTEGER, IndexType.ARRAY]:
+        index = lax_numpy.asarray(pidx.index)
+        assert index.shape == ()  # Validated above.
+        axis, = pidx.consumed_axes
+        start_indices.append(index)
+        slice_sizes.append(1)
+        squeeze_axes.append(axis)
+      elif pidx.typ == IndexType.SLICE:
+        assert isinstance(pidx.index, slice)
+        axis, = pidx.consumed_axes
+        size = arr.shape[axis]
+        start, stop, stride = pidx.index.indices(size)
+        assert stride in [-1, 1]  # validated above
+        if stride < 0:
+          new_start = stop + 1 + abs(start - stop - 1) % abs(stride)
+          start_indices.append(new_start)
+          slice_sizes.append(max(0, start + 1 - new_start))
+          rev_axes.append(axis)
+        else:
+          start_indices.append(start)
+          slice_sizes.append(stop - start)
+      else:
+        raise TypeError(f"dynamic_slice: unrecognized index {pidx.index}")
+    result = arr
+    is_trivial_slice = all(
+      (slice_size == axis_size)
+      for slice_size, axis_size in zip(slice_sizes, arr.shape)
+    )
+    if not is_trivial_slice:
+      result = slicing.dynamic_slice(arr, start_indices, slice_sizes,
+                                     allow_negative_indices=normalize_indices)
+    if rev_axes:
+      result = lax.rev(result, rev_axes)
+    if squeeze_axes:
+      result = lax.squeeze(result, squeeze_axes)
+    if newaxis_dims:
+      result = lax.expand_dims(result, newaxis_dims)
     return result
 
   def is_advanced_int_indexer(self):
@@ -1016,6 +1168,7 @@ class IndexingStrategy(enum.Enum):
   GATHER = 'gather'
   SCATTER = 'scatter'
   STATIC_SLICE = 'static_slice'
+  DYNAMIC_SLICE = 'dynamic_slice'
 
 
 def rewriting_take(
@@ -1041,9 +1194,12 @@ def rewriting_take(
     indexer.validate_static_indices(normalize_indices=normalize_indices)
 
   if strategy == IndexingStrategy.STATIC_SLICE:
-    if not normalize_indices:
-      raise ValueError("strategy=STATIC_SLICE is only supported when normalize_indices=True.")
-    return indexer.compute_via_static_slice(arr)
+    return indexer.compute_via_static_slice(
+      arr, mode=mode, normalize_indices=normalize_indices)
+
+  if strategy == IndexingStrategy.DYNAMIC_SLICE:
+    return indexer.compute_via_dynamic_slice(
+      arr, mode=mode, normalize_indices=normalize_indices)
 
   # For simplicity of generated primitives, we call lax.slice or lax.dynamic_slice
   # in the simplest cases: i.e. non-dynamic arrays indexed with integers and slices.

@@ -29,7 +29,6 @@ from typing import Any, Protocol, cast
 from jax._src.interpreters import mlir as mlir_interpreter
 from jax._src.lib import mosaic_gpu_dialect as mgpu
 from jax._src.lib.mlir import ir
-from jax._src.lib.mlir.dialects import _gpu_ops_gen
 from jax._src.lib.mlir.dialects import arith
 from jax._src.lib.mlir.dialects import builtin
 from jax._src.lib.mlir.dialects import func
@@ -692,31 +691,47 @@ def _vector_extract_op_lowering_rule(
   return [fragmented_array_to_ir(result, result_type)]
 
 
+def _combining_kind(attr: ir.Attribute) -> vector.CombiningKind:
+  return vector.CombiningKind[
+      str(attr).removeprefix("#vector.kind<").removesuffix(">").upper()
+  ]
+
+
 @_register_lowering(vector.ReductionOp)
 def _vector_reduction_op_lowering_rule(
     ctx: LoweringContext, op: vector.ReductionOp
 ) -> Sequence[ir.Value]:
   del ctx  # Unused.
   [layout] = inference_utils.in_layouts(op)
-  element_type = ir.VectorType(op.vector.type).element_type
-  # TODO(b/415721295): Derive `is_signed` from attributes.
-  is_signed = None
-  a = _fragmented_array_from_ir(op.vector, layout, is_signed)
-  match str(op.kind):
-    case "#vector.kind<add>":
-      scratch = _slice_smem(
-          ir.MemRefType.get([4], element_type, memory_space=utils.smem()),
-          arith.constant(None, op.attributes["offset"]),
-      )
-      result = a.reduce("add", range(len(a.shape)), scratch)
-    case (
-        "#vector.kind<maxsi>" | "#vector.kind<maxui>" | "#vector.kind<maximumf>"
-    ):
-      # TODO(slebedev): Implement this and remove the raise below.
-      raise NotImplementedError(f"Unsupported reduction kind: {op.kind}")
+  element_type = op.vector.type.element_type
+  scratch = _slice_smem(
+      ir.MemRefType.get([4], element_type, memory_space=utils.smem()),
+      arith.constant(None, op.attributes["offset"]),
+  )
+  axes = range(op.vector.type.rank)
+  op_kind = _combining_kind(op.kind)
+  match op_kind:
+    case vector.CombiningKind.ADD:
+      a = _fragmented_array_from_ir(op.vector, layout)
+      result = a.reduce("add", axes, scratch)
+    case vector.CombiningKind.MAXSI | vector.CombiningKind.MAXUI:
+      is_signed = op_kind == vector.CombiningKind.MAXSI
+      a = _fragmented_array_from_ir(op.vector, layout, is_signed)
+      result = a.reduce("max", axes, scratch)
+    case vector.CombiningKind.MAXIMUMF:
+      a = _fragmented_array_from_ir(op.vector, layout)
+      result = a.reduce("max", axes, scratch)
+    case vector.CombiningKind.MINUI | vector.CombiningKind.MINSI:
+      is_signed = op_kind == vector.CombiningKind.MINSI
+      a = _fragmented_array_from_ir(op.vector, layout, is_signed)
+      result = a.reduce("min", axes, scratch)
+    case vector.CombiningKind.MINIMUMF:
+      a = _fragmented_array_from_ir(op.vector, layout)
+      result = a.reduce("min", axes, scratch)
     case _:
       raise NotImplementedError(f"Unsupported reduction kind: {op.kind}")
-  return [fragmented_array_to_ir(result, op.result.type)]
+  assert isinstance(result.layout, fa.WGSplatFragLayout)
+  return [result.registers.item()]
 
 @_register_lowering(vector.MultiDimReductionOp)
 def _vector_multi_dim_reduction_op_lowering_rule(
@@ -726,38 +741,47 @@ def _vector_multi_dim_reduction_op_lowering_rule(
 
   [in_layout, acc_layout] = inference_utils.in_layouts(op)
   [out_layout] = inference_utils.out_layouts(op)
-  if layouts.from_layout_attr(in_layout) != fa.WGMMA_LAYOUT:
-    raise NotImplementedError(f"Unsupported input layout: {in_layout}")
-  if layouts.from_layout_attr(out_layout) not in {
-      fa.WGMMA_ROW_LAYOUT,
-      fa.WGMMA_COL_LAYOUT,
-  }:
-    raise NotImplementedError(f"Unsupported output layout: {out_layout}")
   if out_layout != acc_layout:
     raise ValueError(
         f"Output layout {out_layout} must match the accumulator layout"
         f" {acc_layout}"
     )
 
-  # TODO(b/415721295): Derive `is_signed` from attributes.
-  is_signed = None
-  source_fa = _fragmented_array_from_ir(op.source, in_layout, is_signed)
-  acc_fa = _fragmented_array_from_ir(op.acc, acc_layout, is_signed)
-  match vector.CombiningKind[
-      str(op.kind).removeprefix("#vector.kind<").removesuffix(">").upper()
-  ]:
+  if len(op.reduction_dims) != 1:
+    raise NotImplementedError("Only 1 reduction dimension is supported.")
+
+  op_kind = _combining_kind(op.kind)
+  match op_kind:
     case vector.CombiningKind.ADD:
-      result = source_fa.reduce("add", op.reduction_dims[0])
-      result += acc_fa
-    case (
-        vector.CombiningKind.MAXIMUMF
-        | vector.CombiningKind.MAXSI
-        | vector.CombiningKind.MAXUI
-    ):
-      result = source_fa.reduce("max", op.reduction_dims[0])
-      result = result.max(acc_fa)
+      src = _fragmented_array_from_ir(op.source, in_layout)
+      acc = _fragmented_array_from_ir(op.acc, acc_layout)
+      result = src.reduce("add", op.reduction_dims[0])
+      result += acc
+    case vector.CombiningKind.MAXSI | vector.CombiningKind.MAXUI:
+      is_signed = op_kind == vector.CombiningKind.MAXSI
+      src = _fragmented_array_from_ir(op.source, in_layout, is_signed)
+      acc = _fragmented_array_from_ir(op.acc, acc_layout, is_signed)
+      result = src.reduce("max", op.reduction_dims[0])
+      result = result.max(acc)
+    case vector.CombiningKind.MAXIMUMF:
+      src = _fragmented_array_from_ir(op.source, in_layout)
+      acc = _fragmented_array_from_ir(op.acc, acc_layout)
+      result = src.reduce("max", op.reduction_dims[0])
+      result = result.max(acc)
+    case vector.CombiningKind.MINUI | vector.CombiningKind.MINSI:
+      is_signed = op_kind == vector.CombiningKind.MINSI
+      src = _fragmented_array_from_ir(op.source, in_layout, is_signed)
+      acc = _fragmented_array_from_ir(op.acc, acc_layout, is_signed)
+      result = src.reduce("min", op.reduction_dims[0])
+      result = result.min(acc)
+    case vector.CombiningKind.MINIMUMF:
+      src = _fragmented_array_from_ir(op.source, in_layout)
+      acc = _fragmented_array_from_ir(op.acc, acc_layout)
+      result = src.reduce("min", op.reduction_dims[0])
+      result = result.min(acc)
     case _:
       raise NotImplementedError(f"Unsupported reduction kind: {op.kind}")
+  assert result.layout == layouts.from_layout_attr(out_layout)  # pytype: disable=attribute-error
   return [fragmented_array_to_ir(result, op.result.type)]
 
 
@@ -1168,6 +1192,7 @@ for op, unary_impl, is_signed in [
     (mlir_math.AbsIOp, fa.FragmentedArray.abs, True),
     (mlir_math.RoundOp, fa.FragmentedArray.round, None),
     (mlir_math.RoundEvenOp, fa.FragmentedArray.round_even, None),
+    (mlir_math.ErfOp, fa.FragmentedArray.erf, None),
 ]:
   _lowerings[op.OPERATION_NAME] = functools.partial(
       _unary_op_lowering_rule, impl=unary_impl, is_signed=is_signed
@@ -1213,6 +1238,8 @@ for op, binary_impl, is_signed in [
     (arith.MinSIOp, fa.FragmentedArray.min, True),
     (arith.MinUIOp, fa.FragmentedArray.min, False),
     (arith.MinimumFOp, fa.FragmentedArray.min, None),
+    (mlir_math.Atan2Op, fa.FragmentedArray.atan2, None),
+    (mlir_math.CopySignOp, fa.FragmentedArray.copysign, None),
 ]:
   _lowerings[op.OPERATION_NAME] = functools.partial(
       _binary_op_lowering_rule, impl=binary_impl, is_signed=is_signed
@@ -1288,6 +1315,22 @@ def _bitcast_op_lowering_rule(
   return [fragmented_array_to_ir(out, op.result.type)]
 
 
+@_register_lowering(arith.SelectOp)
+def _select_op_lowering_rule(
+    ctx: LoweringContext, op: arith.SelectOp
+) -> Sequence[ir.Value]:
+  del ctx
+  in_layouts = inference_utils.in_layouts(op)
+  [layout] = inference_utils.out_layouts(op)
+  if any(in_layout != layout for in_layout in in_layouts):
+    raise ValueError("Layout mismatch")
+  pred = _fragmented_array_from_ir(op.condition, layout)
+  true_value = _fragmented_array_from_ir(op.true_value, layout)
+  false_value = _fragmented_array_from_ir(op.false_value, layout)
+  result = pred.select(true_value, false_value)
+  return [fragmented_array_to_ir(result, op.result.type)]
+
+
 @_register_lowering(mgpu.WGMMAOp)
 def _mgpu_wgmma_op_lowering_rule(
     _: LoweringContext, wgmma_op: mgpu.WGMMAOp
@@ -1329,7 +1372,7 @@ def _mgpu_wgmma_op_lowering_rule(
   if isinstance(wgmma_op.a.type, ir.VectorType):
     expected_a_layout = (
         fa.WGMMA_LAYOUT_8BIT
-        if element_type == ir.IntegerType.get_signless(8)
+        if utils.bitwidth(element_type) == 8
         else fa.WGMMA_LAYOUT
     )
     assert in_layouts[1] == layouts.to_layout_attr(expected_a_layout)
@@ -2288,7 +2331,7 @@ def _index_switch_op_lowering_rule(
 
 
 @_register_lowering(func.FuncOp)
-@_register_lowering(_gpu_ops_gen.LaunchOp)
+@_register_lowering(gpu.LaunchOp)
 def _traverse_op_lowering_rule(
     ctx: LoweringContext, op: ir.OpView
 ) -> MlirLoweringRuleResult:

@@ -415,7 +415,8 @@ NB_MODULE(_jax, m) {
          const absl::flat_hash_map<std::string, xla::PjRtValueType>& options,
          std::shared_ptr<xla::DistributedRuntimeClient> distributed_client,
          std::optional<xla::ifrt::TransferServerInterfaceFactory>
-             transfer_server_factory) -> nb_class_ptr<PyClient> {
+             transfer_server_factory,
+         bool force_dcn_cross_host_transfers) -> nb_class_ptr<PyClient> {
         std::unique_ptr<xla::ifrt::PjRtClient> ifrt_client;
         {
           nb::gil_scoped_release gil_release;
@@ -437,6 +438,8 @@ NB_MODULE(_jax, m) {
             ifrt_options.transfer_server_factory =
                 std::move(transfer_server_factory->factory_fn);
           }
+          ifrt_options.force_dcn_cross_host_transfers =
+              force_dcn_cross_host_transfers;
           ifrt_client = xla::ValueOrThrow(
               xla::ifrt::PjRtClient::Create(std::move(ifrt_options)));
         }
@@ -446,7 +449,8 @@ NB_MODULE(_jax, m) {
       nb::arg("options") =
           absl::flat_hash_map<std::string, xla::PjRtValueType>(),
       nb::arg("distributed_client").none() = nullptr,
-      nb::arg("transfer_server_factory").none() = std::nullopt);
+      nb::arg("transfer_server_factory").none() = std::nullopt,
+      nb::arg("force_dcn_cross_host_transfers") = false);
   // TODO(b/322357665): Delete this method after TPU plugin changes to use the
   // standard registration.
   m.def("get_default_c_api_topology",
@@ -588,7 +592,6 @@ NB_MODULE(_jax, m) {
   aux::RegisterTransferServerTypes(m);
 #endif  // defined(__linux__)
 
-#if JAX_IFRT_VERSION_NUMBER >= 39
   nb::class_<xla::PreemptionSyncManager> preemption_sync_manager(
       m, "PreemptionSyncManager");
   preemption_sync_manager
@@ -611,30 +614,6 @@ NB_MODULE(_jax, m) {
       });
   m.def("create_preemption_sync_manager",
         []() { return xla::CreatePreemptionSyncManager(); });
-#else
-  nb::class_<tsl::PreemptionSyncManager> preemption_sync_manager(
-      m, "PreemptionSyncManager");
-  preemption_sync_manager
-      .def(
-          "initialize",
-          [](tsl::PreemptionSyncManager& manager,
-             xla::DistributedRuntimeClient* client) {
-            tsl::CoordinationServiceAgent* agent =
-                xla::ValueOrThrow(client->GetCoordinationServiceAgent());
-            xla::ThrowIfError(manager.Initialize(agent));
-          },
-          nb::arg("distributed_client"))
-      .def("reached_sync_point",
-           [](tsl::PreemptionSyncManager& manager, int step_counter) {
-             return manager.ReachedSyncPoint(step_counter);
-           })
-      .def("shutdown", [](tsl::PreemptionSyncManager& manager) {
-        nb::gil_scoped_release gil_release;
-        manager.Shutdown();
-      });
-  m.def("create_preemption_sync_manager",
-        []() { return tsl::CreatePreemptionSyncManager(); });
-#endif
 
   nb::class_<xla::DistributedRuntimeService> distributed_runtime_service(
       m, "DistributedRuntimeService");

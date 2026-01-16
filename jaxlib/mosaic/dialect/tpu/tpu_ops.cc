@@ -102,8 +102,7 @@ static FailureOr<APFloat> convertFloatValue(
 
 LogicalResult UnrollVectorsOp::canonicalize(UnrollVectorsOp op,
                                             PatternRewriter &rewriter) {
-  RollVectorsOp roll_op =
-      dyn_cast_or_null<RollVectorsOp>(op.getOperand().getDefiningOp());
+  RollVectorsOp roll_op = op.getOperand().getDefiningOp<RollVectorsOp>();
   if (!roll_op) {
     return failure();
   }
@@ -165,7 +164,7 @@ OpFoldResult BitcastVregOp::fold(FoldAdaptor adaptor) {
 }
 
 LogicalResult MemRefSliceOp::verify() {
-  auto source_type = getMemRefType(getMemRef());
+  auto source_type = getMemRef().getType();
   auto target_type = getType();
   auto source_layout = source_type.getLayout();
   auto target_layout = target_type.getLayout();
@@ -175,6 +174,11 @@ LogicalResult MemRefSliceOp::verify() {
   if (!source_type.hasStaticShape()) {
     return emitOpError(
         "Only slicing of memrefs with static shapes is supported.");
+  }
+  if (getDynamicSizes().size() != target_type.getNumDynamicDims()) {
+    return emitOpError(
+        "Number of provided dynamic dimensions sizes must match the number of "
+        "dynamic dimensions in the target type.");
   }
   auto source_shape = source_type.getShape();
   bool is_semaphore =
@@ -191,57 +195,17 @@ LogicalResult MemRefSliceOp::verify() {
   }
   // TODO(apaszke): Check that the result has a smaller shape.
   // TODO(apaszke): Check that strides are equivalent.
-  // Source and target attributes may be different before propagation is done by
-  // the canonicalizer, so we allow this when attributes are "unset" in the
-  // target type. Note that MemRefType does not allow a null layout so we treat
-  // the default identity affine map as an "unset" value instead.
+  // Source and target memory spaces may be different before propagation is done
+  // by memory space specialization.
   bool is_target_memory_space_provided = target_memory_space != nullptr;
   if (is_target_memory_space_provided &&
       target_memory_space != source_type.getMemorySpace()) {
     return emitOpError(
         "Memory spaces must match if the target memory space is provided.");
   }
-  if (isa<TiledLayoutAttr>(source_layout) &&
-      !isa<TiledLayoutAttr>(target_layout)) {
-    // TODO(slebedev): Remove this special-case once we move layout propagation
-    // to the infer-memref-layout pass.
-  } else if (isa<StridedLayoutAttr>(target_layout)) {
-    SmallVector<int64_t> source_strides;
-    int64_t source_offset;
-    if (failed(
-            source_type.getStridesAndOffset(source_strides, source_offset))) {
-      return failure();
-    }
-    int64_t target_offset = source_offset;
-    if (target_offset != ShapedType::kDynamic) {
-      for (auto [base_idx, source_stride] :
-           llvm::zip(getBaseIdx(), source_strides)) {
-        if (auto idx = getConstantIntValue(base_idx)) {
-          target_offset += *idx * source_stride;
-        } else {
-          target_offset = ShapedType::kDynamic;
-          break;
-        }
-      }
-    }
-    auto expected_layout =
-        StridedLayoutAttr::get(getContext(), target_offset, source_strides);
-    if (target_layout != expected_layout) {
-      return emitOpError("Layout mismatch: got ")
-             << target_layout << ", expected " << expected_layout << ".";
-    }
-  } else {
-    bool is_target_layout_identity_map =
-        isa<AffineMapAttr>(target_layout) && target_layout.isIdentity();
-    if (!is_target_layout_identity_map && target_layout != source_layout) {
-      return emitOpError(
-          "Layouts must match if the target layout is not an identity map.");
-    }
-  }
-  if (getDynamicSizes().size() != target_type.getNumDynamicDims()) {
-    return emitOpError(
-        "Number of provided dynamic dimensions sizes must match the number of "
-        "dynamic dimensions in the target type.");
+  if (isa<TiledLayoutAttr>(source_layout) !=
+      isa<TiledLayoutAttr>(target_layout)) {
+    return emitOpError("Source and target layouts must match.");
   }
   return success();
 }
@@ -276,6 +240,7 @@ struct MemRefSliceFoldConstantDynamicDim
       } else {
         new_dynamic_sizes.push_back(dynamic_size);
       }
+      ++dynamic_dim_index;
     }
     // Update the memref_slice op and create a cast op to convert to the old
     // type.
@@ -349,34 +314,8 @@ LogicalResult MemRefSqueezeOp::verify() {
 
   auto source_layout = source_type.getLayout();
   auto target_layout = target_type.getLayout();
-  if (isa<TiledLayoutAttr>(source_layout) &&
+  if (!isa<TiledLayoutAttr>(source_layout) &&
       !isa<TiledLayoutAttr>(target_layout)) {
-    // TODO(slebedev): Remove this special-case once we move layout propagation
-    // to the infer-memref-layout pass.
-  } else if (isa<StridedLayoutAttr>(target_layout)) {
-    SmallVector<int64_t> source_strides;
-    int64_t source_offset;
-    if (failed(
-            source_type.getStridesAndOffset(source_strides, source_offset))) {
-      return failure();
-    }
-    SmallVector<int64_t> target_strides;
-    for (auto [i, stride] : llvm::enumerate(source_strides)) {
-      if (!llvm::is_contained(squeezed, i)) {
-        target_strides.push_back(stride);
-      }
-    }
-    auto expected_layout =
-        StridedLayoutAttr::get(getContext(), source_offset, target_strides);
-    if (target_layout != expected_layout) {
-      return emitOpError("Layout mismatch: got ")
-             << target_layout << ", expected " << expected_layout << ".";
-    }
-    return success();
-  } else if (!isa<TiledLayoutAttr>(source_layout) &&
-             !isa<TiledLayoutAttr>(target_layout)) {
-    // TODO(slebedev): Remove this branch once we migrate to TPU dialect layout
-    // attribute on SC.
     return success();
   }
 
@@ -1910,6 +1849,11 @@ LogicalResult LogBufferOp::verify() {
         "Shape must have the same length as the rank of the input");
   }
   return success();
+}
+
+LogicalResult LogBufferOp::canonicalize(LogBufferOp op,
+                                        PatternRewriter& rewriter) {
+  return propagateTiledLayoutToConsumer(op, rewriter);
 }
 
 LogicalResult ReciprocalOp::verify() {

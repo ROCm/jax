@@ -47,7 +47,6 @@ from jax._src.interpreters import pxla
 from jax._src.internal_test_util import lax_test_util
 from jax._src.lax import lax as lax_internal
 from jax._src.lax import utils as lax_utils
-from jax._src.lib import jaxlib_extension_version
 from jax._src.util import safe_zip
 from jax._src.tree_util import tree_map
 
@@ -1519,6 +1518,28 @@ class LaxTest(jtu.JaxTestCase):
     numpy_op = lambda x: lax_reference.broadcast_in_dim(x, outshape, dimensions)
     self._CheckAgainstNumpy(numpy_op, op, args_maker)
 
+  @jtu.sample_product(
+      [
+          dict(arg_shape=arg_shape, reps=reps)
+          for arg_shape, reps in [
+              [(3,), (2,)],
+              [(2, 3), (1, 0)],
+              [(2, 3), (1, 2)],
+              [(2, 3), (2, 1)],
+              [(2, 1, 3), (1, 2, 3)],
+              [(1, 1, 4), (1, 3, 1)],
+          ]
+      ],
+      dtype=lax_test_util.default_dtypes,
+  )
+  def testTile(self, arg_shape, reps, dtype):
+    rng = jtu.rand_default(self.rng())
+    args_maker = lambda: [rng(arg_shape, dtype)]
+    op = lambda x: lax.tile(x, reps)
+    numpy_op = lambda x: np.tile(x, reps)
+    self._CompileAndCheck(op, args_maker)
+    self._CheckAgainstNumpy(numpy_op, op, args_maker)
+
   @parameterized.parameters(
     {"inshape": inshape, "dimensions": dimensions, "error_type": error_type,
      "err_msg": err_msg}
@@ -1665,6 +1686,32 @@ class LaxTest(jtu.JaxTestCase):
       lax.pad(np.zeros(2), 0., [(-3, 0, 0)])
     with self.assertRaisesRegex(ValueError, "Dimension size after padding is not at least 0"):
       lax.pad(np.zeros(2), 0., [(-4, 0, 1)])
+
+  @jtu.sample_product(
+    [dict(in_shape=in_shape, window_shape=window_shape,
+          window_strides=window_strides, padding=padding)
+     for in_shape, window_shape, window_strides, padding in [
+       ((10, 10), (5, 5), (1, 1), 'SAME'),
+       ((8, 8), (3, 3), (2, 2), 'SAME_LOWER'),
+       ((7, 7), (3, 3), (2, 2), 'VALID'),
+     ]
+     ],
+  )
+  def testPadtypeToPadsReturnsInts(self, in_shape, window_shape, window_strides,
+                                   padding):
+    """Test that padtype_to_pads returns Python ints, not NumPy scalars."""
+    in_shape_arr = np.array(in_shape, dtype=np.int64)
+    window_shape_arr = np.array(window_shape, dtype=np.int64)
+    window_strides_arr = np.array(window_strides, dtype=np.int64)
+
+    pads = lax.padtype_to_pads(in_shape_arr, window_shape_arr,
+                               window_strides_arr, padding)
+
+    for i, (low, high) in enumerate(pads):
+      self.assertIsInstance(low, int,
+                            f"Padding dimension {i} low value is {type(low)}, expected int")
+      self.assertIsInstance(high, int,
+                            f"Padding dimension {i} high value is {type(high)}, expected int")
 
   def testReverse(self):
     rev = jax.jit(lambda operand: lax.rev(operand, dimensions))
@@ -3775,6 +3822,16 @@ class LaxTest(jtu.JaxTestCase):
 
     jax.grad(loss)(jnp.ones((3,)))
 
+  def test_no_complex_to_real_cast_warning_in_transpose(self):
+    # https://github.com/jax-ml/jax/issues/33521
+    def f(x, y):
+      return jax.lax.dot(x, y).real
+
+    x = jnp.arange(5, dtype='float32')
+    y = jnp.arange(5, dtype='complex64')
+    with self.assertNoWarnings():
+      jax.jacobian(f)(x, y)
+
 
 class LazyConstantTest(jtu.JaxTestCase):
   def _Check(self, make_const, expected):
@@ -3989,9 +4046,7 @@ class FooTyRules:
     phys_aval = core.physical_aval(aval)
     phys_handler_maker = pxla.global_result_handlers[core.ShapedArray]
     phys_handler = phys_handler_maker(phys_aval, phys_sharding, committed)
-    if jaxlib_extension_version >= 390:
-      return phys_handler.wrap(lambda arr: FooArray(aval.shape, arr))
-    return lambda bufs: FooArray(aval.shape, phys_handler(bufs))
+    return phys_handler.wrap(lambda arr: FooArray(aval.shape, arr))
 
 
 class FooTy(dtypes.ExtendedDType):

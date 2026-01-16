@@ -58,7 +58,6 @@ from jax._src.interpreters import partial_eval as pe
 from jax._src.interpreters import mlir
 from jax._src.layout import Layout, AutoLayout, Format
 from jax._src.lib import _jax
-from jax._src.lib import jaxlib_extension_version
 from jax._src.lib import xla_client as xc
 from jax._src.lib.mlir import ir
 from jax._src.lib.mlir.dialects import hlo
@@ -70,7 +69,7 @@ from jax._src.sharding_impls import (
     ArrayMapping, AUTO, UnspecifiedValue, array_mapping_to_axis_resources,
     SingleDeviceSharding, GSPMDSharding, NamedSharding, PartitionSpec as P)
 from jax._src.util import (safe_map, safe_zip, partition_list, wrap_name,
-                           tuple_update, tuple_delete, distributed_debug_log,
+                           tuple_update, distributed_debug_log,
                            unzip2, HashableFunction, weakref_lru_cache,
                            tuple_insert)
 from jax._src.state.types import AbstractRef, RefEffect
@@ -265,10 +264,7 @@ def _shard_abstract_array(size, axis: int, x):
                        f"shape {x.shape}")
   except IndexError:
     raise ValueError(f"Cannot split a {x.dim}D value along axis {axis}") from None
-  if config.pmap_no_rank_reduction.value:
-    return x.update(shape=tuple_update(x.shape, axis, 1))
-  else:
-    return x.update(shape=tuple_delete(x.shape, axis))
+  return x.update(shape=tuple_update(x.shape, axis, 1))
 _shard_aval_handlers[ShapedArray] = _shard_abstract_array
 
 
@@ -755,10 +751,7 @@ def stage_parallel_callable(
       for axis, aval in safe_zip(pci.in_axes, pci.avals))
 
   orig_fun = fun
-  if config.pmap_no_rank_reduction.value:
-    fun = _change_argument_ranks(fun, pci.in_axes, pci.out_axes_thunk)
-  else:
-    fun = orig_fun
+  fun = _change_argument_ranks(fun, pci.in_axes, pci.out_axes_thunk)
   with core.extend_axis_env_nd([(pci.axis_name, pci.global_axis_size)]):
     with dispatch.log_elapsed_time(
         "Finished tracing + transforming {fun_name} for pmap in {elapsed_time} sec",
@@ -975,9 +968,6 @@ _pmap_aval_mapping_handlers: dict[type, AvalMapHandlerPair] = {
 
 def _pmap_unmapped_aval(size: core.AxisSize, axis: int | None,
                        aval: core.AbstractValue) -> core.AbstractValue:
-  if not config.pmap_no_rank_reduction.value:
-    return core.unmapped_aval(size, axis, aval)
-
   _, handler = _pmap_aval_mapping_handlers.get(type(aval), (None, None))
   if handler is not None:
     return handler(size, axis, aval)
@@ -1365,29 +1355,19 @@ class ExecuteReplicated:
         input_bufs = self._add_tokens_to_inputs(input_bufs)
         results = self.xla_executable.execute_sharded(input_bufs, with_tokens=True)
 
-        if jaxlib_extension_version >= 391:
-          result_token_bufs = results.consume_with_handlers(
-              [lambda xs: xs] * len(self.ordered_effects), strict=False)
-        else:
-          result_token_bufs = results.disassemble_prefix_into_single_device_arrays(
-              len(self.ordered_effects))
+        result_token_bufs = results.consume_with_handlers(
+            [lambda xs: xs] * len(self.ordered_effects), strict=False)
         sharded_runtime_token = results.consume_token()
         self._handle_token_bufs(result_token_bufs, sharded_runtime_token)
       else:
         results = self.xla_executable.execute_sharded(input_bufs)
 
-      if jaxlib_extension_version >= 391 or not dispatch.needs_check_special():
-        handlers = self.out_handler.handlers
-        if dispatch.needs_check_special():
-          special_check = functools.partial(
-              dispatch.check_special_array, self.name)
-          handlers = [h.pre_wrap(special_check) for h in handlers]
-        out = results.consume_with_handlers(handlers)
-      else:
-        out_arrays = results.disassemble_into_single_device_arrays()
-        for arrays in out_arrays:
-          dispatch.check_special(self.name, arrays)
-        out = self.out_handler(out_arrays)
+      handlers = self.out_handler.handlers
+      if dispatch.needs_check_special():
+        special_check = functools.partial(
+            dispatch.check_special_array, self.name)
+        handlers = [h.pre_wrap(special_check) for h in handlers]
+      out = results.consume_with_handlers(handlers)
 
       if (self.pgle_profiler is not None and self.pgle_profiler.is_running()
           and len(out) > 0):
@@ -2058,6 +2038,9 @@ def jaxpr_transfer_mem_kinds(jaxpr: core.Jaxpr):
     if eqn.primitive is dispatch.device_put_p:
       out.extend(d for d in eqn.params['devices']
                  if isinstance(d, core.MemorySpace))
+    elif eqn.primitive.name == 'call_exported':
+      out.extend(aval.memory_space for aval in eqn.params['exported'].out_avals)
+
   for subjaxpr in core.subjaxprs(jaxpr):
     out.extend(jaxpr_transfer_mem_kinds(subjaxpr))
   return out

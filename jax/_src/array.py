@@ -39,7 +39,6 @@ from jax._src.interpreters import mlir
 from jax._src.interpreters import pxla
 from jax._src.layout import AutoLayout, Format, Layout
 from jax._src.lib import _jax
-from jax._src.lib import jaxlib_extension_version
 from jax._src.lib import xla_client as xc
 from jax._src.mesh import empty_concrete_mesh
 from jax._src.sharding import Sharding
@@ -326,11 +325,14 @@ class ArrayImpl(basearray.Array):
     return self._value.tolist()
 
   def __format__(self, format_spec):
-    # Simulates behavior of https://github.com/numpy/numpy/pull/9883
-    if self.ndim == 0:
-      return format(self._value[()], format_spec)
+    if isinstance(self.sharding, NamedSharding) and self.sharding.spec.unreduced:
+      return repr(self)
+    elif (self.is_fully_addressable or self.is_fully_replicated and
+          self.sharding.has_addressable_devices):
+      # Simulates behavior of https://github.com/numpy/numpy/pull/9883
+      return format(self._value if self.ndim else self._value[()], format_spec)
     else:
-      return format(self._value, format_spec)
+      return repr(self)
 
   def __getitem__(self, idx):
     from jax._src.lax import lax  # pytype: disable=import-error
@@ -338,17 +340,11 @@ class ArrayImpl(basearray.Array):
     self._check_if_deleted()
 
     if isinstance(self.sharding, PmapSharding):
-      if config.pmap_no_rank_reduction.value:
-        cidx = idx if isinstance(idx, tuple) else (idx,)
+      cidx = idx if isinstance(idx, tuple) else (idx,)
 
-        padded_cidx = tuple(
-            slice(i, i + 1, None) if isinstance(i, int) else i for i in cidx
-        ) + (slice(None),) * (len(self.shape) - len(cidx))
-      else:
-        if not isinstance(idx, tuple):
-          padded_cidx = (idx,) + (slice(None),) * (len(self.shape) - 1)
-        else:
-          padded_cidx = idx + (slice(None),) * (len(self.shape) - len(idx))
+      padded_cidx = tuple(
+          slice(i, i + 1, None) if isinstance(i, int) else i for i in cidx
+      ) + (slice(None),) * (len(self.shape) - len(cidx))
 
       indices = tuple(self.sharding.devices_indices_map(self.shape).values())
       try:
@@ -359,12 +355,11 @@ class ArrayImpl(basearray.Array):
         out = self._arrays[arr_idx]
         sharding = SingleDeviceSharding(_get_device(out))
 
-        if config.pmap_no_rank_reduction.value:
-          # If cidx was the index of a single shard, then it corresponds to one
-          # shard of the chunked dimension.
-          dims = tuple(i for i, x in enumerate(cidx) if isinstance(x, int))
-          # Squeeze on committed arrays to avoid data movement to shard 0.
-          out = lax.squeeze(out, dimensions=dims)
+        # If cidx was the index of a single shard, then it corresponds to one
+        # shard of the chunked dimension.
+        dims = tuple(i for i, x in enumerate(cidx) if isinstance(x, int))
+        # Squeeze on committed arrays to avoid data movement to shard 0.
+        out = lax.squeeze(out, dimensions=dims)
 
         return ArrayImpl(
             out.aval, sharding, [out], committed=False, _skip_checks=True)
@@ -418,7 +413,8 @@ class ArrayImpl(basearray.Array):
   def __str__(self):
     if isinstance(self.sharding, NamedSharding) and self.sharding.spec.unreduced:
       return repr(self)
-    elif self.is_fully_addressable or self.is_fully_replicated:
+    elif (self.is_fully_addressable or self.is_fully_replicated and
+          self.sharding.has_addressable_devices):
       return str(self._value)  # doesn't print Array(...)
     else:
       return repr(self)
@@ -1288,12 +1284,9 @@ def _array_global_result_handler(global_aval, out_sharding, committed):
   if global_aval.dtype == dtypes.float0:
     def handler(xs):
       return np.zeros(global_aval.shape, dtypes.float0)
-    if jaxlib_extension_version >= 390:
-      phys_aval = core.physical_aval(global_aval)
-      return xc.array_result_handler(phys_aval, out_sharding, committed=committed,
-                                     _skip_checks=True).wrap(handler)
-    else:
-      return handler
+    phys_aval = core.physical_aval(global_aval)
+    return xc.array_result_handler(phys_aval, out_sharding, committed=committed,
+                                   _skip_checks=True).wrap(handler)
   if dtypes.issubdtype(global_aval.dtype, dtypes.extended):
     return global_aval.dtype._rules.global_sharded_result_handler(
         global_aval, out_sharding, committed)
@@ -1307,12 +1300,9 @@ def _array_local_result_handler(aval, sharding, indices):
   if aval.dtype == dtypes.float0:
     def handler(xs):
       return np.zeros(aval.shape, dtypes.float0)
-    if jaxlib_extension_version >= 390:
-      phys_aval = core.physical_aval(aval)
-      return xc.array_result_handler(phys_aval, sharding, committed=True,
-                                     _skip_checks=True).wrap(handler)
-    else:
-      return handler
+    phys_aval = core.physical_aval(aval)
+    return xc.array_result_handler(phys_aval, sharding, committed=True,
+                                   _skip_checks=True).wrap(handler)
   if dtypes.issubdtype(aval.dtype, dtypes.extended):
     return aval.dtype._rules.local_sharded_result_handler(
         aval, sharding, indices)
@@ -1341,13 +1331,7 @@ pxla.shard_arg_handlers[core.Token] = _token_shard_arg
 def _token_global_result_handler(global_aval, out_sharding, committed):
   array_handler = _array_global_result_handler(
       core.get_token_aval(), out_sharding, committed)
-  if jaxlib_extension_version >= 390:
-    def wrapper(array):
-      return core.Token(array)
-    return array_handler.wrap(wrapper)  # type: ignore
-  else:
-    def old_wrapper(*args, **kwargs):
-      out_buf = array_handler(*args, **kwargs)
-      return core.Token(out_buf)
-    return old_wrapper
+  def wrapper(array):
+    return core.Token(array)
+  return array_handler.wrap(wrapper)  # type: ignore
 pxla.global_result_handlers[core.AbstractToken] = _token_global_result_handler

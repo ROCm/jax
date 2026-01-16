@@ -16,12 +16,12 @@ limitations under the License.
 #ifndef JAXLIB_MOSAIC_DIALECT_TPU_DIALECT_H_
 #define JAXLIB_MOSAIC_DIALECT_TPU_DIALECT_H_
 
-#include <array>
 #include <cstdint>
 #include <memory>
 #include <string_view>
 #include <utility>
 
+#include "absl/types/span.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -57,10 +57,14 @@ struct TpuTilingFlags {
 
 std::pair<bool, bool> mightCommunicateBetweenChips(Operation *op);
 
+// Creates a pass that infers the layout of memrefs in the given function.
+//
+// The `target_shape` can either be
+// * 1D -- (lane count) SparseCore tiling; or
+// * 2D -- (sublane count, lane count) TensorCore tiling.
 std::unique_ptr<OperationPass<func::FuncOp>> createInferMemRefLayoutPass(
-    int hardware_generation, std::array<int64_t, 2> target_shape,
-    const TpuTilingFlags& tpu_tiling_flags, bool align = true,
-    bool infer_kernel_arguments = true);
+    int hardware_generation, absl::Span<const int64_t> target_shape,
+    const TpuTilingFlags& tpu_tiling_flags, bool align = true);
 
 #define GEN_PASS_DECL_MOSAICSERDEPASS
 #include "jaxlib/mosaic/dialect/tpu/tpu_passes.h.inc"

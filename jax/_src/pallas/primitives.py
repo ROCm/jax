@@ -1141,7 +1141,20 @@ state_discharge.register_discharge_rule(semaphore_read_p)(
 )
 
 
-DeviceId = int | jax_typing.Array | None | tuple[int | jax_typing.Array, ...] | dict[Any, int | jax_typing.Array]
+DeviceId = (
+    int
+    | jax_typing.Array
+    | None
+    | tuple[int | jax_typing.Array, ...]
+    | dict[Any, int | jax_typing.Array]
+)
+
+class SemaphoreEffect(effects.Effect):
+  pass
+sem_effect = SemaphoreEffect()
+effects.control_flow_allowed_effects.add_type(SemaphoreEffect)
+effects.custom_derivatives_allowed_effects.add_type(SemaphoreEffect)
+pallas_core.kernel_local_effects.add_type(SemaphoreEffect)
 
 
 semaphore_signal_p = jax_core.Primitive('semaphore_signal')
@@ -1201,7 +1214,7 @@ def _semaphore_signal_abstract_eval(
   check_sem_avals(sem_aval, sem_transforms_avals, "signal")
   if value_aval.dtype != jnp.dtype("int32"):
     raise ValueError(f"Must signal an int32 value, but got {value_aval.dtype}")
-  effs : set[effects.Effect] = set()
+  effs: set[effects.Effect] = {sem_effect}
   if device_id_aval is not None:
     device_id_flat_avals = tree_util.tree_leaves(device_id_aval)
     for aval in device_id_flat_avals:
@@ -1295,7 +1308,7 @@ def semaphore_wait(
   flat_args, args_tree = tree_util.tree_flatten(args)
   semaphore_wait_p.bind(*flat_args, args_tree=args_tree)
 
-@semaphore_wait_p.def_abstract_eval
+@semaphore_wait_p.def_effectful_abstract_eval
 def _semaphore_wait_abstract_eval(*avals, args_tree):
   sem_aval, sem_transforms_avals, value_aval, _ = tree_util.tree_unflatten(
       args_tree, avals
@@ -1303,7 +1316,7 @@ def _semaphore_wait_abstract_eval(*avals, args_tree):
   check_sem_avals(sem_aval, sem_transforms_avals, "wait")
   if value_aval.dtype != jnp.dtype("int32"):
     raise ValueError("Must wait an int32 value.")
-  return []
+  return [], {sem_effect}
 
 def _semaphore_wait_pp_eqn(eqn: jax_core.JaxprEqn,
                              context: jax_core.JaxprPpContext,
@@ -1413,10 +1426,12 @@ def device_id_to_logical(
     device_id: ir.Value | tuple[ir.Value, ...] | dict[Any, ir.Value],
     device_id_type: DeviceIdType,
     get_axis_index,
-) -> tuple[ir.Value, dict[Any, ir.Value]]:
+) -> tuple[ir.Value | None, dict[Any, ir.Value]]:
   """Normalizes a device id into a logical device id and axes that don't correspond to JAX mesh axes.
 
-  The indexing implied by the returned axis dict should be handled by the caller.
+  The indexing implied by the returned axis dict should be handled by the
+  caller. If there are no cross-device operations, then the returned logical
+  device id will be None.
   """
   non_mesh_axes = {}
   if isinstance(device_id, dict):
@@ -1441,8 +1456,9 @@ def device_id_to_logical(
       )
 
     i32 = ir.IntegerType.get_signless(32)
-    if len(device_ids) == 0:
-      return arith.constant(i32, 0), non_mesh_axes
+    if not device_ids:
+      # If there are no device ids, then it is purely local communication.
+      return None, non_mesh_axes
     return functools.reduce(
         arith.addi,
         (
@@ -1459,10 +1475,17 @@ delay_p = jax_core.Primitive("delay")
 delay_p.multiple_results = True
 
 
-@delay_p.def_abstract_eval
+class DelayEffect(effects.Effect):
+  pass
+delay_effect = DelayEffect()
+effects.control_flow_allowed_effects.add_type(DelayEffect)
+pallas_core.kernel_local_effects.add_type(DelayEffect)
+
+
+@delay_p.def_effectful_abstract_eval
 def _delay_abstract_eval(nanos):
   del nanos
-  return []
+  return [], {delay_effect}
 
 
 def delay(nanos: int | jax_typing.Array) -> None:

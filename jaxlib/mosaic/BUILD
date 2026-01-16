@@ -59,7 +59,6 @@ cc_library(
         ":tpu_inc_gen",
         "@com_google_absl//absl/algorithm:container",
         "@com_google_absl//absl/hash",
-        "@com_google_absl//absl/log",
         "@com_google_absl//absl/log:check",
         "@com_google_absl//absl/status",
         "@com_google_absl//absl/strings",
@@ -68,8 +67,6 @@ cc_library(
         "@llvm-project//llvm:Support",
         "@llvm-project//mlir:ArithDialect",
         "@llvm-project//mlir:CommonFolders",
-        "@llvm-project//mlir:DataLayoutInterfaces",
-        "@llvm-project//mlir:Dialect",
         "@llvm-project//mlir:DialectUtils",
         "@llvm-project//mlir:FuncDialect",
         "@llvm-project//mlir:IR",
@@ -333,15 +330,6 @@ cc_test(
         "@llvm-project//mlir:Support",
         "@xla//xla/mlir/utils:error_util",
     ],
-)
-
-filegroup(
-    name = "extension_srcs",
-    srcs = [
-        "dialect/tpu/transforms/extensions/apply_vector_layout_extensions.cc",
-        "dialect/tpu/transforms/extensions/infer_vector_layout_extensions.cc",
-    ],
-    # compatible with libtpu
 )
 
 cc_library(

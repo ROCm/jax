@@ -686,6 +686,18 @@ class LaxAutodiffTest(jtu.JaxTestCase):
     result2, _ = jax.value_and_grad(f, 0)(x, y)
     self.assertAllClose(result1, result2)
 
+  def testGradOfVmapOfDynamicSlice(self):
+    # Regression test for https://github.com/jax-ml/jax/issues/34228.
+    def f(x, i):
+      return jax.lax.dynamic_index_in_dim(x, i, axis=0, keepdims=False)
+
+    x = jax.numpy.array([1.0])
+    i = jax.numpy.array([1])  # out-of-bound index
+    expected = jax.numpy.array([[1.0]])
+
+    self.assertArraysEqual(jax.jacrev(f)(x, i[0]), expected[0, 0])
+    self.assertArraysEqual(jax.jacrev(jax.vmap(f, (None, 0)))(x, i), expected)
+
   @jtu.sample_product(
     [dict(shape=shape, perm=perm)
       for shape, perm in [
@@ -1179,6 +1191,23 @@ class LaxAutodiffTest(jtu.JaxTestCase):
     actual = jax.jacrev(jax.jit(jax.lax.pow))(x, y)  # no error
     expected = jax.numpy.diag(y * x ** (y - 1))
     self.assertArraysEqual(actual, expected)
+
+  @jtu.sample_product(
+      [
+          dict(arg_shape=arg_shape, reps=reps)
+          for arg_shape, reps in [
+              [(3,), (2,)],
+              [(2, 3), (1, 2)],
+              [(1, 1, 4), (1, 3, 1)],
+          ]
+      ],
+      dtype=grad_float_dtypes,
+  )
+  def testTileAutodiff(self, arg_shape, reps, dtype):
+    rng = jtu.rand_default(self.rng())
+    args_maker = lambda: [rng(arg_shape, dtype)]
+    op = lambda x: lax.tile(x, reps)
+    check_grads(op, args_maker(), order=3, modes=["fwd", "rev"], eps=1.)
 
 
 if __name__ == '__main__':

@@ -49,6 +49,9 @@ class PallasSCTest(jtu.JaxTestCase):
       # TODO(apaszke,slebedev): Fix those.
       self.skipTest("Many tests are failing on Cloud TPUs")
 
+    if not jtu.is_cloud_tpu_at_least(2026, 1, 17):
+      self.skipTest("Need newer libtpu")
+
     super().setUp()
 
   @property
@@ -160,7 +163,12 @@ class DebugPrintTest(PallasSCTest):
           pl.debug_print("No values")
 
     compiled_kernel = jax.jit(
-        kernel, compiler_options={"xla_tpu_enable_sc_log_recorder": "true"}
+        kernel,
+        compiler_options={
+            "xla_tpu_enable_sc_log_recorder": "true",
+            # TODO(slebedev): This should not be necessary.
+            "xla_sc_force_aligned_buffers": "false",
+        },
     )
     with jtu.capture_stderr() as get_output:
       jax.block_until_ready(compiled_kernel(int32s, int16s, int8s))
@@ -295,14 +303,9 @@ class VectorSubcoreTest(PallasSCTest):
   @jtu.thread_unsafe_test(condition=not jtu.hypothesis_is_thread_safe())
   @hp.given(hps.data())
   def test_block_spec_untiled_slicing(self, data):
-    if not self.USE_TC_TILING:
-      self.skipTest(
-          "Test uncovers a bug: @reproduce_failure('6.80.0', b'AAEBAQAAAAA=')"
-      )
-    else:
-      self.skipTest(
-          "Test uncovers a bug: @reproduce_failure('6.80.0', b'AAEAAQAAAAA=')"
-      )
+    self.skipTest(
+        "Test uncovers a bug: @reproduce_failure('6.80.0', b'AAEBAQAAAAA=')"
+    )
     slice_shape = data.draw(
         hps.lists(
             hps.integers(1, 3), min_size=(1 + self.USE_TC_TILING), max_size=4
@@ -1972,6 +1975,7 @@ class PallasSparsecoreAsyncTest(PallasSCTest):
           lambda _: None,
           out_shape=pltpu.SemaphoreType.DMA(()),
           out_specs=pl.BlockSpec(memory_space=pltpu.SEMAPHORE),
+          grid=(1,),
           compiler_params=pltpu.CompilerParams(
               dimension_semantics=["core_parallel"],
               kernel_type=pltpu.KernelType.SC_SCALAR_SUBCORE,

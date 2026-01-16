@@ -1006,7 +1006,9 @@ def vmap(fun: F,
          out_axes: Any = 0,
          axis_name: AxisName | None = None,
          axis_size: int | None = None,
-         spmd_axis_name: AxisName | tuple[AxisName, ...] | None = None) -> F:
+         spmd_axis_name: AxisName | tuple[AxisName, ...] | None = None,
+         sum_match: bool = False
+         ) -> F:
   """Vectorizing map. Creates a function which maps ``fun`` over argument axes.
 
   Args:
@@ -1205,9 +1207,10 @@ def vmap(fun: F,
     try:
       axis_data = batching.AxisData(axis_name, axis_size_, spmd_axis_name,
                                     explicit_mesh_axis)
-      out_flat = batching.batch(
+      out_flat, inferred_out_axes = batching.batch(
           flat_fun, axis_data, in_axes_flat,
-          lambda: flatten_axes("vmap out_axes", out_tree(), out_axes)
+          lambda: flatten_axes("vmap out_axes", out_tree(), out_axes),
+          sum_match=sum_match
       ).call_wrapped(*args_flat)
     except batching.SpecMatchError as e:
       out_axes_flat = flatten_axes("vmap out_axes", out_tree(), out_axes)
@@ -1217,7 +1220,11 @@ def vmap(fun: F,
       path, _ = pairs[e.leaf_idx]
       raise ValueError(f'at vmap out_axes{keystr(path)}, got axis spec {e.dst} '
                        f'but output was batched on axis {e.src}') from None
-    return tree_unflatten(out_tree(), out_flat)
+    if any(d is batching.infer for d in tree_leaves(out_axes)):
+      return (tree_unflatten(out_tree(), out_flat),
+              tree_unflatten(out_tree(), inferred_out_axes))
+    else:
+      return tree_unflatten(out_tree(), out_flat)
 
   return cast(F, vmap_f)
 
@@ -2799,14 +2806,11 @@ def device_put_sharded(shards: Sequence[Any], devices: Sequence[xc.Device]):  # 
       sharding = PmapSharding(np.array(devices), sharding_spec)
     if dtypes.issubdtype(stacked_aval.dtype, dtypes.extended):
       return stacked_aval.dtype._rules.device_put_sharded(xs, stacked_aval, sharding, devices)
-    if config.pmap_no_rank_reduction.value:
-      ys = []
-      for x in xs:
-        if not isinstance(x, (np.ndarray, basearray.Array)):
-          x = np.asarray(x)
-        ys.append(x[None])
-    else:
-      ys = xs
+    ys = []
+    for x in xs:
+      if not isinstance(x, (np.ndarray, basearray.Array)):
+        x = np.asarray(x)
+      ys.append(x[None])
     return pxla.batched_device_put(stacked_aval, sharding, ys, list(devices))
 
 
@@ -2851,13 +2855,10 @@ def device_put_replicated(x: Any, devices: Sequence[xc.Device]):  # noqa: F811
   def _device_put_replicated(x):
     aval = core.unmapped_aval(len(devices), 0, core.get_aval(x))
     assert isinstance(aval, ShapedArray)
-    if config.pmap_no_rank_reduction.value:
-      if isinstance(x, (np.ndarray, basearray.Array)):
-        buf = device_put(x[None], devices[0])
-      else:
-        buf = device_put(x, devices[0])[None]
+    if isinstance(x, (np.ndarray, basearray.Array)):
+      buf = device_put(x[None], devices[0])
     else:
-      buf = device_put(x, devices[0])
+      buf = device_put(x, devices[0])[None]
     if config.pmap_shmap_merge.value:
       mesh = Mesh(np.array(devices), ('_device_put_replicated',))
       sharding = NamedSharding(mesh, P('_device_put_replicated'))
@@ -3194,7 +3195,6 @@ def clear_caches():
   # Clear all C++ compiled executable caches for pjit
   pjit._cpp_pjit_cache_fun_only.clear()
   pjit._cpp_pjit_cache_explicit_attributes.clear()
-  pjit._infer_params_cached.cache_clear()
   xc._xla.PjitFunctionCache.clear_all()
 
   # Clear all C++ compiled executable caches for pmap

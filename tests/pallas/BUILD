@@ -505,6 +505,11 @@ jax_multiplatform_test(
 jax_multiplatform_test(
     name = "tpu_pallas_distributed_test",
     srcs = ["tpu_pallas_distributed_test.py"],
+    # TODO(sharadmv): fix timeouts
+    disable_configs = [
+        "tpu_7x",
+        "tpu_7x_x4",
+    ],
     enable_backends = ["tpu"],
     tags = ["multiaccelerator"],
     deps = [
@@ -731,6 +736,9 @@ jax_multiplatform_test(
     name = "tpu_splash_attention_kernel_test",
     srcs = [
         "tpu_splash_attention_kernel_test.py",
+    ],
+    disable_configs = [
+        "tpu_7x_x4",  # not a multi-chip test
     ],
     enable_backends = ["tpu"],
     minimal_shard_count = 8,
@@ -1409,4 +1417,33 @@ jax_multiplatform_test(
     deps = [
         "//jax/experimental:pallas_tpu",
     ] + py_deps("absl/testing"),
+)
+
+jax_multiplatform_test(
+    name = "gpu_pallas_interpret_test",
+    srcs = ["gpu_pallas_interpret_test.py"],
+    enable_backends = ["cpu"],
+    deps = [
+        "//jax/_src/pallas/mosaic_gpu/interpret:interpret_pallas_call",
+        "//jax/experimental:pallas",
+        "//jax/experimental:pallas_mosaic_gpu",
+    ] + py_deps([
+        "absl/testing",
+        "numpy",
+    ]),
+)
+
+jax_multiplatform_test(
+    name = "tpu_trace_value_test",
+    srcs = ["tpu_trace_value_test.py"],
+    enable_backends = ["tpu"],
+    enable_configs = [
+        "tpu_7x",
+    ],
+    deps = [
+        "//jax/experimental:pallas",
+        "//jax/experimental:pallas_tpu",
+    ] + py_deps([
+        "absl/testing",
+    ]),
 )

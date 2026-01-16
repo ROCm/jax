@@ -2708,6 +2708,39 @@ def broadcast_to_rank(x: ArrayLike, rank: int) -> Array:
     return asarray(x)
   return broadcast(x, (1,) * (rank - ndim))
 
+
+def tile(operand: ArrayLike, reps: Sequence[int]) -> Array:
+  """Tiles an array by repeating it along each dimension.
+
+  Args:
+    operand: an array to tile.
+    reps: a sequence of integers representing the number of repeats for each
+      dimension. Must have the same length as ``operand.ndim``.
+
+  Returns:
+    A tiled array with shape ``(operand.shape[0] * reps[0], ...,
+    operand.shape[-1] * reps[-1])``.
+
+  Examples:
+    >>> x = jnp.array([[1, 2], [3, 4]])
+    >>> lax.tile(x, (2, 3))
+    Array([[1, 2, 1, 2, 1, 2],
+           [3, 4, 3, 4, 3, 4],
+           [1, 2, 1, 2, 1, 2],
+           [3, 4, 3, 4, 3, 4]], dtype=int32)
+
+    >>> y = jnp.array([1, 2, 3])
+    >>> lax.tile(y, (2,))
+    Array([1, 2, 3, 1, 2, 3], dtype=int32)
+
+    >>> z = jnp.array([[1], [2]])
+    >>> lax.tile(z, (1, 3))
+    Array([[1, 1, 1],
+           [2, 2, 2]], dtype=int32)
+  """
+  return tile_p.bind(operand, reps=tuple(reps))
+
+
 def reshape(operand: ArrayLike, new_sizes: Shape,
             dimensions: Sequence[int] | None = None,
             *, out_sharding: NamedSharding | P | None = None) -> Array:
@@ -5451,7 +5484,8 @@ def _dot_general_transpose_lhs(g, x, y, *, dimension_numbers, precision,
                                 out_sharding=ds)
   x_bar = transpose(dot_general_out, tuple(out_axes))
   if x_bar.dtype != x.aval.dtype:
-    x_bar = _convert_element_type(x_bar, x.aval.dtype, x.aval.weak_type)
+    x_bar = _convert_element_type(x_bar, x.aval.dtype, x.aval.weak_type,
+                                  warn_on_complex_to_real_cast=False)
   return x_bar
 
 def _dot_general_transpose_rhs(g, x, y, *, dimension_numbers, precision,
@@ -6530,6 +6564,59 @@ pe.custom_partial_eval_rules[broadcast_in_dim_p] = _broadcast_in_dim_partial_eva
 pe.custom_staging_rules[broadcast_in_dim_p] = _broadcast_in_dim_staging_rule
 core.custom_typechecks[broadcast_in_dim_p] = _broadcast_in_dim_typecheck_rule
 mlir.register_lowering(broadcast_in_dim_p, _broadcast_in_dim_lower)
+
+
+def _tile_lower(ctx, x, reps) -> Sequence[ir.Value]:
+  aval_out, = ctx.avals_out
+  x_aval, = ctx.avals_in
+  expand_shape = tuple(j for i in x_aval.shape for j in [1, i])
+  expand_sharding = NamedSharding(
+      x_aval.sharding.mesh.abstract_mesh,
+      P(*tuple(s for d in x_aval.sharding.spec for s in [None, d])),
+  )
+  reshaped_aval = x_aval.update(shape=expand_shape, sharding=expand_sharding)
+  reshaped = mlir.reshape(ctx, x, reshaped_aval)
+  reshaped = mlir.lower_with_sharding_in_types(ctx, reshaped, reshaped_aval)
+  broadcast_shape = tuple(k for pair in zip(reps, x_aval.shape) for k in pair)
+  broadcasted_aval = x_aval.update(
+      shape=broadcast_shape, sharding=expand_sharding)
+  broadcasted = mlir.broadcast_in_dim(ctx, reshaped,
+      broadcasted_aval, broadcast_dimensions=tuple(range(2 * x_aval.ndim)))
+  broadcasted = mlir.lower_with_sharding_in_types(
+      ctx, broadcasted, broadcasted_aval)
+  out = mlir.reshape(ctx, broadcasted, aval_out)
+  return [mlir.lower_with_sharding_in_types(ctx, out, aval_out)]
+
+def _tile_abstract_eval(x, reps):
+  if x.ndim != len(reps):
+    raise TypeError(
+        f"reps length must be equal to the ndim of x, got {len(reps)=} "
+        f"and {x.ndim=}.")
+  return x.update(shape=tuple(np.multiply(x.shape, reps)))
+
+def _tile_transpose_rule(ct, operand, *, reps):
+  if type(ct) is ad_util.Zero:
+    return [ad_util.Zero(operand.aval)]
+  if not isinstance(operand, ad.UndefinedPrimal):
+    return [None]  # transpose wrt literal
+  ct_reshaped = reshape(
+      ct, tuple(k for pair in zip(reps, operand.aval.shape) for k in pair))
+  axes = tuple(2*i for i in range(operand.aval.ndim))
+  return [reduce_sum(ct_reshaped, axes)]
+
+def _tile_batch_rule(batched_args, batch_dims, *, reps):
+  operand, = batched_args
+  bdim, = batch_dims
+  new_reps = list(reps)
+  new_reps.insert(bdim, 1)
+  return tile(operand, reps=new_reps), bdim
+
+tile_p = core.Primitive('tile')
+tile_p.def_abstract_eval(_tile_abstract_eval)
+tile_p.def_impl(partial(dispatch.apply_primitive, tile_p))
+ad.deflinear2(tile_p, _tile_transpose_rule)
+batching.primitive_batchers[tile_p] = _tile_batch_rule
+mlir.register_lowering(tile_p, _tile_lower)
 
 
 def _clamp_shape_rule(min, operand, max):
@@ -8482,22 +8569,50 @@ class PaddingType(enum.Enum):
   SAME_LOWER = 3
 
 
-def padtype_to_pads(in_shape, window_shape, window_strides, padding):
-  """Convert padding string to list of pairs of pad values."""
+def padtype_to_pads(
+    in_shape: Sequence[int] | np.ndarray,
+    window_shape: Sequence[int] | np.ndarray,
+    window_strides: Sequence[int] | np.ndarray,
+    padding: str | PaddingType) -> list[tuple[int, int]]:
+  """Convert a padding specification to a list of pad value pairs.
 
+  This utility resolves abstract convolution padding modes into concrete
+  per-dimension integer padding values based on the input and window geometry.
+
+  Args:
+    in_shape: Sequence of integers specifying the input spatial shape.
+    window_shape: Sequence of integers specifying the kernel/window spatial shape.
+    window_strides: Sequence of integers specifying the spatial strides.
+    padding: Either a padding string (``'SAME'``, ``'SAME_LOWER'``, or ``'VALID'``)
+      or a ``PaddingType`` enum value. Other values will result in an error.
+
+  Returns:
+    A list of ``(low, high)`` integer tuples, one for each spatial dimension,
+    specifying the padding to apply before and after each dimension.
+
+  Raises:
+    RuntimeError: If ``padding`` is a string but not one of the supported values.
+    TypeError: If ``padding`` is not a supported string or ``PaddingType`` value.
+
+  Notes:
+    - ``'VALID'``: Returns zero padding ``(0, 0)`` for all dimensions.
+    - ``'SAME'``: Pads such that the output spatial shape is computed via
+      ceiling division of ``in_shape`` by ``window_strides``. If the required
+      padding amount is odd, the extra padding is added to the **end**
+      (high side) of the dimension.
+    - ``'SAME_LOWER'``: Similar to ``'SAME'``, but if the required padding
+      amount is odd, the extra padding is added to the **start**
+      (low side) of the dimension.
+  """
   if isinstance(padding, str):
-    mapping = {
-        'VALID': PaddingType.VALID,
-        'SAME': PaddingType.SAME,
-        'SAME_LOWER': PaddingType.SAME_LOWER,
-    }
     try:
-      padding = mapping[padding.upper()]
+      padding = PaddingType[padding.upper()]
     except KeyError as err:
-      msg = "Unrecognized padding type: expected 'VALID' or 'SAME', got {}."
-      raise RuntimeError(msg.format(padding)) from err
+      raise RuntimeError(
+        f"Unrecognized padding type: expected 'VALID', 'SAME', or 'SAME_LOWER', got {padding}."
+      ) from err
 
-  if padding == PaddingType.SAME or padding == PaddingType.SAME_LOWER:
+  if padding in (PaddingType.SAME, PaddingType.SAME_LOWER):
     out_shape = _ceil_divide(in_shape, window_strides)
     pad_sizes = (core.max_dim(d, 0)
                  for d in (out_shape - 1) * window_strides +
@@ -8511,12 +8626,11 @@ def padtype_to_pads(in_shape, window_shape, window_strides, padding):
           (pad_size - pad_size // 2, pad_size // 2) for pad_size in pad_sizes
       ]
     # Avoids verbose numpy scalars in jaxprs.
-    return [p.item() if isinstance(p, np.generic) else p for p in pads]
+    return tree_util.tree_map(lambda x: x.item() if isinstance(x, np.generic) else x, pads)
   elif padding == PaddingType.VALID:
     return [(0, 0)] * len(in_shape)
   else:
-    msg = "Unknown padding type: {}."
-    raise TypeError(msg.format(padding))
+    raise TypeError(f"Unknown padding type: {padding}.")
 
 
 # Map of lax function to equivalent jax.numpy function for use in error string below.

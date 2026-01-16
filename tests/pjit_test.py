@@ -41,6 +41,7 @@ from jax import lax
 from jax._src.lax import lax as lax_internal
 from jax.lax import with_sharding_constraint
 from jax._src import prng
+from jax._src import lib
 from jax.sharding import (PartitionSpec as P, Mesh, auto_axes, explicit_axes,
                           AbstractDevice)
 from jax.experimental import multihost_utils
@@ -3095,6 +3096,7 @@ class ArrayPjitTest(jtu.JaxTestCase):
       pjit(_pmapped_fun)(inputs)  # doesn't crash
       jax.jit(_pmapped_fun)(inputs)  # doesn't crash
 
+  @unittest.skipIf(lib.jaxlib_extension_version < 394, "jaxlib version")
   @jtu.thread_unsafe_test()  # logging is not thread-safe
   def test_cache_miss_explanations_sharding_mismatch(self):
     mesh = jtu.create_mesh((2,), ('x',))
@@ -3282,8 +3284,6 @@ class ArrayPjitTest(jtu.JaxTestCase):
   def test_device_put_grad(self):
     if jax.device_count() < 8:
       self.skipTest("Requires >=8 devices.")
-    if jtu.is_device_tpu(7, 'x'):
-      self.skipTest('TODO(b/453664256): test fails')
 
     def _test(fun, inp, np_inp, in_s):
       out = fun(inp)
@@ -10072,6 +10072,32 @@ class ShardingInTypesTest(jtu.JaxTestCase):
       return f(x)
 
     jax.jit(jax.grad(lambda x: g(x).sum()))(jnp.arange(8.))  # doesn't crash
+
+  @jtu.with_explicit_mesh((4, 2), ('x', 'y'))
+  def test_tile(self, mesh):
+    @jax.jit
+    def tile(x):
+      return jnp.tile(x, (2, 3))
+
+    x = jax.device_put(np.ones((32, 64)), P('x', 'y'))
+    out = tile(x)
+    self.assertEqual(out.sharding, NamedSharding(mesh, P('x', 'y')))
+    self.check_wsc_in_lowered(tile.lower(x).as_text())
+
+    x = jax.device_put(np.ones((32, 64)), P('x', None))
+    out = tile(x)
+    self.assertEqual(out.sharding, NamedSharding(mesh, P('x', None)))
+    self.check_wsc_in_lowered(tile.lower(x).as_text())
+
+    x = jax.device_put(np.ones((32, 64)), P(None, 'y'))
+    out = tile(x)
+    self.assertEqual(out.sharding, NamedSharding(mesh, P(None, 'y')))
+    self.check_wsc_in_lowered(tile.lower(x).as_text())
+
+    x = jax.device_put(np.ones((32, 64)), P(None, ('x', 'y')))
+    out = tile(x)
+    self.assertEqual(out.sharding, NamedSharding(mesh, P(None, ('x', 'y'))))
+    self.check_wsc_in_lowered(tile.lower(x).as_text())
 
 
 @jtu.pytest_mark_if_available('multiaccelerator')

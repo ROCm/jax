@@ -27,7 +27,6 @@ from jax import numpy as jnp
 from jax._src.lib import mosaic_gpu_dialect as dialect  # noqa: F401
 from jax.interpreters import mlir
 from jaxlib.mlir import ir
-from jaxlib.mlir.dialects import _gpu_ops_gen
 from jaxlib.mlir.dialects import arith
 from jaxlib.mlir.dialects import builtin
 from jaxlib.mlir.dialects import gpu
@@ -189,7 +188,7 @@ def debug_print(fmt, *args, uniform=True, scope=None):
       else contextlib.nullcontext
   )
   with ctx():
-    _gpu_ops_gen.printf(fmt.format(*type_formats) + "\n", new_args)
+    gpu.printf(fmt.format(*type_formats) + "\n", *new_args)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -1087,6 +1086,28 @@ class BarrierRef:
         self.get_ptr(), bytes, predicate=predicate
     )
 
+  def complete_tx(
+      self, bytes: int | ir.Value, predicate: ir.Value | None = None
+  ):
+    if isinstance(bytes, int):
+      bytes = c(bytes, ir.IntegerType.get_signless(32))
+    elif isinstance(bytes.type, ir.IndexType):
+      i32 = ir.IntegerType.get_signless(32)
+      bytes = arith.index_cast(i32, bytes)
+
+    pred_ptx = pred_constraint = ""
+    if predicate is not None:
+      pred_ptx = "@$2"
+      pred_constraint = ",b"
+
+    llvm.inline_asm(
+        ir.Type.parse("!llvm.void"),
+        [self.get_ptr(), bytes] + ([predicate] if predicate is not None else []),
+        f"{pred_ptx} mbarrier.complete_tx.shared::cta.b64 [$0], $1;",
+        "l,r" + pred_constraint,
+        has_side_effects=True,
+    )
+
   def get_ptr(self):
     i64 = ir.IntegerType.get_signless(64)
     return getelementptr(self.base_address, [self.offset], i64)
@@ -1743,6 +1764,34 @@ def shfl_bfly(x: ir.Value, distance: int | ir.Value):
   return bitcast(y, result_type)
 
 
+def redux(x: ir.Value, mask: ir.Value, kind: nvvm.ReduxKind):
+  i32 = ir.IntegerType.get_signless(32)
+  if isinstance(vec_ty := x.type, ir.VectorType):
+    if bitwidth(vec_ty.element_type) != 32:
+      raise ValueError("Only 32-bit types supported")
+    [vec_len] = vec_ty.shape
+    result = llvm.mlir_undef(x.type)
+    for i in range(vec_len):
+      xi = llvm.extractelement(x, arith.constant(i32, i))
+      yi = redux(xi, mask, kind)
+      result = llvm.insertelement(result, yi, arith.constant(i32, i))
+    return result
+  if bitwidth(x.type) != 32:
+    raise ValueError("Only 32-bit scalar types supported")
+  if isinstance(x.type, ir.IntegerType):
+    pass
+  elif isinstance(x.type, ir.F32Type):
+    if get_arch().major != 10:
+      raise ValueError("F32 redux only supported on Blackwell GPUs")
+  else:
+    raise NotImplementedError(x.type)
+  assert mask.type == i32
+  extra_kwargs = {}
+  if kind == nvvm.ReduxKind.FMAX or kind == nvvm.ReduxKind.FMIN:
+    extra_kwargs = dict(nan=True)
+  return nvvm.redux_sync(x.type, x, kind, mask, **extra_kwargs)
+
+
 def prmt(high: ir.Value, low: ir.Value, permutation: ir.Value):
   i32 = ir.IntegerType.get_signless(32)
   if (result_type := high.type) != low.type:
@@ -2009,3 +2058,45 @@ def nvvm_mbarrier_arrive_expect_tx(barrier: ir.Value, expect_tx: ir.Value, predi
     return nvvm.mbarrier_arrive_expect_tx(None, barrier, expect_tx, predicate=predicate)  # type: ignore
   except TypeError:
     return nvvm.mbarrier_arrive_expect_tx(barrier, expect_tx, predicate=predicate)  # pytype: disable=missing-parameter
+
+
+def elements_to_bytes(offset: ir.Value, element_bitwidth: int) -> ir.Value:
+  """Convert an element-based linear offset to a byte-based offset."""
+  index_ty = offset.type
+
+  if element_bitwidth > 8:
+    return arith.muli(offset, c(element_bitwidth // 8, index_ty))
+  elif element_bitwidth < 8:
+    return arith.divsi(offset, c(8 // element_bitwidth, index_ty))
+  else:
+    return offset
+
+
+def get_cluster_ptr(ptr: ir.Value, cluster_block: ir.Value):
+  i32 = ir.IntegerType.get_signless(32)
+  assert cluster_block.type == i32, cluster_block.type
+  assert ptr.type == ir.Type.parse("!llvm.ptr<3>"), ptr.type
+  mapped_smem_ptr = nvvm.mapa(ir.Type.parse("!llvm.ptr<7>"), ptr, cluster_block)
+  return llvm.addrspacecast(ir.Type.parse("!llvm.ptr"), mapped_smem_ptr)
+
+
+@dataclasses.dataclass(frozen=True)
+class Arch:
+  major: int
+  minor: int
+
+
+def get_arch() -> Arch:
+  ip = ir.InsertionPoint.current
+  if ip is None:
+    raise ValueError("Cannot retrieve the architecture without an insertion point")
+  block = ip.block
+  op = block.owner
+  while op is not None:
+    if op.name == "builtin.module":
+      return Arch(
+          op.attributes["mosaic_gpu.arch_major"].value,
+          op.attributes["mosaic_gpu.arch_minor"].value,
+      )
+    op = op.parent
+  raise ValueError("Cannot retrieve the architecture: no module found")

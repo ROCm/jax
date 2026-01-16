@@ -3473,6 +3473,11 @@ def fix(x: ArrayLike, out: None = None) -> Array:
 
   JAX implementation of :func:`numpy.fix`.
 
+  .. warning::
+
+     :func:`jax.numpy.fix` is deprecated and will be removed
+     in JAX v0.10.0. Use :func:`jax.numpy.trunc` instead.
+
   Args:
     x: input array.
     out: unused by JAX.
@@ -3493,7 +3498,7 @@ def fix(x: ArrayLike, out: None = None) -> Array:
     [[ 4.48  4.79 -1.68]
      [-0.31  0.7  -3.34]
      [-1.9   1.89  2.47]]
-    >>> jnp.fix(x)
+    >>> jnp.fix(x)  # doctest: +SKIP
     Array([[ 4.,  4., -1.],
            [-0.,  0., -3.],
            [-1.,  1.,  2.]], dtype=float32)
@@ -4523,11 +4528,13 @@ def tile(A: ArrayLike, reps: DimSize | Sequence[DimSize]) -> Array:
     reps_tup = tuple(reps)  # type: ignore[arg-type]
   reps_tup = tuple(operator.index(rep) if core.is_constant_dim(rep) else rep
                    for rep in reps_tup)
-  A_shape = (1,) * (len(reps_tup) - np.ndim(A)) + np.shape(A)
-  reps_tup = (1,) * (len(A_shape) - len(reps_tup)) + reps_tup
-  result = broadcast_to(reshape(A, [j for i in A_shape for j in [1, i]]),
-                        [k for pair in zip(reps_tup, A_shape) for k in pair])
-  return reshape(result, tuple(np.multiply(A_shape, reps_tup)))
+  # lax.tile expects reps and A.shape to have the same rank.
+  reps_tup = (1,) * (A.ndim - len(reps_tup)) + reps_tup
+  if len(reps_tup) > np.ndim(A):
+    A = lax.expand_dims(
+        A, dimensions=tuple(range(len(reps_tup) - np.ndim(A))))
+  return lax.tile(A, reps_tup)
+
 
 def _concatenate_array(arr: ArrayLike, axis: int | None,
                        dtype: DTypeLike | None = None) -> Array:

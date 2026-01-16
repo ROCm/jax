@@ -10,11 +10,13 @@
 #                     built by internal CI jobs and runs CUDA tests.
 # 4. run-bazel-test-cuda: Calls the `bazel_cuda.yml` workflow which downloads the JAX wheels
 #                     that were built by internal CI jobs and runs Bazel CUDA tests.
-# 5. run-pytest-tpu: Calls the `pytest_tpu.yml` workflow which downloads the JAX wheels that were
+# 5. run-pytest-rocm: Calls the `pytest_rocm.yml` workflow which downloads the JAX wheels and
+#                     ROCm plugins from PyPI/GitHub releases and runs ROCm tests.
+# 6. run-pytest-tpu: Calls the `pytest_tpu.yml` workflow which downloads the JAX wheels that were
 #                    built by internal CI jobs and runs TPU tests.
-# 6. run-bazel-test-tpu: Calls the `bazel_test_tpu.yml` workflow which downloads the JAX wheels that
+# 7. run-bazel-test-tpu: Calls the `bazel_test_tpu.yml` workflow which downloads the JAX wheels that
 #                        were built by internal CI jobs and runs Bazel TPU tests.
-# 7. verify-release-wheels-install: Verifies that JAX's release wheels can be installed.
+# 8. verify-release-wheels-install: Verifies that JAX's release wheels can be installed.
 name: CI - Wheel Tests (Nightly/Release)
 
 on:
@@ -168,17 +170,48 @@ jobs:
       write_to_bazel_remote_cache: 1
       run_multiaccelerator_tests: "true"
 
+  run-pytest-rocm:
+    uses: ./.github/workflows/pytest_rocm.yml
+    strategy:
+        fail-fast: false # don't cancel all jobs on failure
+        matrix:
+          runner: ["linux-x86-64-1gpu-amd", "linux-x86-64-4gpu-amd", "linux-x86-64-8gpu-amd"]
+          python: ["3.11", "3.12"]
+          rocm: [
+            {version: "7.1.1", tag: "rocm711"},
+          ]
+          ubuntu-version: ["22", "24"]
+          exclude:
+            # TODO: decouple ubuntu version and python version.
+            # Match python version with ubuntu version.
+            - python: "3.11"
+              ubuntu-version: "24"
+            - python: "3.12"
+              ubuntu-version: "22"
+    name: "Pytest ROCm (JAX artifacts version = ${{ startsWith(github.ref_name, 'release/') && 'latest release' || 'nightly' }})"
+    with:
+      runner: ${{ matrix.runner }}
+      python: ${{ matrix.python }}
+      ubuntu-version: ${{ matrix.ubuntu-version }}
+      rocm-version: ${{ matrix.rocm.version }}
+      rocm-tag: ${{ matrix.rocm.tag }}
+      jax-version: "0.8.2"
+      jaxlib-version: "github_release"
+      github-release-tag: "rocm-jax-v0.8.2-rc"
+      skip-download-jaxlib-and-rocm-plugins: "0"
+      download-jax-from-pypi: "1"
+
   run-pytest-tpu:
     uses: ./.github/workflows/pytest_tpu.yml
     strategy:
         fail-fast: false # don't cancel all jobs on failure
         matrix:
-          python: ["3.11", "3.12", "3.13", "3.13-nogil"]
+          python: ["3.11", "3.12", "3.13", "3.13-nogil", "3.14", "3.14-nogil"]
           tpu-specs: [
             # {type: "v3-8", cores: "4"}, # Enable when we have the v3 type available
             {type: "v5e-8", cores: "8", runner: "linux-x86-ct5lp-224-8tpu"},
             {type: "v6e-8", cores: "8", runner: "linux-x86-ct6e-180-8tpu"},
-            {type: "v7x-8", cores: "8", runner: "linux-x86-tpu7x-224-4tpu"}
+            {type: "v7x-8", cores: "4", runner: "linux-x86-tpu7x-224-4tpu"}
           ]
           libtpu-version-type: ["pypi_latest", "nightly"]
           exclude:
@@ -189,10 +222,13 @@ jobs:
             # Run Python versions in between min and max for v6e-8
             - tpu-specs:
                 type: "v6e-8"
-              python: "3.13"
+              python: "3.11"
             - tpu-specs:
                 type: "v6e-8"
-              python: "3.13-nogil"
+              python: "3.14"
+            - tpu-specs:
+                type: "v6e-8"
+              python: "3.14-nogil"
             # Run max Python versions for v5e-8
             - tpu-specs:
                 type: "v5e-8"
@@ -200,10 +236,22 @@ jobs:
             - tpu-specs:
                 type: "v5e-8"
               python: "3.12"
+            - tpu-specs:
+                type: "v5e-8"
+              python: "3.13"
+            - tpu-specs:
+                type: "v5e-8"
+              python: "3.13-nogil"
             # Run min and max Python versions for v7x-8
             - tpu-specs:
                 type: "v7x-8"
               python: "3.12"
+            - tpu-specs:
+                type: "v7x-8"
+              python: "3.13"
+            - tpu-specs:
+                type: "v7x-8"
+              python: "3.13-nogil"
 
     name: "Pytest TPU (JAX artifacts version = ${{ startsWith(github.ref_name, 'release/') && 'latest release' || 'nightly' }})"
     with:
@@ -222,12 +270,12 @@ jobs:
     strategy:
         fail-fast: false # don't cancel all jobs on failure
         matrix:
-          python: ["3.11", "3.12", "3.13", "3.13-nogil"]
+          python: ["3.11", "3.12", "3.13", "3.13-nogil", "3.14", "3.14-nogil"]
           tpu-specs: [
             # {type: "v3-8", cores: "4"}, # Enable when we have the v3 type available
             {type: "v4-8", cores: "4", runner: "linux-x86-ct4p-240-4tpu"},
             {type: "v5e-8", cores: "8", runner: "linux-x86-ct5lp-224-8tpu"},
-            {type: "v7x-8", cores: "8", runner: "linux-x86-tpu7x-224-4tpu"},
+            {type: "v7x-8", cores: "4", runner: "linux-x86-tpu7x-224-4tpu"},
           ]
           libtpu-version-type: ["pypi_latest", "nightly"]
           exclude:
@@ -244,15 +292,36 @@ jobs:
               python: "3.12"
             - tpu-specs:
                 type: "v4-8"
+              python: "3.13"
+            - tpu-specs:
+                type: "v4-8"
               python: "3.13-nogil"
+            - tpu-specs:
+                type: "v4-8"
+              python: "3.14-nogil"
             # Run max Python versions for v5e-8
             - tpu-specs:
                 type: "v5e-8"
+              python: "3.11"
+            - tpu-specs:
+                type: "v5e-8"
               python: "3.12"
+            - tpu-specs:
+                type: "v5e-8"
+              python: "3.13"
+            - tpu-specs:
+                type: "v5e-8"
+              python: "3.13-nogil"
             # Run min and max Python versions for v7x-8
             - tpu-specs:
                 type: "v7x-8"
               python: "3.12"
+            - tpu-specs:
+                type: "v7x-8"
+              python: "3.13"
+            - tpu-specs:
+                type: "v7x-8"
+              python: "3.13-nogil"
 
     name: "Bazel tests TPU (JAX artifacts version = ${{ startsWith(github.ref_name, 'release/') && 'latest release' || 'nightly' }})"
     with:

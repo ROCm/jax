@@ -19,7 +19,6 @@ from collections.abc import Callable, Collection, Hashable, Sequence
 import contextlib
 import dataclasses
 import functools
-import operator
 import string
 from typing import Any, Literal, Protocol, Self, TypeVar, cast
 
@@ -147,8 +146,10 @@ def _maybe_physicalize_block_shape(aval, block_shape):
 # SHLO functions that compute the symbolic dimension expression for the
 # placeholder.
 class LoweringDynamicShapeEnv:
-  dim_expr_to_placeholder: dict[shape_poly._DimExpr, int] = {}
-  placeholder_to_dim_expr: dict[int, shape_poly._DimExpr] = {}
+
+  def __init__(self):
+    self.dim_expr_to_placeholder: dict[shape_poly._DimExpr, int] = {}
+    self.placeholder_to_dim_expr: dict[int, shape_poly._DimExpr] = {}
 
   def to_placeholder(self, dim_expr: Any) -> ir.Value:
     if jax_core.is_constant_dim(dim_expr):
@@ -1162,6 +1163,15 @@ def jaxpr_subcomp(
   current_name_stack.extend(initial_name_stack)
   for eqn in jaxpr.eqns:
     invals = map(read_env, eqn.invars)
+    # Skip lowering equations that don't have used outputs and no side-effects.
+    # This allows us to avoid lowering eqns that have unlowerable types (e.g.
+    # float0) in them.
+    # TODO(sharadmv): Remove this when DCEing the jaxpr works properly.
+    if (
+        all(isinstance(v, jax_core.DropVar) for v in eqn.outvars)
+        and not eqn.effects
+    ):
+      continue
     eqn_name_stack = ctx.name_stack + eqn.source_info.name_stack
     loc = mlir.source_info_to_location(  # pytype: disable=wrong-arg-types
         ctx, eqn.primitive, eqn_name_stack, eqn.source_info.traceback
@@ -1372,27 +1382,6 @@ def _indexer_to_start_size_stride(
   )
 
 
-def _compute_squeezed_dims(source_shape: Sequence[int], target_shape: Sequence[int]) -> Sequence[bool]:
-  # This function only exists to align the ``tpu.memref_squeeze`` layout
-  # inference logic between Python and MLIR.
-  result = []
-  source_index = len(source_shape) - 1
-  target_index = len(target_shape) - 1
-  while source_index >= 0 or target_index >= 0:
-    target_dim = target_shape[target_index] if target_index >= 0 else -1
-    assert source_index >= 0
-    if source_shape[source_index] == target_dim:
-      result.append(False)
-      source_index -= 1
-      target_index -= 1
-    else:
-      assert source_shape[source_index] == 1
-      result.append(True)
-      source_index -= 1
-  result.reverse()
-  return result
-
-
 def _slice_memref(
     ref: ir.Value,
     indexer: NDIndexer,
@@ -1432,36 +1421,18 @@ def _slice_memref(
       dynamic_sizes.append(s)
 
   ref_ty = ir.MemRefType(ref.type)
-  ref_strides, ref_offset = ref_ty.get_strides_and_offset()
-  if ref_offset == ir_dynamic_size or ir_dynamic_size in static_starts:
-    target_offset = ir_dynamic_size
-  else:
-    target_offset = sum(
-        map(operator.mul, static_starts, ref_strides), ref_offset
-    )
-  out_layout = ir.StridedLayoutAttr.get(target_offset, ref_strides)
   out_ty = ir.MemRefType.get(
-      static_sizes, ref_ty.element_type, out_layout, ref_ty.memory_space
+      static_sizes, ref_ty.element_type, memory_space=ref_ty.memory_space
   )
   out = tpu.memref_slice(out_ty, ref, starts, dynamic_sizes)
   if any(squeeze_dims):
     # We need to squeeze out some dimensions.
     ref_ty = out_ty
     del out_ty
-    ref_strides, ref_offset = ref_ty.get_strides_and_offset()
-    target_sizes = [dim for i, dim in enumerate(ref_ty.shape) if not squeeze_dims[i]]
-    del squeeze_dims
-    # We re-infer the squeezed dimensions to align with the tpu.memref_squeeze
-    # verification logic in MLIR in ambiguous cases, e.g. when squeezing
-    # from [1, 1, 128] to [1, 128].
-    squeeze_dims = _compute_squeezed_dims(ref_ty.shape, target_sizes)
-    target_strides = [s for i, s in enumerate(ref_strides) if not squeeze_dims[i]]
-    out_layout = ir.StridedLayoutAttr.get(ref_offset, target_strides)
     out_ty = ir.MemRefType.get(
-        target_sizes,
+        [dim for i, dim in enumerate(ref_ty.shape) if not squeeze_dims[i]],
         ref_ty.element_type,
-        out_layout,
-        ref_ty.memory_space,
+        memory_space=ref_ty.memory_space
     )
     out = tpu.memref_squeeze(out_ty, out)
   return out, ref_block_shape
@@ -3484,6 +3455,24 @@ def _repeat_lowering_rule(ctx: LoweringRuleContext, x, *, repeats, axis):
   )
 
 
+@register_lowering_rule(lax.tile_p)
+def _tile_lowering_rule(ctx: LoweringRuleContext, x, *, reps):
+  (x_aval,) = ctx.avals_in
+  newshape = list(x_aval.shape)
+  for axis, repeats in enumerate(reps):
+    newshape[axis] *= repeats
+    x = tpu.repeat(
+      aval_to_ir_type(
+          ctx.lowering_context.dynamic_shape_replacement_fn,
+          x_aval.update(shape=tuple(newshape))
+      ),
+      x,
+      axis,
+      repeats,
+    )
+  return x
+
+
 @register_lowering_rule(tpu_primitives.roll_p)
 def _roll_lowering_rule(
     ctx: LoweringRuleContext, x, shift, *, axis, stride, stride_axis
@@ -4269,4 +4258,12 @@ def _dim_as_value_lowering(ctx: LoweringRuleContext, *, dim):
 @register_lowering_rule(tpu_primitives.touch_p)
 def _touch_lowering_rule(ctx: LoweringRuleContext, x: jax.Array):
   del ctx, x
+  return []
+
+
+@register_lowering_rule(tpu_primitives.trace_value_p)
+def _trace_value_lowering_rule(ctx: LoweringRuleContext, value, *, label: str):
+  """Lower trace_value to tpu.trace_value."""
+  del ctx
+  tpu.trace_value(value, label)
   return []

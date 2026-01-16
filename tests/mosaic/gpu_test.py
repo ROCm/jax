@@ -483,6 +483,29 @@ class MemRefTest(TestCase):
     )(scalar)
     np.testing.assert_array_equal(res, expected)
 
+  @parameterized.parameters(gpu.Dimension.x, gpu.Dimension.y)
+  def test_cluster_ref(self, dim):
+    index = ir.IndexType.get()
+    dims = (gpu.Dimension.x, gpu.Dimension.y)
+    def kernel(ctx, src, dst, scratch):
+      smem, barrier = scratch
+      cluster_idx = tuple(gpu.cluster_block_id(dim) for dim in dims)
+      peer_idx = arith.subi(arith.constant(index, 1), cluster_idx[dim])
+      peer_smem = ctx.get_cluster_ref(smem, dim, peer_idx)
+      a = mgpu.FragmentedArray.load_strided(memref_slice(src, cluster_idx)).store_untiled(smem)
+      utils.warpgroup_barrier()
+      barrier.arrive()
+      barrier.wait()
+      mgpu.FragmentedArray.load_strided(peer_smem).store_untiled(memref_slice(dst, cluster_idx))
+
+    barrier = mgpu.ClusterBarrier(collective_dims=(dim,))
+    x = np.arange(2 * 2 * 512, dtype=jnp.float32).reshape(2, 2, 512)
+    smem = jax.ShapeDtypeStruct(shape=(x.shape[-1],), dtype=jnp.float32)
+    f = mgpu.as_gpu_kernel(
+        kernel, (2, 2, 1), (128, 1, 1), x, x, (smem, barrier), cluster=(2, 2, 1)
+    )
+    np.testing.assert_array_equal(f(x), np.flip(x, axis=int(dim)))
+
 
 def get_packed_shape(strides, shape):
   perm = sorted(range(len(strides)), key=lambda i: strides[i], reverse=True)
@@ -912,16 +935,16 @@ class WGMMATest(TestCase):
     out_mlir_dtype = utils.dtype_to_ir_type(jax_out_dtype)
     if (lhs_transpose or not rhs_transpose) and bytewidth(in_mlir_dtype) != 2:
       self.skipTest("Transpose only supported in 16-bit WGMMA")
-    if ir.F32Type.isinstance(in_mlir_dtype):  # We actually use tf32 instead
+    if isinstance(in_mlir_dtype, ir.F32Type):  # We actually use tf32 instead
       in_jax_dtype = jnp.float32
       exponent_bits, mantissa_bits = 8, 10  # Use tf32
     elif bytewidth(in_mlir_dtype) == 2:
       if n % 64 != 0:
         self.skipTest("16-bit WGMMA only supports n % 64 == 0")
-      if ir.F16Type.isinstance(in_mlir_dtype):
+      if isinstance(in_mlir_dtype, ir.F16Type):
         in_jax_dtype = jnp.float16
         exponent_bits, mantissa_bits = 5, 10
-      elif ir.BF16Type.isinstance(in_mlir_dtype):
+      elif isinstance(in_mlir_dtype, ir.BF16Type):
         in_jax_dtype = jnp.bfloat16
         exponent_bits, mantissa_bits = 8, 7
       else:
@@ -974,7 +997,7 @@ class WGMMATest(TestCase):
       )
       for i in range(2):
         barriers[i].wait()
-      is_signed = True if ir.IntegerType.isinstance(in_mlir_dtype) else None
+      is_signed = True if isinstance(in_mlir_dtype, ir.IntegerType) else None
       init_acc = mgpu.WGMMAAccumulator.zero(m=m, n=n, dtype=out_mlir_dtype, is_signed=is_signed)
       if lhs_transpose:
         perm = (0, 1, 3, 2) if transpose_lhs_tiles else (1, 0, 3, 2)
@@ -1021,7 +1044,7 @@ class WGMMATest(TestCase):
     x32, y32 = x.astype(np.float32), y.astype(np.float32)
     ref = (x32.T if lhs_transpose else x32) @ (y32.T if rhs_transpose else y32)
     atol = 2e-2 if jax_out_dtype == jnp.float16 else 5e-6
-    if ir.IntegerType.isinstance(in_mlir_dtype) and ir.IntegerType.isinstance(out_mlir_dtype):
+    if isinstance(in_mlir_dtype, ir.IntegerType) and isinstance(out_mlir_dtype, ir.IntegerType):
       atol = 0
     elif utils.bitwidth(in_mlir_dtype) == 8:
       atol = 3e-2
@@ -2685,6 +2708,36 @@ class BarrierTest(TestCase):
     )()
     np.testing.assert_array_equal(y, np.ones((), dtype=np.int32))
 
+  @parameterized.parameters(False, True)
+  def test_mbarrier_complete_tx(self, predicated):
+    i32 = ir.IntegerType.get_signless(32)
+
+    def kernel(ctx, dst, mbar):
+      mbar.arrive_expect_tx(1024 // 128)
+
+      if predicated:
+        is_leader = mgpu.single_thread_predicate(mgpu.ThreadSubset.BLOCK)
+        mbar.complete_tx(1024, predicate=is_leader)
+      else:
+        mbar.complete_tx(1024 // 128)
+
+      mbar.wait()
+
+      with mgpu.single_thread(scope=mgpu.ThreadSubset.BLOCK):
+        memref.store(arith.constant(i32, 1), dst, [])
+
+    out_shape = jax.ShapeDtypeStruct((), jnp.int32)
+    y = mgpu.as_gpu_kernel(
+        kernel,
+        (1, 1, 1),
+        (128, 1, 1),
+        (),
+        out_shape,
+        mgpu.Barrier(arrival_count=128),
+    )()
+
+    np.testing.assert_array_equal(y, np.array(1, dtype=np.int32))
+
 
 class AsyncCopyTest(TestCase):
 
@@ -3275,8 +3328,8 @@ class FragmentedArrayTest(TestCase):
           operator.add,
           operator.mul,
           operator.sub,
-          (lambda x, y: mgpu.FragmentedArray.min(x, y), np.minimum),
-          (lambda x, y: mgpu.FragmentedArray.max(x, y), np.maximum),
+          (mgpu.FragmentedArray.min, np.minimum),
+          (mgpu.FragmentedArray.max, np.maximum),
       ),
       # TODO(apaszke): Enable float8
       dtype=[jnp.float32, jnp.int32, jnp.uint32, jnp.float16],
@@ -3451,26 +3504,30 @@ class FragmentedArrayTest(TestCase):
     np.testing.assert_array_equal(result, expected)
 
   @parameterized.product(
-      op=[operator.and_, operator.or_, operator.xor],
-      dtype=[jnp.uint32],
+      op=[operator.and_, operator.or_, operator.xor, operator.lshift, operator.rshift],
+      dtype=[jnp.uint32, jnp.uint8],
   )
   def test_bitwise(self, op, dtype, m=64, n=8):
+    is_shift = op in {operator.lshift, operator.rshift}
     def kernel(ctx, dst, _):
       iota = iota_tensor(m, n, dtype)
-      op(iota, iota + 1).store_untiled(dst, optimized=False)
+      rhs = iota & 0xf if is_shift else iota << 2
+      op(iota, rhs).store_untiled(dst, optimized=False)
 
     out_shape = jax.ShapeDtypeStruct((m, n), dtype)
     result = mgpu.as_gpu_kernel(
         kernel, (1, 1, 1), (128, 1, 1), (), out_shape, ()
     )()
     iota = np.arange(m * n, dtype=dtype).reshape(m, n)
-    np.testing.assert_array_equal(result, op(iota, iota + 1))
+    rhs = iota & 0xf if is_shift else iota << 2
+    np.testing.assert_array_equal(result, op(iota, rhs))
 
   @parameterized.product(
       ops=(
           (lambda x: -x, jax.lax.neg),
           (lambda x: x + 42, lambda x: x + 42),
           (lambda x: x.tanh(), jax.lax.tanh),
+          (lambda x: x.abs(), np.abs),
       ),
       dtype=[jnp.float32, jnp.int32, jnp.uint32],
   )
@@ -3505,19 +3562,25 @@ class FragmentedArrayTest(TestCase):
 
   @parameterized.product(
       ops=[
-          (lambda x: mgpu.FragmentedArray.exp(x), np.exp),
-          (lambda x: mgpu.FragmentedArray.sin(x), np.sin),
-          (lambda x: mgpu.FragmentedArray.cos(x), np.cos),
-          (lambda x: mgpu.FragmentedArray.rsqrt(x), jax.lax.rsqrt),
+          (mgpu.FragmentedArray.exp, np.exp),
+          (mgpu.FragmentedArray.sin, np.sin),
+          (mgpu.FragmentedArray.cos, np.cos),
+          (mgpu.FragmentedArray.rsqrt, jax.lax.rsqrt),
+          (mgpu.FragmentedArray.erf, jax.scipy.special.erf),
       ],
       approx=[False, True],
   )
   @jtu.ignore_warning(message="overflow encountered", category=RuntimeWarning)
   def test_math(self, ops, approx, m=64, n=32):
     op, np_op = ops
+    kwargs = dict(approx=approx)
+    if op is mgpu.FragmentedArray.erf:
+      if approx:
+        raise self.skipTest("ERF not supported with approximation")
+      kwargs = {}
     def kernel(ctx, dst, _):
       iota = iota_tensor(m, n, jnp.float32)
-      op(iota).store_untiled(dst, optimized=False)
+      op(iota, **kwargs).store_untiled(dst, optimized=False)
     out_shape = jax.ShapeDtypeStruct((m, n), jnp.float32)
     result = mgpu.as_gpu_kernel(
         kernel, (1, 1, 1), (128, 1, 1), (), out_shape, ()
@@ -3526,6 +3589,20 @@ class FragmentedArrayTest(TestCase):
     atol = 5e-3 if approx else 2e-7
     rtol = 4e-6 if approx else 2e-7
     np.testing.assert_allclose(result, np_op(x), atol=atol, rtol=rtol)
+
+  def test_atan2(self, m=64, n=32):
+    def kernel(ctx, dst, _):
+      y = iota_tensor(m, n, jnp.float32) + 1  # Avoid zero
+      x = iota_tensor(m, n, jnp.float32) + 2
+      y.atan2(x).store_untiled(dst, optimized=False)
+
+    out_shape = jax.ShapeDtypeStruct((m, n), jnp.float32)
+    result = mgpu.as_gpu_kernel(
+        kernel, (1, 1, 1), (128, 1, 1), (), out_shape, ()
+    )()
+    y = np.arange(m * n, dtype=jnp.float32).reshape(m, n) + 1
+    x = np.arange(m * n, dtype=jnp.float32).reshape(m, n) + 2
+    np.testing.assert_allclose(result, np.arctan2(y, x), atol=2e-7, rtol=2e-7)
 
   def test_strided_copy_noncontig_good(self):
     def kernel(ctx, src, dst, _):
@@ -4094,14 +4171,14 @@ class FragmentedArrayTest(TestCase):
     m, n = 128, 128
     def kernel(ctx, dst, _):
       i8 = ir.IntegerType.get_signless(8)
-      iota = iota_tensor(m, n, jnp.uint8)
+      iota = iota_tensor(m, n, jnp.uint16)
       (iota > 10).astype(i8, is_signed=False).store_untiled(dst, optimized=False)
 
     out_shape = jax.ShapeDtypeStruct((m, n), jnp.int8)
     result = mgpu.as_gpu_kernel(
         kernel, (1, 1, 1), (128, 1, 1), (), out_shape, ()
     )()
-    iota = np.arange(m * n, dtype=jnp.uint8).reshape(m, n)
+    iota = np.arange(m * n, dtype=jnp.uint16).reshape(m, n)
     np.testing.assert_array_equal(result, (iota > 10).astype(jnp.uint8))
 
   @parameterized.product(dtype=(jnp.bfloat16, jnp.float16))
@@ -6547,7 +6624,8 @@ if hp is not None:
         rank = len(shape)
         reduced_dims = draw(hps.sets(hps.integers(0, rank - 1), min_size=1))
         dtype = draw(hps.sampled_from([jnp.int32, jnp.int16]))
-        return shape, layout, tuple(reduced_dims), dtype
+        op = draw(hps.sampled_from(["add", "max"]))
+        return shape, layout, tuple(reduced_dims), dtype, op
 
       warp_replicated_major = fa.TiledLayout(
           fa.Tiling(((2,), (1,))), (fa.Replicated(2,), -2), (fa.Replicated(32,),), -1
@@ -6558,22 +6636,40 @@ if hp is not None:
       warp_row_col_layout = fa.TiledLayout(
           fa.Tiling(((2, 2), (1,))), (-3, -2), (fa.Replicated(32,),), -1
       )
+      even_lane_split_layout = fa.TiledLayout(
+          fa.Tiling(((8,), (4,), (2,), (1,))),
+          (fa.Replicated(4),),
+          (-4, fa.Replicated(2), -3, fa.Replicated(2), -2),
+          -1,
+      )
+      odd_lane_split_layout = fa.TiledLayout(
+          fa.Tiling(((4,), (2,), (1,))),
+          (fa.Replicated(4),),
+          (fa.Replicated(2), -3, fa.Replicated(2), -2, fa.Replicated(2)),
+          -1,
+      )
 
       @hp.given(strategy())
-      @hp.example(((16,), warp_replicated_major, (0,), jnp.int32))
-      @hp.example(((16,), warp_replicated_minor, (0,), jnp.int32))
-      @hp.example(((16, 16), warp_row_col_layout, (0,), jnp.int32))
-      @hp.example(((16, 16), warp_row_col_layout, (1,), jnp.int32))
+      @hp.example(((16,), warp_replicated_major, (0,), jnp.int32, "add"))
+      @hp.example(((16,), warp_replicated_minor, (0,), jnp.int32, "add"))
+      @hp.example(((16, 16), warp_row_col_layout, (0,), jnp.int32, "add"))
+      @hp.example(((16, 16), warp_row_col_layout, (1,), jnp.int32, "add"))
+      @hp.example(((256,), even_lane_split_layout, (0,), jnp.float32, "max"))
+      @hp.example(((256,), odd_lane_split_layout, (0,), jnp.int32, "max"))
       def run(args):
-        shape, layout, reduced_dims, dtype = args
+        shape, layout, reduced_dims, dtype, op = args
         out_shape = list(shape)
         for d in sorted(reduced_dims, reverse=True):
           del out_shape[d]
         def kernel(ctx, src, dst, scratch):
           del ctx
-          arr = fa.FragmentedArray.load_untiled(src, layout=layout, optimized=False, is_signed=True)
-          arr.reduce("add", reduced_dims, scratch).store_untiled(dst, optimized=False)
-        x = jax.random.randint(jax.random.key(1234), shape, -1000, 1000, dtype)
+          arr = fa.FragmentedArray.load_untiled(src, layout=layout, optimized=False,
+                                                is_signed=utils.is_signed(dtype))
+          arr.reduce(op, reduced_dims, scratch).store_untiled(dst, optimized=False)
+        if jnp.issubdtype(dtype, jnp.integer):
+          x = jax.random.randint(jax.random.key(1234), shape, -1000, 1000, dtype)
+        else:
+          x = jax.random.normal(jax.random.key(1234), shape, dtype)
         out_type = jax.ShapeDtypeStruct(out_shape, dtype)
         scratch_type = jax.ShapeDtypeStruct((2048,), dtype)
         hp.assume(layout.vector_length <= 16)  # Otherwise we run out of scratch
@@ -6584,7 +6680,11 @@ if hp is not None:
         except NotImplementedError:
           hp.assume(False)
           return
-        np.testing.assert_array_equal(result, x.sum(reduced_dims, dtype=dtype))
+        if op == "max":
+          ref = x.max(reduced_dims)
+        else:
+          ref = x.sum(reduced_dims, dtype=dtype)
+        np.testing.assert_array_equal(result, ref)
       run()
 
     def test_slice(self):

@@ -27,11 +27,6 @@ import jax.numpy as jnp
 from jax.sharding import PartitionSpec as P
 import numpy as np
 
-try:
-  import portpicker  # pytype: disable=import-error
-except ImportError:
-  portpicker = None
-
 
 def create_array(shape, arr_sharding, global_data=None):
   if global_data is None:
@@ -814,6 +809,20 @@ class NonaddressableArrayTestMultiHost(jt_multiprocess.MultiProcessTest):
     else:
       self.assertEqual(repr(y), "Array(shape=(8, 8), dtype=float32)")
 
+  def test_str(self):
+    y, _ = create_nonaddressable_array((8, 8))
+    if y.is_fully_addressable:
+      self.assertStartsWith(str(y), "[[ 0.  1.  2.  3.")
+    else:
+      self.assertEqual(str(y), "Array(shape=(8, 8), dtype=float32)")
+
+  def test_format(self):
+    y, _ = create_nonaddressable_array((8, 8))
+    if y.is_fully_addressable:
+      self.assertStartsWith(format(y), "[[ 0.  1.  2.  3.")
+    else:
+      self.assertEqual(format(y), "Array(shape=(8, 8), dtype=float32)")
+
   def test_array_astype(self):
     y, _ = create_nonaddressable_array((8, 8))
     y = y.astype(np.int32)
@@ -918,6 +927,21 @@ class NonaddressableArrayTestMultiHost(jt_multiprocess.MultiProcessTest):
 
 class CrossHostTransferTest(jt_multiprocess.MultiProcessTest):
 
+  @jtu.run_on_devices("cpu")
+  def test_cross_host_transfer_cpu_error(self):
+    x = np.arange(64).reshape(8, 8)
+    src_pid = 0
+    dst_pid = 1
+    src_sharding = jax.sharding.SingleDeviceSharding(
+        jax.local_devices(process_index=src_pid)[0])
+    dst_sharding = jax.sharding.SingleDeviceSharding(
+        jax.local_devices(process_index=dst_pid)[0])
+    y = jax.device_put(x, src_sharding)
+    with self.assertRaisesRegex(
+        ValueError, "does not support cross-host device transfers"):
+      jax.device_put(y, dst_sharding)
+
+  @jtu.skip_on_devices("cpu")
   def test_cross_host_transfer_single_device_sharding(self):
     x = np.arange(64).reshape(8, 8)
     src_pid = 0
@@ -934,6 +958,7 @@ class CrossHostTransferTest(jt_multiprocess.MultiProcessTest):
     else:
       self.assertEmpty(z.addressable_shards)
 
+  @jtu.skip_on_devices("cpu")
   def test_cross_host_transfer_named_sharding(self):
     x = np.arange(64).reshape(8, 8)
     n_local = jax.local_device_count()
@@ -958,6 +983,7 @@ class CrossHostTransferTest(jt_multiprocess.MultiProcessTest):
     else:
       self.assertEmpty(z.addressable_shards)
 
+  @jtu.skip_on_devices("cpu")
   def test_cross_host_transfer_named_sharding_replicated(self):
     x = np.arange(64).reshape(8, 8)
     n_dev = jax.device_count() // 2
@@ -976,6 +1002,7 @@ class CrossHostTransferTest(jt_multiprocess.MultiProcessTest):
     for shard in z.addressable_shards:
       np.testing.assert_array_equal(shard.data, x[shard.index])
 
+  @jtu.skip_on_devices("cpu")
   def test_cross_host_transfer_batched(self):
     num_arrays = 3
     xs = []
@@ -1050,15 +1077,4 @@ class CrossHostTransferTest(jt_multiprocess.MultiProcessTest):
 
 
 if __name__ == "__main__":
-  if portpicker is None:
-    socket_port = 12345
-  else:
-    socket_port = portpicker.pick_unused_port()
-  jax.config.update(
-      "jax_cross_host_transfer_socket_address", f"127.0.0.1:{socket_port}")
-  # Too small for good performance, but set to avoid oom in msan tests.
-  jax.config.update(
-      "jax_cross_host_transfer_transfer_size",
-      64 * 1024,
-  )
   jt_multiprocess.main()
