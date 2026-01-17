@@ -24,6 +24,10 @@ import jax
 from jax import lax
 from jax._src import shard_map
 from jax._src import test_util as jtu
+
+pytestmark = pytest.mark.xfail(jtu.is_device_rocm(), reason="Mosaic GPU is not supported on ROCm")
+
+# pylint: disable=g-import-not-at-top
 from jax._src.pallas.mosaic.interpret import interpret_pallas_call as mosaic_interpret
 from jax.experimental import pallas as pl
 from jax.experimental.pallas import tpu as pltpu

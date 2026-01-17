@@ -20,6 +20,10 @@ import jax
 from jax import lax
 from jax._src import config
 from jax._src import test_util as jtu
+
+pytestmark = pytest.mark.xfail(jtu.is_device_rocm(), reason="Mosaic GPU is not supported on ROCm")
+
+# pylint: disable=g-import-not-at-top
 from jax._src.pallas.fuser import block_spec as block_spec_lib
 from jax._src.pallas.fuser import custom_fusion_lib
 from jax.experimental import pallas as pl

@@ -20,6 +20,8 @@ from absl.testing import absltest, parameterized
 from jax._src import config
 from jax._src import test_util as jtu
 
+pytestmark = pytest.mark.xfail(jtu.is_device_rocm(), reason="Mosaic GPU is not supported on ROCm")
+
 # pylint: disable=g-import-not-at-top
 try:
   # We only import this to see if Mosaic is available.

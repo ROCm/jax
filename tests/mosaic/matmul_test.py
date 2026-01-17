@@ -21,6 +21,10 @@ from jax._src import config
 from jax._src import test_util as jtu
 from jax._src.interpreters import mlir
 from jax._src.lib.mlir import ir
+
+pytestmark = pytest.mark.xfail(jtu.is_device_rocm(), reason="Mosaic GPU is not supported on ROCm")
+
+# pylint: disable=g-import-not-at-top
 from jax.experimental.mosaic.gpu import dialect as mgpu_dialect  # pylint: disable=g-importing-member
 import jax.numpy as jnp
 import numpy as np
