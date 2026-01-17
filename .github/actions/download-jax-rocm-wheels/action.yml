@@ -112,6 +112,10 @@ runs:
 
           echo "Downloading custom jaxlib and ROCm plugins from GitHub release: ${{ inputs.github-release-tag }}"
 
+          # Delete any jaxlib wheels that may have been downloaded from PyPI as dependencies
+          echo "Removing any PyPI jaxlib wheels from $(pwd)/dist/..."
+          rm -f $(pwd)/dist/jaxlib-*.whl
+
           # Download custom jaxlib (e.g., jaxlib-0.8.0+rocm7.1.0-cp311-cp311-manylinux_2_27_x86_64.whl)
           # Pattern: jaxlib-*+rocm*-${PYTHON_VERSION}-${PYTHON_VERSION}-manylinux*.whl
           echo "Downloading custom jaxlib for Python ${PYTHON_VERSION}..."
