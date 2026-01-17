@@ -19,6 +19,7 @@ import threading
 from absl.testing import absltest
 import jax
 from jax._src import test_util as jtu
+import pytest
 
 pytestmark = pytest.mark.xfail(jtu.is_device_rocm(), reason="Mosaic GPU is not supported on ROCm")
 
