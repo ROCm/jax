@@ -17,15 +17,15 @@ limitations under the License.
 #include <cstdint>
 #include <cstdio>
 
-#include "third_party/gpus/cuda/include/cuda.h"
 #include "jaxlib/mosaic/gpu/nvshmem.h"
+#include "third_party/gpus/cuda/include/cuda.h"
 
 extern "C" {
 
 void mosaic_gpu_init_tma_desc(CUtensorMap *tma_desc, void *base_addr,
-                              int64_t elem_type, int64_t rank,
-                              int64_t *sizes, int64_t *strides,
-                              int64_t swizzle_bytes, int64_t *window_shape) {
+                              int64_t elem_type, int64_t rank, int64_t *sizes,
+                              int64_t *strides, int64_t swizzle_bytes,
+                              int64_t *window_shape) {
   if (((uintptr_t)tma_desc) % 64 != 0) {
     fprintf(stderr,
             "TMA descriptor address must be 64 byte aligned, but got: %p\n",
@@ -36,36 +36,36 @@ void mosaic_gpu_init_tma_desc(CUtensorMap *tma_desc, void *base_addr,
   CUtensorMapDataType data_type;
   int64_t elem_bitwidth;
   // types are defined in: LaunchContext._get_tma_desc()
-  if (elem_type == 8){
+  if (elem_type == 8) {
     // this is for int2s
     data_type = CU_TENSOR_MAP_DATA_TYPE_UINT8;
     elem_bitwidth = 2;
-  } else if (elem_type == 0){
+  } else if (elem_type == 0) {
     // this is for int4s
     data_type = CU_TENSOR_MAP_DATA_TYPE_UINT8;
     elem_bitwidth = 4;
-  } else if (elem_type == 1){
+  } else if (elem_type == 1) {
     data_type = CU_TENSOR_MAP_DATA_TYPE_UINT8;
     elem_bitwidth = 8;
-  } else if (elem_type == 2){
+  } else if (elem_type == 2) {
     data_type = CU_TENSOR_MAP_DATA_TYPE_UINT16;
     elem_bitwidth = 16;
-  } else if (elem_type == 3){
+  } else if (elem_type == 3) {
     data_type = CU_TENSOR_MAP_DATA_TYPE_UINT32;
     elem_bitwidth = 32;
-  } else if (elem_type == 4){
+  } else if (elem_type == 4) {
     data_type = CU_TENSOR_MAP_DATA_TYPE_UINT64;
     elem_bitwidth = 64;
-  } else if (elem_type == 5){
+  } else if (elem_type == 5) {
     data_type = CU_TENSOR_MAP_DATA_TYPE_FLOAT16;
     elem_bitwidth = 16;
-  } else if (elem_type == 6){
+  } else if (elem_type == 6) {
     data_type = CU_TENSOR_MAP_DATA_TYPE_FLOAT32;
     elem_bitwidth = 32;
-  } else if (elem_type == 7){
+  } else if (elem_type == 7) {
     data_type = CU_TENSOR_MAP_DATA_TYPE_BFLOAT16;
     elem_bitwidth = 16;
-  } else{
+  } else {
     fprintf(stderr, "Unsupported element type: %ld \n", elem_type);
     abort();
   }
@@ -113,7 +113,7 @@ void mosaic_gpu_init_tma_desc(CUtensorMap *tma_desc, void *base_addr,
             strides[rank - 1]);
     abort();
   }
-  for (int i = 0; i < rank - 1; ++i) {  // We skip the implicit minor stride.
+  for (int i = 0; i < rank - 1; ++i) { // We skip the implicit minor stride.
     cuuint64_t tma_stride_i =
         static_cast<cuuint64_t>(strides[rank - i - 2] * elem_bytewidth);
     if (tma_stride_i % 16 != 0 || tma_stride_i >= static_cast<cuuint64_t>(1)
@@ -171,7 +171,7 @@ void mosaic_gpu_init_tma_desc(CUtensorMap *tma_desc, void *base_addr,
   }
 }
 
-void* mosaic_gpu_module_load(void *data) {
+void *mosaic_gpu_module_load(void *data) {
   CUmodule module = nullptr;
   if (auto result = cuModuleLoadData(&module, data); result != CUDA_SUCCESS) {
     const char *ptr = nullptr;
@@ -180,7 +180,7 @@ void* mosaic_gpu_module_load(void *data) {
     abort();
   }
 
-  {  // Set the NVSHMEM state if it's used by the module.
+  { // Set the NVSHMEM state if it's used by the module.
     CUdeviceptr ptr = 0;
     size_t size = 0;
     if (cuModuleGetGlobal(&ptr, &size, module,
@@ -246,17 +246,17 @@ void mosaic_gpu_launch_kernel(CUfunction function, uint32_t grid_x,
                               uint32_t block_y, uint32_t block_z,
                               uint32_t smem_bytes, CUstream stream,
                               void **params) {
-  CUlaunchConfig config {
-    .gridDimX = grid_x,
-    .gridDimY = grid_y,
-    .gridDimZ = grid_z,
-    .blockDimX = block_x,
-    .blockDimY = block_y,
-    .blockDimZ = block_z,
-    .sharedMemBytes = smem_bytes,
-    .hStream = stream,
-    .attrs = nullptr,
-    .numAttrs = 0,
+  CUlaunchConfig config{
+      .gridDimX = grid_x,
+      .gridDimY = grid_y,
+      .gridDimZ = grid_z,
+      .blockDimX = block_x,
+      .blockDimY = block_y,
+      .blockDimZ = block_z,
+      .sharedMemBytes = smem_bytes,
+      .hStream = stream,
+      .attrs = nullptr,
+      .numAttrs = 0,
   };
   CUlaunchAttribute cluster_attr;
   if (cluster_x != 0) {
