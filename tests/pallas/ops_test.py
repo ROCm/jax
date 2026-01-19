@@ -1894,6 +1894,15 @@ class OpsTest(PallasBaseTest):
     if self.INTERPRET:
       self.skipTest("approx_tanh is not supported in interpret mode")
 
+    # approx_tanh uses NVIDIA PTX inline assembly (tanh.approx.f32, etc.) which
+    # is not supported on ROCm. AMD CDNA3 (MI300X/gfx942) does not have a
+    # hardware tanh instruction - transcendentals are implemented via OCML
+    # library. See:
+    # - NVIDIA PTX ISA: https://docs.nvidia.com/cuda/parallel-thread-execution/
+    # - AMD CDNA3 ISA: https://www.amd.com/content/dam/amd/en/documents/instinct-tech-docs/instruction-set-architectures/amd-instinct-mi300-cdna3-instruction-set-architecture.pdf
+    if jtu.is_device_rocm():
+      self.skipTest("approx_tanh uses PTX inline assembly not supported on ROCm")
+
     if (dtype == "bfloat16" and
         not jtu.is_cuda_compute_capability_at_least("9.0")):
       self.skipTest("tanh.approx.bf16 requires a GPU with capability >= sm90")
