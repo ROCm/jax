@@ -55,6 +55,8 @@ from . import tcgen05
 from . import transform_inference
 from . import utils
 
+IS_ROCM = utils.IS_ROCM
+
 # MLIR can't find libdevice unless we point it to the CUDA path
 cuda_root = lib.cuda_path or "/usr/local/cuda"
 os.environ["CUDA_ROOT"] = cuda_root
@@ -620,7 +622,15 @@ def _launch(
       )
       # TODO(apaszke): Skip fences if no barriers or TMEM is initialized.
       # TODO(apaszke): Only initialize cluster barriers before the cluster wait.
-      nvvm.fence_mbarrier_init()
+
+      if IS_ROCM:
+        # TODO(Arech) FIX BEFORE THE PR. This is only a stub.
+        # implement mbarrier's first.
+        pass
+      else:
+        nvvm.fence_mbarrier_init()
+
+      
       if math.prod(cluster) != 1:
         nvvm.cluster_arrive_relaxed(aligned=ir.UnitAttr.get())
         nvvm.cluster_wait(aligned=ir.UnitAttr.get())

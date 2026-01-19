@@ -36,6 +36,8 @@ from . import profiler
 from . import utils
 from . import fragmented_array as fa
 
+IS_ROCM = utils.IS_ROCM
+
 TMA_DESCRIPTOR_BYTES = 128
 TMA_DESCRIPTOR_ALIGNMENT = 64
 TMAReductionOp = Literal["add", "min", "max", "inc", "dec", "and", "or", "xor"]
@@ -1315,29 +1317,45 @@ class LaunchContext:
           )
         else:
           multicast_mask = None
-        nvvm.cp_async_bulk_tensor_shared_cluster_global(
-            smem_ptr, tma_desc, rev_dyn_base_indices, barrier_ptr, [],
-            multicast_mask=multicast_mask, predicate=predicate
-        )
+        if IS_ROCM:
+          # TODO(Arech) FIX BEFORE THE PR. This is only a stub
+          # implement mbarriers first.
+          pass
+        else:
+          nvvm.cp_async_bulk_tensor_shared_cluster_global(
+              smem_ptr, tma_desc, rev_dyn_base_indices, barrier_ptr, [],
+              multicast_mask=multicast_mask, predicate=predicate
+          )
     else:
       if reduction_op is not None:
         rank = len(slice_shape)
         idx_operands = ",".join(f"${i}" for i in range(3, 3 + rank))
-        llvm.inline_asm(
-          ir.Type.parse("!llvm.void"),
-          [predicate,smem_ptr,tma_desc,*rev_dyn_base_indices],
-          f"@$0 cp.reduce.async.bulk.tensor.{rank}d.global.shared::cta.{reduction_op}.tile.bulk_group [$2,{{{idx_operands}}}], [$1];",
-          "b,r,l" + ",r" * rank,
-          has_side_effects=True,
-        )
-        if arrive:
-          nvvm.cp_async_bulk_commit_group()
+
+        if IS_ROCM:
+          # TODO(Arech) FIX BEFORE THE PR. This is only a stub
+          # implement mbarriers first.
+          pass
+        else:
+          llvm.inline_asm(
+            ir.Type.parse("!llvm.void"),
+            [predicate,smem_ptr,tma_desc,*rev_dyn_base_indices],
+            f"@$0 cp.reduce.async.bulk.tensor.{rank}d.global.shared::cta.{reduction_op}.tile.bulk_group [$2,{{{idx_operands}}}], [$1];",
+            "b,r,l" + ",r" * rank,
+            has_side_effects=True,
+          )
+          if arrive:
+            nvvm.cp_async_bulk_commit_group()
       else:
-        nvvm.cp_async_bulk_tensor_global_shared_cta(
-            tma_desc, smem_ptr, rev_dyn_base_indices, predicate=predicate
-        )
-        if arrive:
-          nvvm.cp_async_bulk_commit_group()
+        if IS_ROCM:
+          # TODO(Arech) FIX BEFORE THE PR. This is only a stub
+          # implement mbarriers first.
+          pass
+        else:
+          nvvm.cp_async_bulk_tensor_global_shared_cta(
+              tma_desc, smem_ptr, rev_dyn_base_indices, predicate=predicate
+          )
+          if arrive:
+            nvvm.cp_async_bulk_commit_group()
 
   def async_prefetch(
     self,
@@ -1419,7 +1437,12 @@ class LaunchContext:
       self, allow_groups: int, await_read_only: bool = False,
       scope: utils.ThreadSubset = utils.ThreadSubset.WARPGROUP,
   ):
-    nvvm.cp_async_bulk_wait_group(allow_groups, read=await_read_only)
+    if IS_ROCM:
+      # TODO(Arech) FIX BEFORE THE PR. This is only a stub
+      # implement mbarriers first.
+      pass
+    else:
+      nvvm.cp_async_bulk_wait_group(allow_groups, read=await_read_only)
     if scope == utils.ThreadSubset.WARPGROUP:
       utils.warpgroup_barrier()
     elif scope == utils.ThreadSubset.WARP:

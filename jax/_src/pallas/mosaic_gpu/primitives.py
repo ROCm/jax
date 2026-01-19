@@ -53,13 +53,9 @@ import jax.numpy as jnp
 import numpy as np
 
 
-# PR_REVIEW_TODO: is below a correct way to branch on the platform?
-if "rocm" in jax.devices()[0].client.platform_version:
-  WARP_SIZE = 64
-  WARPGROUP_SIZE = WARP_SIZE*4
-else:
-  WARP_SIZE = 32
-  WARPGROUP_SIZE = 128
+IS_ROCM = mgpu_utils.IS_ROCM
+WARP_SIZE = mgpu_utils.WARP_SIZE
+WARPGROUP_SIZE = mgpu_utils.WARPGROUP_SIZE
 
 
 _Ref = state.AbstractRef | state_types.TransformedRef
@@ -1008,7 +1004,12 @@ def _commit_group_abstract_eval():
     commit_group_p, mgpu.LoweringSemantics.Warpgroup)
 def _commit_group_lowering(ctx: lowering.LoweringRuleContext):
   del ctx  # Unused.
-  nvvm_dialect.cp_async_bulk_commit_group()
+  if IS_ROCM:
+    # TODO(Arech) FIX BEFORE THE PR. This is only a stub
+    # implement mbarriers first.
+    pass
+  else:
+    nvvm_dialect.cp_async_bulk_commit_group()
   return ()
 
 
