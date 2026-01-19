@@ -257,7 +257,7 @@ class PallasCallTest(PallasBaseTest):
     # TODO(necula): we normalize out_shape to a tuple, we shouldn't.
     self.assertIsInstance(res, tuple)
 
-  @jtu.skip_on_devices("gpu")  # TODO: RET_CHECK failure
+  @jtu.skip_on_devices("cuda")  # TODO: RET_CHECK failure
   def test_block_spec_with_padding(self):
     if jtu.test_device_matches(["tpu"]) and not self.INTERPRET:
       self.skipTest("On TPU the test works only in interpret mode")
