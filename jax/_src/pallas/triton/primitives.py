@@ -121,12 +121,8 @@ def _elementwise_inline_asm_lowering(
   del result_shape_dtypes  # Unused.
 
   # For ROCm, PTX inline assembly is not supported. For tanh.approx, we use
-  # OCML's tanh function which Triton lowers via a fast exp-based formula.
-  # See:
-  # - Triton PR #7780: https://github.com/triton-lang/triton/pull/7780
-  # - Triton PR #8551: https://github.com/triton-lang/triton/pull/8551
-  # - NVIDIA PTX ISA: https://docs.nvidia.com/cuda/parallel-thread-execution/
-  # - AMD CDNA3 ISA: https://www.amd.com/content/dam/amd/en/documents/instinct-tech-docs/instruction-set-architectures/amd-instinct-mi300-cdna3-instruction-set-architecture.pdf
+  # Triton's fast_tanhf which uses a fast exp-based formula.
+  # See: https://github.com/triton-lang/triton/pull/7780
   if ctx.context.platform == "rocm" and "tanh.approx" in asm:
     return _approx_tanh_rocm_lowering(ctx, *args)
 
@@ -150,6 +146,10 @@ def _approx_tanh_rocm_lowering(
   We use __triton_hip_fast_tanhf which Triton's AMD backend lowers using
   fast_expf: tanh(x) = (exp(2x) - 1) / (exp(2x) + 1)
 
+  Note: f64 is not currently supported by approx_tanh, but if JAX extends
+  support for f64 in the future, this lowering falls back to __ocml_tanh_f64
+  since fast_tanhf only supports f32.
+
   See: https://github.com/triton-lang/triton/pull/7780
   """
   from jax._src.lib.mlir import ir
@@ -163,6 +163,19 @@ def _approx_tanh_rocm_lowering(
   def dtype_to_ir_type(dtype):
     dtype = jnp.dtype(dtype)
     return mlir.dtype_to_ir_type(dtype)
+
+  # f64: fallback to __ocml_tanh_f64 if JAX extends approx_tanh to support f64
+  if in_dtype == jnp.float64:
+    result_type = mlir.aval_to_ir_type(out_aval)
+    result = tt_dialect.extern_elementwise(
+        result_type,
+        list(args),
+        libname="",
+        libpath="",
+        symbol="__ocml_tanh_f64",
+        pure=True,
+    )
+    return [result]
 
   # fast_tanhf only supports f32. For f16/bf16, cast to f32, compute, cast back.
   needs_cast = in_dtype in (jnp.float16, jnp.bfloat16)
