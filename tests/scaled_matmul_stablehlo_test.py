@@ -455,12 +455,15 @@ class ScaledDotGeneralTest(jtu.JaxTestCase):
 
   def setUp(self):
     super().setUp()
-    try:
-      check_cudnn_version()
-    except RuntimeError as e:
-      self.skipTest(str(e))
-    if not jtu.is_cuda_compute_capability_at_least("10.0"):
-      self.skipTest("Requires at least Blackwell arch")
+    # cuDNN and Blackwell checks only apply to CUDA devices.
+    # ROCm uses XLA's fallback path (dequantize + standard dot) for MXFP8.
+    if jtu.test_device_matches(["cuda"]):
+      try:
+        check_cudnn_version()
+      except RuntimeError as e:
+        self.skipTest(str(e))
+      if not jtu.is_cuda_compute_capability_at_least("10.0"):
+        self.skipTest("Requires at least Blackwell arch")
 
   block_scale_configs = create_mxfp8_configs()
 
@@ -515,7 +518,7 @@ class ScaledDotGeneralTest(jtu.JaxTestCase):
           ((30, 64), (100, 64), (([1], [1]), ([], []))),
       ]
   )
-  @jtu.run_on_devices("cuda")
+  @jtu.run_on_devices("gpu")
   def test_nvfp4_gradient_clip(self, enable_grad_clip, configs):
     output_type = jnp.float32
     (a_raw, b_raw), (a_dq, b_dq), _, block_scale_configs = (
