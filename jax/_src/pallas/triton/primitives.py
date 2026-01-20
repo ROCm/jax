@@ -144,11 +144,13 @@ def _approx_tanh_rocm_lowering(
     ctx: lowering.LoweringRuleContext,
     *args,
 ):
-  """Lower approx_tanh for ROCm using OCML's tanh function.
+  """Lower approx_tanh for ROCm using Triton's fast_tanhf.
 
   AMD CDNA3 (MI300X/gfx942) does not have a hardware tanh instruction.
-  We use __ocml_tanh_f32 which Triton's AMD backend lowers using a numerically
-  stable fast exp-based formula: tanh(x) = sign(x) * (1 - 2/(e^(2|x|) + 1))
+  We use __triton_hip_fast_tanhf which Triton's AMD backend lowers using
+  fast_expf: tanh(x) = (exp(2x) - 1) / (exp(2x) + 1)
+
+  See: https://github.com/triton-lang/triton/pull/7780
   """
   from jax._src.lib.mlir import ir
   from jax._src.lib.mlir.dialects import arith as arith_dialect
@@ -162,7 +164,7 @@ def _approx_tanh_rocm_lowering(
     dtype = jnp.dtype(dtype)
     return mlir.dtype_to_ir_type(dtype)
 
-  # OCML only has f32 and f64 tanh. For f16/bf16, we cast to f32, compute, cast back.
+  # fast_tanhf only supports f32. For f16/bf16, cast to f32, compute, cast back.
   needs_cast = in_dtype in (jnp.float16, jnp.bfloat16)
 
   if needs_cast:
@@ -174,13 +176,13 @@ def _approx_tanh_rocm_lowering(
       f32_result_type = f32_type
     arg_f32 = arith_dialect.extf(f32_result_type, arg)
 
-    # Call __ocml_tanh_f32
+    # Call __triton_hip_fast_tanhf (fast exp-based implementation)
     tanh_result = tt_dialect.extern_elementwise(
         f32_result_type,
         [arg_f32],
-        libname="",
+        libname="libdevice",
         libpath="",
-        symbol="__ocml_tanh_f32",
+        symbol="__triton_hip_fast_tanhf",
         pure=True,
     )
 
@@ -188,14 +190,14 @@ def _approx_tanh_rocm_lowering(
     out_type = mlir.aval_to_ir_type(out_aval)
     result = arith_dialect.truncf(out_type, tanh_result)
   else:
-    # f32: call __ocml_tanh_f32 directly
+    # f32: call __triton_hip_fast_tanhf directly
     result_type = mlir.aval_to_ir_type(out_aval)
     result = tt_dialect.extern_elementwise(
         result_type,
         list(args),
-        libname="",
+        libname="libdevice",
         libpath="",
-        symbol="__ocml_tanh_f32",
+        symbol="__triton_hip_fast_tanhf",
         pure=True,
     )
 
