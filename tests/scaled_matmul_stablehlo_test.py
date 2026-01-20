@@ -455,12 +455,15 @@ class ScaledDotGeneralTest(jtu.JaxTestCase):
 
   def setUp(self):
     super().setUp()
-    try:
-      check_cudnn_version()
-    except RuntimeError as e:
-      self.skipTest(str(e))
-    if not jtu.is_cuda_compute_capability_at_least("10.0"):
-      self.skipTest("Requires at least Blackwell arch")
+    # cuDNN and Blackwell checks only apply to CUDA devices.
+    # ROCm uses XLA's fallback path (dequantize + standard dot) for MXFP8/NVFP4.
+    if jtu.test_device_matches(["cuda"]):
+      try:
+        check_cudnn_version()
+      except RuntimeError as e:
+        self.skipTest(str(e))
+      if not jtu.is_cuda_compute_capability_at_least("10.0"):
+        self.skipTest("Requires at least Blackwell arch")
 
   block_scale_configs = create_mxfp8_configs()
 
@@ -471,7 +474,7 @@ class ScaledDotGeneralTest(jtu.JaxTestCase):
           (1024, 2048),
       ],
   )
-  @jtu.run_on_devices("cuda")
+  @jtu.run_on_devices("gpu")
   def test_quantize_nvfp4(self, shape):
     # To test the q-dq logic is valid with XLA
     output_type = jnp.float32
@@ -495,7 +498,7 @@ class ScaledDotGeneralTest(jtu.JaxTestCase):
                               a, rtol=0.2, atol=0.5)
 
   @jtu.sample_product(value=[1e6, 1/4096])
-  @jtu.run_on_devices("cuda")
+  @jtu.run_on_devices("gpu")
   def test_quantize_requires_global_scale(self, value):
     output_type = jnp.float32
     k1, k2 = jax.random.split(jax.random.key(0), 2)
