@@ -17,11 +17,20 @@ limitations under the License.
 #include <cstdint>
 #include <cstdio>
 
+#include "jaxlib/gpu/vendor.h"
+
+#if defined(JAX_GPU_CUDA)
 #include "jaxlib/mosaic/gpu/nvshmem.h"
 #include "third_party/gpus/cuda/include/cuda.h"
+#endif // defined(JAX_GPU_CUDA)
+
+#if defined(JAX_GPU_HIP)
+
+#endif // defined(JAX_GPU_HIP)
 
 extern "C" {
 
+#if defined(JAX_GPU_CUDA)
 void mosaic_gpu_init_tma_desc(CUtensorMap *tma_desc, void *base_addr,
                               int64_t elem_type, int64_t rank, int64_t *sizes,
                               int64_t *strides, int64_t swizzle_bytes,
@@ -170,21 +179,38 @@ void mosaic_gpu_init_tma_desc(CUtensorMap *tma_desc, void *base_addr,
     abort();
   }
 }
+#endif // defined(JAX_GPU_CUDA)
+
+#if defined(JAX_GPU_HIP)
+void mosaic_gpu_init_tma_desc(void *tma_desc, void *base_addr,
+                              int64_t elem_type, int64_t rank, int64_t *sizes,
+                              int64_t *strides, int64_t swizzle_bytes,
+                              int64_t *window_shape) {
+  // Current gen. of AMD cards doesn't have TMA analogues
+}
+#endif // defined(JAX_GPU_HIP)
+
+namespace {
+const char *SafeGetErrorString(gpuError_t result) {
+  const char *p{gpuGetErrorString(result)};
+  return p == nullptr ? "<unknown error>" : p;
+}
+} // namespace
 
 void *mosaic_gpu_module_load(void *data) {
-  CUmodule module = nullptr;
-  if (auto result = cuModuleLoadData(&module, data); result != CUDA_SUCCESS) {
-    const char *ptr = nullptr;
-    cuGetErrorString(result, &ptr);
-    fprintf(stderr, "cuModuleLoadData failed: %s\n", ptr);
+  gpuModule_t module = nullptr;
+  if (auto result = gpuModuleLoadData(&module, data); result != gpuSuccess) {
+    const char *const ptr{SafeGetErrorString(result)};
+    fprintf(stderr, "gpuModuleLoadData failed: %s\n", ptr);
     abort();
   }
 
+#if defined(JAX_GPU_CUDA)
   { // Set the NVSHMEM state if it's used by the module.
     CUdeviceptr ptr = 0;
     size_t size = 0;
     if (cuModuleGetGlobal(&ptr, &size, module,
-                          "nvshmemi_device_lib_version_d") == CUDA_SUCCESS) {
+                          "nvshmemi_device_lib_version_d") == gpuSuccess) {
       if (mosaic::gpu::NvshmemApi::Default().cumodule_init(module) !=
           NVSHMEM_SUCCESS) {
         fprintf(stderr, "nvshmemx_cumodule_init failed.\n");
@@ -192,61 +218,71 @@ void *mosaic_gpu_module_load(void *data) {
       }
     }
   }
+#endif // defined(JAX_GPU_CUDA)
+  // TODO(Arech) SHMEM support for ROCm here?
 
   return module;
 }
 
 // cluster_size can be -1 when it's not statically known.
-void *mosaic_gpu_get_function(CUmodule module, const char *name,
+void *mosaic_gpu_get_function(gpuModule_t module, const char *name,
                               int32_t smem_bytes, int32_t cluster_size) {
-  CUfunction function = nullptr;
-  CUresult result = cuModuleGetFunction(&function, module, name);
-  if (result != CUDA_SUCCESS) {
-    const char *ptr = nullptr;
-    cuGetErrorString(result, &ptr);
+  gpuFunction_t function = nullptr;
+  auto result = gpuModuleGetFunction(&function, module, name);
+  if (result != gpuSuccess) {
     fprintf(stderr,
             "Failed to retrieve function pointer to kernel \"%s\", "
             "cuModuleGetFunction failed: %s\n",
-            name, ptr);
+            name, SafeGetErrorString(result));
     abort();
   }
   if (smem_bytes) {
+#if defined(JAX_GPU_CUDA)
     result = cuFuncSetAttribute(
         function, CU_FUNC_ATTRIBUTE_MAX_DYNAMIC_SHARED_SIZE_BYTES, smem_bytes);
-    if (result != CUDA_SUCCESS) {
-      const char *ptr = nullptr;
-      cuGetErrorString(result, &ptr);
+#elif defined(JAX_GPU_HIP)
+    result = hipFuncSetAttribute(
+        function, hipFuncAttributeMaxDynamicSharedMemorySize, smem_bytes);
+#endif // defined(JAX_GPU_CUDA) || defined(JAX_GPU_HIP)
+    if (result != gpuSuccess) {
       fprintf(stderr,
               "Failed to set maximum dynamic shared memory size for kernel "
               "\"%s\" to %d bytes, cuFuncSetAttribute failed: %s\n",
-              name, smem_bytes, ptr);
+              name, smem_bytes, SafeGetErrorString(result));
       abort();
     }
   }
+#if defined(JAX_GPU_CUDA)
   if (cluster_size > 8) {
     result = cuFuncSetAttribute(
         function, CU_FUNC_ATTRIBUTE_NON_PORTABLE_CLUSTER_SIZE_ALLOWED, 1);
     if (result != CUDA_SUCCESS) {
-      const char *ptr = nullptr;
-      cuGetErrorString(result, &ptr);
       fprintf(stderr,
               "Failed to set allowed cluster size for kernel \"%s\" to %d, "
               "cuFuncSetAttribute failed: %s\n",
-              name, cluster_size, ptr);
+              name, cluster_size, SafeGetErrorString(result));
       abort();
     }
   }
+#elif defined(JAX_GPU_HIP)
+  if (cluster_size > 1) {
+    // TODO(Arech) Is this a correct way to handle this?
+    fprintf(stderr, "Unsupported cluster size for kernel \"%s\" to be %d\n",
+            name, cluster_size);
+    abort();
+  }
+#endif // defined(JAX_GPU_CUDA) || defined(JAX_GPU_HIP)
   return function;
 }
 
-void mosaic_gpu_launch_kernel(CUfunction function, uint32_t grid_x,
+void mosaic_gpu_launch_kernel(gpuFunction_t function, uint32_t grid_x,
                               uint32_t grid_y, uint32_t grid_z,
                               uint32_t cluster_x, uint32_t cluster_y,
                               uint32_t cluster_z, uint32_t block_x,
                               uint32_t block_y, uint32_t block_z,
-                              uint32_t smem_bytes, CUstream stream,
+                              uint32_t smem_bytes, gpuStream_t stream,
                               void **params) {
-  CUlaunchConfig config{
+  gpuLaunchConfig_t config{
       .gridDimX = grid_x,
       .gridDimY = grid_y,
       .gridDimZ = grid_z,
@@ -258,8 +294,9 @@ void mosaic_gpu_launch_kernel(CUfunction function, uint32_t grid_x,
       .attrs = nullptr,
       .numAttrs = 0,
   };
-  CUlaunchAttribute cluster_attr;
+  gpuLaunchAttribute_t cluster_attr;
   if (cluster_x != 0) {
+#if defined(JAX_GPU_CUDA)
     cluster_attr.id = CU_LAUNCH_ATTRIBUTE_CLUSTER_DIMENSION;
     cluster_attr.value.clusterDim = {
         .x = cluster_x,
@@ -268,12 +305,19 @@ void mosaic_gpu_launch_kernel(CUfunction function, uint32_t grid_x,
     };
     config.attrs = &cluster_attr;
     config.numAttrs = 1;
+#elif defined(JAX_GPU_HIP)
+    fprintf(stderr, "Unsupported cluster size for kernel to launch: %d,%d,%d\n",
+            cluster_x, cluster_y, cluster_z);
+    abort();
+#endif // defined(JAX_GPU_CUDA) || defined(JAX_GPU_HIP)
+  } else {
+    assert(cluster_x == 0 && cluster_y == 0 && cluster_z == 0);
   }
-  CUresult result = cuLaunchKernelEx(&config, function, params, nullptr);
-  if (result != CUDA_SUCCESS) {
-    const char *ptr = nullptr;
-    cuGetErrorString(result, &ptr);
-    fprintf(stderr, "cuLaunchKernel failed: %s\n", ptr);
+
+  auto result = gpuLaunchKernelEx(&config, function, params, nullptr);
+  if (result != gpuSuccess) {
+    fprintf(stderr, "gpuLaunchKernelEx failed: %s\n",
+            SafeGetErrorString(result));
     abort();
   }
 }

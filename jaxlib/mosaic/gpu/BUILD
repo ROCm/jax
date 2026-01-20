@@ -246,17 +246,22 @@ cc_library(
     # Linker may prune these symbols if they are not explicitly exported.
     linkopts = [
         "-Wl,--export-dynamic-symbol='mosaic_gpu_*'",
+    ] + if_cuda_is_configured([
         "-Wl,--export-dynamic-symbol='nvshmem_my_pe'",
         "-Wl,--export-dynamic-symbol='nvshmem_ptr'",
         "-Wl,--export-dynamic-symbol='nvshmemx_mc_ptr'",
         "-Wl,--export-dynamic-symbol='nvshmemx_barrier_all_on_stream'",
         "-Wl,--export-dynamic-symbol='nvshmemx_cumodule_init'",
         "-Wl,--export-dynamic-symbol='nvshmemx_init_status'",
-    ],
+    ]),
     deps = [
+    ] + if_cuda_is_configured([
         ":nvshmem",
+        "//jaxlib/cuda:cuda_vendor",
         "@local_config_cuda//cuda:cuda_headers",
-    ],
+    ]) + if_rocm_is_configured([
+        "//jaxlib/rocm:hip_vendor",
+    ]),
     alwayslink = True,
 )
 
@@ -392,19 +397,23 @@ cc_test(
 
 nanobind_extension(
     name = "_mosaic_gpu_ext",
-    srcs = ["mosaic_gpu_ext.cc"],
+    srcs = if_cuda_is_configured(["mosaic_gpu_ext.cc"])
+         + if_rocm_is_configured(["mosaic_gpu_ext_rocm.cc"]),
     copts = [
         "-fexceptions",
         "-fno-strict-aliasing",
     ],
     deps = [
         "//jaxlib:kernel_nanobind_helpers",
-        "//jaxlib/cuda:cuda_vendor",
         "@com_google_absl//absl/cleanup",
         "@com_google_absl//absl/strings",
         "@nanobind",
+    ] + if_cuda_is_configured([
+        "//jaxlib/cuda:cuda_vendor",
         "@xla//xla/tsl/cuda:cudart",
-    ],
+    ]) + if_rocm_is_configured([
+        "//jaxlib/rocm:hip_vendor",
+    ]),
 )
 
 cc_binary(
@@ -417,10 +426,14 @@ cc_binary(
         "notap",
     ],
     deps = [
+    ] + if_cuda_is_configured([
         ":nvshmem",
+        "//jaxlib/cuda:cuda_vendor",
         "@local_config_cuda//cuda:cuda_headers",
         "@xla//xla/tsl/cuda:cudart",
-    ],
+    ]) + if_rocm_is_configured([
+        "//jaxlib/rocm:hip_vendor",
+    ]),
 )
 
 # TODO(Arech): update for ROCm

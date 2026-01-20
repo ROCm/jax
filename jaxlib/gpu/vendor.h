@@ -100,6 +100,9 @@ typedef cusparseSpMatDescr_t gpusparseSpMatDescr_t;
 typedef cusparseDnMatDescr_t gpusparseDnMatDescr_t;
 typedef cusparseDnVecDescr_t gpusparseDnVecDescr_t;
 
+using gpuLaunchConfig_t = CUlaunchConfig;
+using gpuLaunchAttribute_t = CUlaunchAttribute;
+
 #define GPU_C_16F CUDA_C_16F
 #define GPU_R_16F CUDA_R_16F
 #define GPU_C_32F CUDA_C_32F
@@ -367,6 +370,7 @@ typedef cusparseDnVecDescr_t gpusparseDnVecDescr_t;
 #define gpuFuncSetCacheConfig cuFuncSetCacheConfig
 #define gpuInit cuInit
 #define gpuLaunchKernel cuLaunchKernel
+#define gpuLaunchKernelEx cuLaunchKernelEx
 #define gpuMemcpyDtoHAsync cuMemcpyDtoHAsync
 #define gpuMemcpyHtoDAsync cuMemcpyHtoDAsync
 #define gpuMemsetD8Async cuMemsetD8Async
@@ -514,6 +518,9 @@ typedef hipsparseStatus_t gpusparseStatus_t;
 typedef hipsparseSpMatDescr_t gpusparseSpMatDescr_t;
 typedef hipsparseDnMatDescr_t gpusparseDnMatDescr_t;
 typedef hipsparseDnVecDescr_t gpusparseDnVecDescr_t;
+
+using gpuLaunchConfig_t = HIP_LAUNCH_CONFIG;
+using gpuLaunchAttribute_t = hipLaunchAttribute;
 
 #define GPU_C_16F HIP_C_16F
 #define GPU_R_16F HIP_R_16F
@@ -797,6 +804,7 @@ inline hipsparseStatus_t gpusparseCreate(gpusparseHandle_t* handle) {
 #define gpuGetStreamDeviceId hipGetStreamDeviceId
 #define gpuInit hipInit
 #define gpuLaunchKernel hipModuleLaunchKernel
+#define gpuLaunchKernelEx hipDrvLaunchKernelEx
 #define gpuModuleGetFunction hipModuleGetFunction
 #define gpuModuleLoadData hipModuleLoadData
 #define gpuModuleUnload hipModuleUnload
