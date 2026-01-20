@@ -433,6 +433,7 @@ cc_binary(
         "@xla//xla/tsl/cuda:cudart",
     ]) + if_rocm_is_configured([
         "//jaxlib/rocm:hip_vendor",
+        "@xla//xla/stream_executor/rocm:rocm_driver_wrapper",
     ]),
 )
 
