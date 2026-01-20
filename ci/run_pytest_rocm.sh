@@ -91,11 +91,9 @@ if [[ $host_memory_limit -lt $num_processes ]]; then
   echo "Adjusting num_processes to match host memory limit: $num_processes"
 fi
 
-export max_over_subscription_factor=20
-export max_parallelism=$((max_over_subscription_factor * gpu_count))
-if [[ $max_parallelism -lt $num_processes ]]; then
-  num_processes=$max_parallelism
-  echo "Reducing num_processes to keep over-subscription to $max_over_subscription_factor : $num_processes"
+if [[ 32 -lt $num_processes ]]; then
+  num_processes=32
+  echo "Reducing num_processes to $num_processes"
 fi
 
 echo "Final number of processes to run: $num_processes"
