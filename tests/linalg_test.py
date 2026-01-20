@@ -1978,7 +1978,7 @@ class ScipyLinalgTest(jtu.JaxTestCase):
     shape=[(1, 1), (4, 4), (15, 15), (50, 50), (100, 100)],
     dtype=float_types + complex_types,
   )
-  @jtu.run_on_devices("cpu")
+  @jtu.run_on_devices("cpu", "rocm")
   def testRsf2csf(self, shape, dtype):
     rng = jtu.rand_default(self.rng())
     args_maker = lambda: [rng(shape, dtype), rng(shape, dtype)]
