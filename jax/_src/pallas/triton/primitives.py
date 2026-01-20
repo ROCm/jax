@@ -119,6 +119,17 @@ def _elementwise_inline_asm_lowering(
     result_shape_dtypes,
 ):
   del result_shape_dtypes  # Unused.
+
+  # For ROCm, PTX inline assembly is not supported. For tanh.approx, we use
+  # OCML's tanh function which Triton lowers via a fast exp-based formula.
+  # See:
+  # - Triton PR #7780: https://github.com/triton-lang/triton/pull/7780
+  # - Triton PR #8551: https://github.com/triton-lang/triton/pull/8551
+  # - NVIDIA PTX ISA: https://docs.nvidia.com/cuda/parallel-thread-execution/
+  # - AMD CDNA3 ISA: https://www.amd.com/content/dam/amd/en/documents/instinct-tech-docs/instruction-set-architectures/amd-instinct-mi300-cdna3-instruction-set-architecture.pdf
+  if ctx.context.platform == "rocm" and "tanh.approx" in asm:
+    return _approx_tanh_rocm_lowering(ctx, *args)
+
   return tt_dialect.ElementwiseInlineAsmOp(
       [*map(mlir.aval_to_ir_type, ctx.avals_out)],
       asm,
@@ -127,6 +138,68 @@ def _elementwise_inline_asm_lowering(
       packed_element=pack,
       args=args,
   ).result
+
+
+def _approx_tanh_rocm_lowering(
+    ctx: lowering.LoweringRuleContext,
+    *args,
+):
+  """Lower approx_tanh for ROCm using OCML's tanh function.
+
+  AMD CDNA3 (MI300X/gfx942) does not have a hardware tanh instruction.
+  We use __ocml_tanh_f32 which Triton's AMD backend lowers using a numerically
+  stable fast exp-based formula: tanh(x) = sign(x) * (1 - 2/(e^(2|x|) + 1))
+  """
+  from jax._src.lib.mlir import ir
+  from jax._src.lib.mlir.dialects import arith as arith_dialect
+
+  [arg] = args
+  [out_aval] = ctx.avals_out
+  in_dtype = ctx.avals_in[0].dtype
+
+  # Helper to get IR type for a dtype
+  def dtype_to_ir_type(dtype):
+    dtype = jnp.dtype(dtype)
+    return mlir.dtype_to_ir_type(dtype)
+
+  # OCML only has f32 and f64 tanh. For f16/bf16, we cast to f32, compute, cast back.
+  needs_cast = in_dtype in (jnp.float16, jnp.bfloat16)
+
+  if needs_cast:
+    # Cast input to f32 (extend)
+    f32_type = dtype_to_ir_type(jnp.float32)
+    if out_aval.shape:
+      f32_result_type = ir.RankedTensorType.get(out_aval.shape, f32_type)
+    else:
+      f32_result_type = f32_type
+    arg_f32 = arith_dialect.extf(f32_result_type, arg)
+
+    # Call __ocml_tanh_f32
+    tanh_result = tt_dialect.extern_elementwise(
+        f32_result_type,
+        [arg_f32],
+        libname="",
+        libpath="",
+        symbol="__ocml_tanh_f32",
+        pure=True,
+    )
+
+    # Cast result back to original dtype (truncate)
+    out_type = mlir.aval_to_ir_type(out_aval)
+    result = arith_dialect.truncf(out_type, tanh_result)
+  else:
+    # f32: call __ocml_tanh_f32 directly
+    result_type = mlir.aval_to_ir_type(out_aval)
+    result = tt_dialect.extern_elementwise(
+        result_type,
+        list(args),
+        libname="",
+        libpath="",
+        symbol="__ocml_tanh_f32",
+        pure=True,
+    )
+
+  return [result]
 
 
 def debug_barrier() -> None:

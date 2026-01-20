@@ -1895,6 +1895,7 @@ class OpsTest(PallasBaseTest):
       self.skipTest("approx_tanh is not supported in interpret mode")
 
     if (dtype == "bfloat16" and
+        jtu.test_device_matches(["cuda"]) and
         not jtu.is_cuda_compute_capability_at_least("9.0")):
       self.skipTest("tanh.approx.bf16 requires a GPU with capability >= sm90")
 
