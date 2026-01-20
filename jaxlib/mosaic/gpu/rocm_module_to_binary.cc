@@ -49,7 +49,11 @@ limitations under the License.
 #include "mlir/Pass/PassRegistry.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Target/LLVM/ModuleToObject.h"
+#include "xla/debug_options_flags.h"
+#include "xla/service/gpu/llvm_gpu_backend/amdgpu_backend.h"
 #include "xla/service/gpu/llvm_gpu_backend/load_ir_module.h"
+#include "xla/stream_executor/device_description.h"
+#include "xla/stream_executor/rocm/rocm_compute_capability.h"
 
 namespace mosaic {
 namespace gpu {
@@ -63,30 +67,32 @@ using ::mlir::gpu::GPUModuleOp;
 class ModuleToBinary : public mlir::LLVM::ModuleToObject {
 public:
   ModuleToBinary(gpu::GPUModuleOp gpu_module,
-                 ::mlir::ROCDL::ROCDLTargetAttr target /*,
-                 std::vector<std::string> libraries_to_link*/)
-      : ModuleToObject(*gpu_module,
-                       target.getTriple(), target.getChip(),
-                       target.getFeatures(), target.getO()
-                       )
-        // , libraries_to_link_(std::move(libraries_to_link))
-         {};
+                 ::mlir::ROCDL::ROCDLTargetAttr target,
+                 const std::string &gcn_arch_name
+                 /*, std::vector<std::string> libraries_to_link*/)
+      : ModuleToObject(*gpu_module, target.getTriple(), target.getChip(),
+                       target.getFeatures(), target.getO()),
+        gcn_arch_name_{gcn_arch_name}
+  // , libraries_to_link_(std::move(libraries_to_link))
+  {};
 
   std::optional<SmallVector<char, 0>>
   moduleToObject(llvm::Module &llvm_module) override {
-    std::optional<llvm::TargetMachine *> machine = getOrCreateTargetMachine();
-    if (!machine) {
-      getOperation().emitError() << "Target Machine unavailable for triple "
-                                 << triple << ", can't optimize with LLVM\n";
-      return std::nullopt;
-    }
-    std::optional<std::string> ptx = translateToISA(llvm_module, **machine);
-    if (!ptx) {
-      getOperation().emitError() << "Failed translating the module to PTX.";
-      return std::nullopt;
-    }
+    stream_executor::GpuComputeCapability cc =
+        stream_executor::RocmComputeCapability(gcn_arch_name_);
 
-    return SmallVector<char, 0>(ptx->begin(), ptx->end());
+    std::vector<uint8_t> hsaco{};
+    auto ret = xla::gpu::amdgpu::CompileToHsaco(
+        &llvm_module, cc, xla::GetDebugOptionsFromFlags(),
+        /*compilation_cache_key*/ "my_key",
+        /*is_autotuning_compilation*/ false);
+    if (!ret.ok()) {
+      getOperation().emitError() << "Failed compiling the module to HSACO.";
+      return std::nullopt;
+    }
+    hsaco = std::move(ret.value());
+
+    return SmallVector<char, 0>(hsaco.begin(), hsaco.end());
   }
 
   // Loads the bitcode files in `libraries_to_link_`.
@@ -109,15 +115,17 @@ public:
     }
     return loaded_modules;
   }*/
-/*
+
 private:
-  std::vector<std::string> libraries_to_link_;*/
+  // `this` isn't expected to outlive the reference.
+  const std::string &gcn_arch_name_;
+  // std::vector<std::string> libraries_to_link_;
 };
 
 LogicalResult
-LowerGpuModuleToBinary(GPUModuleOp gpu_module /*,
+LowerGpuModuleToBinary(GPUModuleOp gpu_module,
+                       const std::string &gcn_arch_name /*,
                        const std::vector<std::string> &libraries_to_link*/) {
-  // EnsureLLVMNVPTXTargetIsRegistered();
   mlir::gpu::OffloadingLLVMTranslationAttrInterface handler(nullptr);
   mlir::OpBuilder builder(gpu_module->getContext());
   SmallVector<Attribute> objects;
@@ -144,16 +152,8 @@ LowerGpuModuleToBinary(GPUModuleOp gpu_module /*,
         "Target attribute is not of type ROCDLTargetAttr");
   }
 
-  /*auto target_attr = mlir::ROCDL::ROCDLTargetAttr::get(
-      gpu_module->getContext(), // MLIRContext*
-      3,                        // int (e.g., 2 or 3)
-      "amdgcn-amd-amdhsa",      // triple (StringRef)
-      "gfx942",                 // chip (StringRef)
-      "",                       // features (StringRef)
-      "600"                     // abiVersion (StringRef)
-  );*/
-
-  ModuleToBinary serializer(gpu_module, target_attr /*, libraries_to_link*/);
+  ModuleToBinary serializer(gpu_module, target_attr,
+                            gcn_arch_name /*, libraries_to_link*/);
 
   std::optional<SmallVector<char, 0>> binary = serializer.run();
   if (!binary) {
@@ -205,10 +205,13 @@ public:
   static constexpr llvm::StringLiteral kPassName = "RocmModuleToBinaryPass";
 
   void runOnOperation() override {
+    assert(gcn_arch_name_.hasValue());
+
     mlir::ModuleOp module = getOperation();
     module.walk([&](mlir::gpu::GPUModuleOp gpu_module) {
-      if (mlir::failed(
-              LowerGpuModuleToBinary(gpu_module /*, libraries_to_link_*/))) {
+      if (mlir::failed(LowerGpuModuleToBinary(
+              gpu_module,
+              gcn_arch_name_.getValue() /*, libraries_to_link_*/))) {
         gpu_module.emitError("Failed to lower GPU module to binary.");
         return mlir::WalkResult::interrupt();
       }
@@ -216,9 +219,14 @@ public:
     });
   }
 
-  /*
 private:
-  ListOption<std::string> libraries_to_link_{
+  mlir::Pass::Option<std::string> gcn_arch_name_{
+      *this, "gcn-arch-name",
+      llvm::cl::desc(
+          "The GCN architecture name to compile for. Must be in a format "
+          "suitable for stream_executor::RocmComputeCapability")};
+
+  /*ListOption<std::string> libraries_to_link_{
       *this, "libraries-to-link",
       llvm::cl::desc("A comma-separated list of bitcode files to link into the "
                      "resulting assembly.")};*/

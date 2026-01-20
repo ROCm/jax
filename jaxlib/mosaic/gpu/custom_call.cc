@@ -288,7 +288,7 @@ GetPassPipelineROCM(mlir::MLIRContext *ctx, const se::RocmComputeCapability &cc
                     /*const std::string &sm, const std::string &ptx_isa,
                     const std::string &nvshmem_path*/) {
   static absl::once_flag register_passes_flag;
-  absl::call_once(register_passes_flag, [&cc]() -> bool {
+  absl::call_once(register_passes_flag, [/*&cc*/]() -> bool {
     // mosaic::gpu::EnsureLLVMNVPTXTargetIsRegistered();
 
     // llvm::InitializeNativeTarget();
@@ -339,6 +339,7 @@ GetPassPipelineROCM(mlir::MLIRContext *ctx, const se::RocmComputeCapability &cc
     libraries_to_link.push_back(nvshmem_path);
   }*/
   // TODO(arech): fix this before the PR
+
   std::vector<std::string> libraries_to_link{"/opt/rocm/lib"};
   return mlir::parsePassPipeline(
       // convert-nvgpu-to-nvvm,
@@ -384,13 +385,14 @@ GetPassPipelineROCM(mlir::MLIRContext *ctx, const se::RocmComputeCapability &cc
           convert-math-to-llvm{approximate-log1p=true},
           canonicalize{max-iterations=10 max-num-rewrites=-1 region-simplify=normal test-convergence=false top-down=true},
           cse,
-          mosaic-rocm-module-to-binary,
+          mosaic-rocm-module-to-binary{gcn-arch-name=%2$s},
           gpu-launch-lowering,
           convert-to-llvm,
           reconcile-unrealized-casts
         )
       )",
-                      absl::StrJoin(libraries_to_link, ",")));
+                      absl::StrJoin(libraries_to_link, ","),
+                      cc.gcn_arch_name()));
 }
 #endif // defined( vendor )
 

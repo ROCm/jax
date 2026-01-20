@@ -196,6 +196,10 @@ cc_library(
         "@xla//xla/stream_executor/cuda:cuda_compute_capability",
     ]) + if_rocm_is_configured([
         "@llvm-project//mlir:ROCDLDialect",
+        "@xla//xla/service/gpu/llvm_gpu_backend:amdgpu_backend",
+        "@xla//xla/stream_executor/rocm:rocm_compute_capability",
+        "@xla//xla/stream_executor:device_description",
+        "@xla//xla:debug_options_flags",
     ]),
 )
 
