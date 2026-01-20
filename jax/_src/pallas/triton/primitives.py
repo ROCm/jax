@@ -48,6 +48,11 @@ def approx_tanh(x: jax.Array) -> jax.Array:
   elif x.dtype == jnp.float32:
     asm = "tanh.approx.f32 $0, $1;"
     constraint = "f"
+  elif x.dtype == jnp.float64:
+    # f64 tanh.approx is only supported on ROCm (uses __ocml_tanh_f64)
+    # CUDA does not have a PTX instruction for f64 approximate tanh
+    asm = "tanh.approx.f64 $0, $1;"
+    constraint = "d"
   else:
     raise TypeError(f"approx_tanh does not accept {x.dtype} arrays")
 
@@ -121,8 +126,8 @@ def _elementwise_inline_asm_lowering(
   del result_shape_dtypes  # Unused.
 
   # For ROCm, PTX inline assembly is not supported. For tanh.approx, we use
-  # Triton's fast_tanhf which uses a fast exp-based formula.
-  # See: https://github.com/triton-lang/triton/pull/7780
+  # Triton's __triton_hip_fast_tanhf (fast exp-based formula) for f32, and
+  # OCML's __ocml_tanh_f64 for f64. See: https://github.com/triton-lang/triton/pull/7780
   if ctx.context.platform == "rocm" and "tanh.approx" in asm:
     return _approx_tanh_rocm_lowering(ctx, *args)
 
@@ -140,17 +145,16 @@ def _approx_tanh_rocm_lowering(
     ctx: lowering.LoweringRuleContext,
     *args,
 ):
-  """Lower approx_tanh for ROCm using Triton's fast_tanhf.
+  """Lower approx_tanh for ROCm.
 
   AMD CDNA3 (MI300X/gfx942) does not have a hardware tanh instruction.
-  We use __triton_hip_fast_tanhf which Triton's AMD backend lowers using
-  fast_expf: tanh(x) = (exp(2x) - 1) / (exp(2x) + 1)
 
-  Note: f64 is not currently supported by approx_tanh, but if JAX extends
-  support for f64 in the future, this lowering falls back to __ocml_tanh_f64
-  since fast_tanhf only supports f32.
-
+  For f32 (and f16/bf16 via casting): We use Triton's __triton_hip_fast_tanhf
+  which implements a fast exp-based formula: tanh(x) = (exp(2x) - 1) / (exp(2x) + 1)
   See: https://github.com/triton-lang/triton/pull/7780
+
+  For f64: We use OCML's __ocml_tanh_f64 (AMD's Open Compute Math Library)
+  since fast_tanhf only supports f32.
   """
   from jax._src.lib.mlir import ir
   from jax._src.lib.mlir.dialects import arith as arith_dialect
@@ -164,7 +168,7 @@ def _approx_tanh_rocm_lowering(
     dtype = jnp.dtype(dtype)
     return mlir.dtype_to_ir_type(dtype)
 
-  # f64: fallback to __ocml_tanh_f64 if JAX extends approx_tanh to support f64
+  # f64: use __ocml_tanh_f64 (fast_tanhf only supports f32)
   if in_dtype == jnp.float64:
     result_type = mlir.aval_to_ir_type(out_aval)
     result = tt_dialect.extern_elementwise(
