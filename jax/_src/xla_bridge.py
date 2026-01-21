@@ -341,7 +341,62 @@ register_backend_factory(
 )
 
 
-def get_gpu_collective_backend(platform: str | None = None) -> str:
+class CtranNotAvailableError(RuntimeError):
+  """Raised when CTran backend is requested but not available."""
+  pass
+
+
+def is_ctran_available() -> bool:
+  """Check if CTran/torchcomms is available.
+
+  Returns:
+    True if torchcomms is installed and CTran can be used.
+  """
+  try:
+    import torchcomms  # noqa: F401
+    return True
+  except ImportError:
+    return False
+
+
+def _check_ctran_requirements(strict: bool = True) -> bool:
+  """Check if CTran requirements are met.
+
+  Args:
+    strict: If True, raise an error if requirements not met.
+            If False, just return False.
+
+  Returns:
+    True if CTran can be used, False otherwise (only if strict=False).
+
+  Raises:
+    CtranNotAvailableError: If strict=True and requirements not met.
+  """
+  if is_ctran_available():
+    return True
+
+  if strict:
+    raise CtranNotAvailableError(
+        "CTran collective backend requested but torchcomms is not installed.\n"
+        "\n"
+        "To install torchcomms (CTran):\n"
+        "  pip install torchcomms\n"
+        "\n"
+        "Or build from source:\n"
+        "  git clone https://github.com/meta-pytorch/torchcomms.git\n"
+        "  cd torchcomms && pip install -e .\n"
+        "\n"
+        "To use the default backend instead:\n"
+        "  jax.config.update('jax_gpu_collective_backend', 'auto')\n"
+        "  # or unset JAX_GPU_COLLECTIVE_BACKEND environment variable\n"
+    )
+  return False
+
+
+def get_gpu_collective_backend(
+    platform: str | None = None,
+    check_availability: bool = True
+) -> str:
   """Returns the GPU collective backend to use based on config.
 
   This reads the jax_gpu_collective_backend config and determines which
@@ -350,12 +405,15 @@ def get_gpu_collective_backend(platform: str | None = None) -> str:
   Args:
     platform: The GPU platform ('cuda' or 'rocm'). If None, will be
       auto-detected based on available hardware.
+    check_availability: If True, verify CTran is available when requested.
+      If False, just return the config value without checking.
 
   Returns:
     The collective backend to use: 'nccl', 'rccl', or 'ctran'.
 
   Raises:
-    RuntimeError: If 'ctran' is requested but not available.
+    CtranNotAvailableError: If 'ctran' is requested but not available
+      and check_availability=True.
   """
   backend_config = config.gpu_collective_backend.value
 
@@ -372,12 +430,17 @@ def get_gpu_collective_backend(platform: str | None = None) -> str:
         actual_backend = "nccl"
       else:
         actual_backend = "rccl"  # Assume ROCm if not NVIDIA
+
   elif backend_config == "ctran":
-    # CTran requested - check availability
+    # CTran requested - check availability if requested
+    if check_availability:
+      _check_ctran_requirements(strict=True)
     actual_backend = "ctran"
-    # TODO: Add actual CTran availability check when we integrate torchcomms
-    # For now, just log and allow it (will fail later if not available)
-    logger.info("CTran collective backend requested (experimental)")
+    logger.info(
+        "CTran collective backend enabled (experimental). "
+        "This feature is under development."
+    )
+
   else:
     # Explicit nccl or rccl
     actual_backend = backend_config
@@ -390,17 +453,37 @@ def get_gpu_collective_backend(platform: str | None = None) -> str:
   return actual_backend
 
 
-def is_ctran_available() -> bool:
-  """Check if CTran/torchcomms is available.
+def get_gpu_collective_backend_or_fallback(
+    platform: str | None = None
+) -> str:
+  """Returns GPU collective backend, falling back to default if CTran unavailable.
+
+  This is a convenience function that tries to use the configured backend,
+  but falls back to the default (NCCL/RCCL) if CTran is requested but
+  not available.
+
+  Args:
+    platform: The GPU platform ('cuda' or 'rocm').
 
   Returns:
-    True if torchcomms is installed and CTran can be used.
+    The collective backend to use: 'nccl', 'rccl', or 'ctran'.
   """
-  try:
-    import torchcomms  # noqa: F401
-    return True
-  except ImportError:
-    return False
+  backend_config = config.gpu_collective_backend.value
+
+  if backend_config == "ctran" and not is_ctran_available():
+    # CTran requested but not available - fall back
+    if platform == "rocm":
+      fallback = "rccl"
+    else:
+      fallback = "nccl"
+    logger.warning(
+        "CTran backend requested but torchcomms not installed. "
+        "Falling back to '%s'. Install torchcomms to use CTran.",
+        fallback
+    )
+    return fallback
+
+  return get_gpu_collective_backend(platform, check_availability=False)
 
 
 def get_num_nodes_from_gpu_topology(topology: str) -> int:
