@@ -354,6 +354,12 @@ def is_ctran_available() -> bool:
   """
   try:
     import torchcomms  # noqa: F401
+    # Verify it's the real torchcomms library, not just a namespace folder
+    # The real library has comms submodule with ctran
+    if not hasattr(torchcomms, '__version__') and not hasattr(torchcomms, 'comms'):
+      # Check if it's a namespace package (empty module from folder)
+      if torchcomms.__file__ is None:
+        return False
     return True
   except ImportError:
     return False
