@@ -937,8 +937,8 @@ def warpgroup_barrier():
   i32 = ir.IntegerType.get_signless(32)
 
   if IS_ROCM:
-    # TODO(Arech) FIX BEFORE THE PR. This is only a stub
-    pass
+    rocdl.s_waitcnt(0)
+    rocdl.s_barrier()
   else:
     llvm.inline_asm(
         ir.Type.parse("!llvm.void"),
