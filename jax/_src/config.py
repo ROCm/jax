@@ -2251,6 +2251,22 @@ cpu_collectives_implementation = optional_enum_state(
         '("gloo", "mpi")'),
 )
 
+# GPU collective backend configuration
+# This allows users to optionally use CTran instead of NCCL/RCCL
+gpu_collective_backend = optional_enum_state(
+    name='jax_gpu_collective_backend',
+    enum_values=["auto", "nccl", "rccl", "ctran"],
+    default="auto",
+    help=(
+        "GPU collective communication backend. Options:\n"
+        "  - 'auto': Use NCCL (CUDA) or RCCL (ROCm) automatically [default]\n"
+        "  - 'nccl': Force NCCL (for NVIDIA GPUs)\n"
+        "  - 'rccl': Force RCCL (for AMD GPUs)\n"
+        "  - 'ctran': Use Meta's CTran transport layer (experimental)\n"
+        "CTran provides multi-transport support and fault tolerance features."
+    ),
+)
+
 use_high_dynamic_range_gumbel = bool_state(
     name='jax_high_dynamic_range_gumbel',
     default=False,
