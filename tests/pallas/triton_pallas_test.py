@@ -126,7 +126,7 @@ class TritonPallasTest(PallasBaseTest):
       else:
         # JAX on ROCm does not currently handle atomic fmin/fmax correctly
         if jtu.test_device_matches(["rocm"]):
-            self.skipTest("Unsupported platform")
+            self.skipTest("Atomic fmin/fmax not supported on ROCm.")
         neutral = np.array(float("inf"), value.dtype)
     elif op == plgpu.atomic_or:
       neutral = np.array(False, value.dtype)
