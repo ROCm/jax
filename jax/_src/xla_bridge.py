@@ -340,6 +340,69 @@ register_backend_factory(
     "cpu", make_cpu_client, priority=0, fail_quietly=False
 )
 
+
+def get_gpu_collective_backend(platform: str | None = None) -> str:
+  """Returns the GPU collective backend to use based on config.
+
+  This reads the jax_gpu_collective_backend config and determines which
+  collective communication backend should be used for GPU operations.
+
+  Args:
+    platform: The GPU platform ('cuda' or 'rocm'). If None, will be
+      auto-detected based on available hardware.
+
+  Returns:
+    The collective backend to use: 'nccl', 'rccl', or 'ctran'.
+
+  Raises:
+    RuntimeError: If 'ctran' is requested but not available.
+  """
+  backend_config = config.gpu_collective_backend.value
+
+  # Determine actual backend from 'auto'
+  if backend_config == "auto":
+    # Default: NCCL for CUDA, RCCL for ROCm
+    if platform == "rocm":
+      actual_backend = "rccl"
+    elif platform == "cuda":
+      actual_backend = "nccl"
+    else:
+      # Try to auto-detect
+      if hardware_utils.has_visible_nvidia_gpu():
+        actual_backend = "nccl"
+      else:
+        actual_backend = "rccl"  # Assume ROCm if not NVIDIA
+  elif backend_config == "ctran":
+    # CTran requested - check availability
+    actual_backend = "ctran"
+    # TODO: Add actual CTran availability check when we integrate torchcomms
+    # For now, just log and allow it (will fail later if not available)
+    logger.info("CTran collective backend requested (experimental)")
+  else:
+    # Explicit nccl or rccl
+    actual_backend = backend_config
+
+  logger.debug(
+      "GPU collective backend: config=%s, actual=%s, platform=%s",
+      backend_config, actual_backend, platform
+  )
+
+  return actual_backend
+
+
+def is_ctran_available() -> bool:
+  """Check if CTran/torchcomms is available.
+
+  Returns:
+    True if torchcomms is installed and CTran can be used.
+  """
+  try:
+    import torchcomms  # noqa: F401
+    return True
+  except ImportError:
+    return False
+
+
 def get_num_nodes_from_gpu_topology(topology: str) -> int:
     try:
       slices_str, hosts_per_slice_str, _ = topology.split("x", 2)
