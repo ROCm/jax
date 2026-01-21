@@ -921,9 +921,10 @@ def parse_indices(
 
 def commit_shared():
   if IS_ROCM:
-      # TODO(Arech) FIX BEFORE THE PR. This is only a stub
-      # implement mbarriers first.
-      pass
+    # we call warpgroup_barrier() later, which already includes s_waitcnt(0),
+    # also we don't support async mem copies yet, so nothing is needed here.
+    # TODO ON PR REVIEW: is this correct?
+    pass
   else:
     nvvm.fence_proxy(
         nvvm.ProxyKind.async_shared, space=nvvm.SharedSpace.shared_cta
@@ -937,6 +938,7 @@ def warpgroup_barrier():
   i32 = ir.IntegerType.get_signless(32)
 
   if IS_ROCM:
+    # TODO ON PR REVIEW: is this correct?
     rocdl.s_waitcnt(0)
     rocdl.s_barrier()
   else:
