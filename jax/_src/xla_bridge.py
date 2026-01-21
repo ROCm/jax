@@ -417,37 +417,54 @@ def get_gpu_collective_backend(
   """
   backend_config = config.gpu_collective_backend.value
 
+  logger.debug(
+      "GPU collective backend selection: config=%s, platform=%s, "
+      "check_availability=%s",
+      backend_config, platform, check_availability
+  )
+
   # Determine actual backend from 'auto'
   if backend_config == "auto":
     # Default: NCCL for CUDA, RCCL for ROCm
     if platform == "rocm":
       actual_backend = "rccl"
+      logger.debug("Auto-selected RCCL for ROCm platform")
     elif platform == "cuda":
       actual_backend = "nccl"
+      logger.debug("Auto-selected NCCL for CUDA platform")
     else:
       # Try to auto-detect
-      if hardware_utils.has_visible_nvidia_gpu():
+      has_nvidia = hardware_utils.has_visible_nvidia_gpu()
+      logger.debug("Platform not specified, auto-detecting. has_nvidia_gpu=%s", has_nvidia)
+      if has_nvidia:
         actual_backend = "nccl"
       else:
         actual_backend = "rccl"  # Assume ROCm if not NVIDIA
 
   elif backend_config == "ctran":
     # CTran requested - check availability if requested
+    logger.info(
+        "CTran collective backend requested. Checking availability..."
+    )
     if check_availability:
       _check_ctran_requirements(strict=True)
+      logger.info(
+          "CTran/torchcomms is available. Using CTran collective backend."
+      )
     actual_backend = "ctran"
     logger.info(
         "CTran collective backend enabled (experimental). "
-        "This feature is under development."
+        "Features: multi-transport (NVLink/IB/TCP), fault tolerance."
     )
 
   else:
     # Explicit nccl or rccl
     actual_backend = backend_config
+    logger.debug("Using explicitly configured backend: %s", actual_backend)
 
-  logger.debug(
-      "GPU collective backend: config=%s, actual=%s, platform=%s",
-      backend_config, actual_backend, platform
+  logger.info(
+      "GPU collective backend initialized: %s (config=%s, platform=%s)",
+      actual_backend, backend_config, platform
   )
 
   return actual_backend
