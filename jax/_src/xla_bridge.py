@@ -671,6 +671,18 @@ def _options_from_jax_configs(plugin_name):
       if mock_gpu_topology:
         options['mock_gpu_topology'] = mock_gpu_topology
 
+    # Set collective backend option
+    # Map JAX config values to XLA GpuCollectiveBackend enum values
+    collective_backend = get_gpu_collective_backend(
+        platform=plugin_name, check_availability=False
+    )
+    # XLA expects: "auto", "nccl", "rccl", or "ctran"
+    options['collective_backend'] = collective_backend
+    logger.info(
+        "Passing collective_backend='%s' to %s plugin",
+        collective_backend, plugin_name
+    )
+
   return options
 
 OptionsDict = Mapping[str, str | int | list[int] | float | bool]
