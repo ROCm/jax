@@ -970,16 +970,13 @@ class StateHypothesisTest(jtu.JaxTestCase):
 
     # Skip known bug: _get_vmap incorrectly sets out_bdim=0 instead of ref_dim
     # when there are no integer indexers (only slices) and ref_bdim != slice_bdim.
-    # This causes shape mismatch: e.g., (2, 1) vs (1, 2).
-    #
-    # Fix available: Cherry-pick upstream commit ce6f33d55 ("Fix get vmap")
-    # from https://github.com/jax-ml/jax (fixes issue #33309)
-    #
-    # Bug location: jax/_src/state/primitives.py, _get_vmap function, line 868
-    # The except ValueError handler sets out_bdim=0 but should set out_bdim=ref_dim
+    # Fix: cherry-pick upstream ce6f33d55 (jax-ml/jax#33309)
     has_int_indexers = any(indexed_dims)
     if not has_int_indexers and ref_bdim != slice_bdim:
-      hp.assume(False)  # Skip this hypothesis example
+      self.skipTest(
+          "Known bug: _get_vmap slice-only with ref_bdim != slice_bdim "
+          "(jax-ml/jax#33309). Fix: cherry-pick ce6f33d55"
+      )
 
     def f(ref, *non_slice_idx):
       idx = _pack_idx(non_slice_idx, indexed_dims)
@@ -1012,7 +1009,6 @@ class StateHypothesisTest(jtu.JaxTestCase):
 
     self.assertAllClose(discharge_of_vmap_ans, vmap_of_discharge_ans,
                         check_dtypes=False)
-
 
   @hp.given(set_vmap_params())
   @hp.settings(deadline=None, print_blob=True,
