@@ -624,9 +624,17 @@ def _launch(
       # TODO(apaszke): Only initialize cluster barriers before the cluster wait.
 
       if IS_ROCM:
-        # TODO(Arech) FIX BEFORE THE PR. This is only a stub.
-        # implement mbarrier's first.
-        pass
+        # we don't have special handling for that, so just fencing the LDS
+        llvm.inline_asm(
+            ir.Type.parse("!llvm.void"),
+            [],
+            "s_waitcnt lgkmcnt(0);",
+            "",
+            has_side_effects=True,
+        )
+        # ^^ could be done with rocdl.s_waitcnt(), but that requires manually
+        # crafting the value of bitfield argument which less readable than ^^
+        # and not portable, compared to asm `s_waitcnt lgkmcnt(0)`.
       else:
         nvvm.fence_mbarrier_init()
 
