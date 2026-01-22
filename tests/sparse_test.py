@@ -137,6 +137,7 @@ class cuSparseTest(sptu.SparseTestCase):
     dtype=jtu.dtypes.floating + jtu.dtypes.complex,
   )
   @jax.default_matmul_precision("float32")
+  @jtu.skip_on_devices("rocm")  # skipping on ROCm due to known issue in hipSPARSE
   def test_csr_matmul_ad(self, shape, dtype, bshape):
     csr_matmul = sparse_csr._csr_matvec if len(bshape) == 1 else sparse_csr._csr_matmat
     tol = {np.float32: 2E-5, np.float64: 1E-12, np.complex64: 1E-5,
@@ -215,6 +216,7 @@ class cuSparseTest(sptu.SparseTestCase):
     dtype=all_dtypes,
     transpose=[True, False],
   )
+  @jtu.skip_on_devices("rocm")  # skipping on ROCm due to known issue in hipSPARSE
   def test_csr_matvec(self, shape, dtype, transpose):
     if (
         jtu.is_device_rocm() and
@@ -591,6 +593,7 @@ class cuSparseTest(sptu.SparseTestCase):
       transpose=[True, False],
   )
   @jtu.run_on_devices("gpu")
+  @jtu.skip_on_devices("rocm")  # skipping on ROCm due to known issue in hipSPARSE
   def test_csr_spmv(self, shape, dtype, transpose):
     tol = {np.float32: 2E-5, np.float64: 2E-14}
 
@@ -1042,6 +1045,7 @@ class SparseObjectTest(sptu.SparseTestCase):
     )
     for Obj in [sparse.CSR, sparse.CSC, sparse.COO, sparse.BCOO]))
   @jax.default_matmul_precision("float32")
+  @jtu.skip_on_devices("rocm")  # skipping on ROCm due to known issue in hipSPARSE
   def test_matmul(self, shape, dtype, Obj, bshape):
     rng = sptu.rand_sparse(self.rng(), post=jnp.array)
     rng_b = jtu.rand_default(self.rng())
