@@ -943,6 +943,8 @@ def warpgroup_barrier():
     # ISA a workaround is needed
     rocdl.s_waitcnt(0)
     rocdl.s_barrier()
+    # note that this code mustn't be a part of a warp-specialization branch,
+    # since s_barrier sync across all threads of the threadgroup.
   else:
     llvm.inline_asm(
         ir.Type.parse("!llvm.void"),
@@ -953,7 +955,12 @@ def warpgroup_barrier():
     )
 
 def warp_barrier():
-  nvvm.bar_warp_sync(c(0xffffffff, ir.IntegerType.get_signless(32)))
+  if IS_ROCM:
+    # wavefronts are implicitly synchronous on AMD, however, we still must
+    # issue a mem fence, as `bar.` does.
+    rocdl.s_waitcnt(0)
+  else:
+    nvvm.bar_warp_sync(c(0xffffffff, ir.IntegerType.get_signless(32)))
 
 
 def system_memory_barrier():
