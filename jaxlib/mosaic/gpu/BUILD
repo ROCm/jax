@@ -148,7 +148,7 @@ cc_library(
 cc_library(
     name = "passes",
     srcs = [
-        "launch_lowering.cc",# TODO(Arech) fix
+        "launch_lowering.cc",
         "passes.cc",
     ] + if_cuda_is_configured([
         "assembly_to_binary.cc",
@@ -157,7 +157,7 @@ cc_library(
         "rocm_module_to_binary.cc",
     ]),
     hdrs = [
-        "launch_lowering.h",# TODO(Arech) fix
+        "launch_lowering.h",
         "passes.h",
     ]  + if_cuda_is_configured([
         "assembly_to_binary.h",

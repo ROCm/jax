@@ -939,8 +939,6 @@ def warpgroup_barrier():
 
   if IS_ROCM:
     # TODO(Arech) PR REVIEW: is this correct?
-    # TODO(Arech) cache invalidation commands are MI300+ specific. For older
-    # ISA a workaround is needed
     rocdl.s_waitcnt(0)
     rocdl.s_barrier()
     # note that this code mustn't be a part of a warp-specialization branch,

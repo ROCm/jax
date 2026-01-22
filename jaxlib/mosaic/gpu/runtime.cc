@@ -219,7 +219,7 @@ void *mosaic_gpu_module_load(void *data) {
     }
   }
 #endif // defined(JAX_GPU_CUDA)
-  // TODO(Arech) SHMEM support for ROCm here?
+  // TODO(Arech) ROCSHMEM support here?
 
   return module;
 }
