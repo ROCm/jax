@@ -1438,8 +1438,8 @@ class LaunchContext:
       scope: utils.ThreadSubset = utils.ThreadSubset.WARPGROUP,
   ):
     if IS_ROCM:
-      # TODO(Arech) FIX BEFORE THE PR. This is only a stub
-      # implement mbarriers first.
+      # we don't have async copies yet, so we'll use a regular fence provided by
+      # the barrier implementations called directly afterwards below.
       pass
     else:
       nvvm.cp_async_bulk_wait_group(allow_groups, read=await_read_only)

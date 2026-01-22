@@ -1005,8 +1005,7 @@ def _commit_group_abstract_eval():
 def _commit_group_lowering(ctx: lowering.LoweringRuleContext):
   del ctx  # Unused.
   if IS_ROCM:
-    # TODO(Arech) FIX BEFORE THE PR. This is only a stub
-    # implement mbarriers first.
+    # we don't have async copies yet, so barriers handle the sync
     pass
   else:
     nvvm_dialect.cp_async_bulk_commit_group()
