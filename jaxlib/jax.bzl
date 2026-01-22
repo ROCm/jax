@@ -193,8 +193,8 @@ def _gpu_test_deps():
             "//jax_plugins:gpu_plugin_only_test_deps",
         ],
         "//jax:config_build_jaxlib_false": if_rocm_is_configured([
-            "//jaxlib/tools:rocm_plugin_kernels_wheel",
-            "//jaxlib/tools:rocm_plugin_pjrt_wheel",
+            "@jax_rocm_plugin//:pjrt.whl",
+            "@jax_rocm_plugin//:plugin.whl",
         ]) + if_cuda_is_configured([
             "//jaxlib/tools:pypi_jax_cuda_plugin_with_cuda_deps",
             "//jaxlib/tools:pypi_jax_cuda_pjrt_with_cuda_deps",
@@ -307,6 +307,7 @@ def jax_multiplatform_test(
             tags = test_tags,
             main = main,
             exec_properties = tf_exec_properties({"tags": test_tags}),
+            legacy_create_init = 0,
         )
 
 def jax_generate_backend_suites(backends = []):
@@ -441,6 +442,9 @@ def _jax_wheel_impl(ctx):
     if ctx.attr.skip_gpu_kernels:
         args.add("--skip_gpu_kernels")
 
+    for extra_arg in ctx.attr.extra_args:
+        args.add(extra_arg)
+
     srcs = []
     for src in ctx.attr.source_files:
         for f in src.files.to_list():
@@ -486,6 +490,7 @@ _jax_wheel = rule(
         "include_cuda_libs": attr.label(default = Label("@local_config_cuda//cuda:include_cuda_libs")),
         "override_include_cuda_libs": attr.label(default = Label("@local_config_cuda//cuda:override_include_cuda_libs")),
         "py_freethreaded": attr.label(default = Label("@rules_python//python/config_settings:py_freethreaded")),
+        "extra_args": attr.string_list(default = []),
     },
     implementation = _jax_wheel_impl,
     executable = False,
@@ -501,7 +506,8 @@ def jax_wheel(
         enable_cuda = False,
         enable_rocm = False,
         platform_version = "",
-        source_files = []):
+        source_files = [],
+        extra_args = []):
     """Create jax artifact wheels.
 
     Common artifact attributes are grouped within a single macro.
@@ -517,6 +523,7 @@ def jax_wheel(
       enable_rocm: whether to build a rocm wheel
       platform_version: the cuda version to use for the wheel
       source_files: the source files to include in the wheel
+      extra_args: additional arguments to pass to the wheel binary
 
     Returns:
       A wheel file or a wheel directory.
@@ -543,13 +550,14 @@ def jax_wheel(
         }),
         # TODO(kanglan) Add @platforms//cpu:ppc64le once JAX Bazel is upgraded > 6.5.0.
         cpu = select({
-            "//jaxlib/tools:macos_arm64": "arm64",
-            "//jaxlib/tools:macos_x86_64": "x86_64",
-            "//jaxlib/tools:win_amd64": "AMD64",
-            "//jaxlib/tools:linux_aarch64": "aarch64",
-            "//jaxlib/tools:linux_x86_64": "x86_64",
+            "@jax//jaxlib/tools:macos_arm64": "arm64",
+            "@jax//jaxlib/tools:macos_x86_64": "x86_64",
+            "@jax//jaxlib/tools:win_amd64": "AMD64",
+            "@jax//jaxlib/tools:linux_aarch64": "aarch64",
+            "@jax//jaxlib/tools:linux_x86_64": "x86_64",
         }),
         source_files = source_files,
+        extra_args = extra_args,
     )
 
 def jax_source_package(

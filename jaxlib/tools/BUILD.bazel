@@ -469,12 +469,12 @@ py_import(
 
 py_import(
     name = "rocm_plugin_kernels_wheel",
-    wheel = "@pypi_jax_rocm7_plugin//:whl",
+    wheel = "@jax_rocm_plugin//:jax_rocm7_plugin_wheel",
 )
 
 py_import(
     name = "rocm_plugin_pjrt_wheel",
-    wheel = "@pypi_jax_rocm7_pjrt//:whl",
+    wheel = "@jax_rocm_plugin//:jax_rocm7_pjrt_wheel",
 )
 
 py_import(
