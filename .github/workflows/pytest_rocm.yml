@@ -142,7 +142,7 @@ jobs:
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
-      options: --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --env-file /etc/podinfo/gha-gpu-isolation-settings
+      options: --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --shm-size 64G --env-file /etc/podinfo/gha-gpu-isolation-settings
     name: "ROCm ${{ inputs.rocm-version }}, ubu${{ inputs.ubuntu-version }}, py${{ inputs.python }}"
 
     env:
