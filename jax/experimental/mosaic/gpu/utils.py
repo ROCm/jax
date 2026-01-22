@@ -431,7 +431,7 @@ def _ROCDL_elect_sync() -> ir.Value:
   # Get active lane mask (EXEC register) using ballot with all-true predicate
   # ballot(true) returns the exec mask - a 64-bit value on AMD
   true_pred = arith.constant(ir.IntegerType.get_signless(1), 1)
-  # TODO(Arech): should there be a support for 32bit wavefronts?
+  # TODO(Arech) PR REVIEW: should there be a support for 32bit wavefronts?
   assert 64==WARP_SIZE # the below assumes 64bit wf
   exec_mask = rocdl.ballot(i64, true_pred)
   
@@ -938,7 +938,9 @@ def warpgroup_barrier():
   i32 = ir.IntegerType.get_signless(32)
 
   if IS_ROCM:
-    # TODO ON PR REVIEW: is this correct?
+    # TODO(Arech) PR REVIEW: is this correct?
+    # TODO(Arech) cache invalidation commands are MI300+ specific. For older
+    # ISA a workaround is needed
     rocdl.s_waitcnt(0)
     rocdl.s_barrier()
   else:
