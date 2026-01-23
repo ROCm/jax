@@ -635,6 +635,8 @@ def _launch(
         # ^^ could be done with rocdl.s_waitcnt(), but that requires manually
         # crafting the value of bitfield argument which less readable than ^^
         # and not portable, compared to asm `s_waitcnt lgkmcnt(0)`.
+        # But inline asm content has a very reduced visibility/understanding to
+        # a compiler
       else:
         nvvm.fence_mbarrier_init()
 
