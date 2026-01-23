@@ -15,14 +15,13 @@ limitations under the License.
 
 #include "jaxlib/mosaic/gpu/rocm_module_to_binary.h"
 
-// #include <cassert>
+#include <cstdint>
 #include <memory>
-// #include <optional>
+#include <optional>
 #include <string>
+#include <vector>
 #include <utility>
-// #include <vector>
-//
-// #include "absl/base/call_once.h"
+
 #include "mlir/Dialect/GPU/IR/CompilationInterfaces.h"
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "llvm/ADT/StringRef.h"
@@ -34,7 +33,6 @@ limitations under the License.
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/TargetSelect.h"
 
-// #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 
 #include "mlir/IR/Attributes.h"
@@ -43,7 +41,6 @@ limitations under the License.
 #include "mlir/IR/BuiltinOps.h"
 #include "mlir/IR/Location.h"
 #include "mlir/IR/MLIRContext.h"
-// #include "mlir/Interfaces/DataLayoutInterfaces.h"
 #include "jaxlib/mosaic/pass_boilerplate.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassRegistry.h"
@@ -71,8 +68,7 @@ public:
                  const std::string &gcn_arch_name)
       : ModuleToObject(*gpu_module, target.getTriple(), target.getChip(),
                        target.getFeatures(), target.getO()),
-        gcn_arch_name_{gcn_arch_name}
-  {};
+        gcn_arch_name_{gcn_arch_name} {};
 
   std::optional<SmallVector<char, 0>>
   moduleToObject(llvm::Module &llvm_module) override {
@@ -82,7 +78,9 @@ public:
     std::vector<uint8_t> hsaco{};
     auto ret = xla::gpu::amdgpu::CompileToHsaco(
         &llvm_module, cc, xla::GetDebugOptionsFromFlags(),
-        /*compilation_cache_key*/ "my_key", // TODO(arech) is this correct?
+        /*compilation_cache_key*/ "", // HSACO cache is in-memory only
+        // and already uses the content of the module, so since DebugOptions are
+        // stable through the process lifetime, we could use empty cache key.
         /*is_autotuning_compilation*/ false);
     if (!ret.ok()) {
       getOperation().emitError() << "Failed compiling the module to HSACO.";
@@ -98,9 +96,8 @@ private:
   const std::string &gcn_arch_name_;
 };
 
-LogicalResult
-LowerGpuModuleToBinary(GPUModuleOp gpu_module,
-                       const std::string &gcn_arch_name) {
+LogicalResult LowerGpuModuleToBinary(GPUModuleOp gpu_module,
+                                     const std::string &gcn_arch_name) {
   mlir::gpu::OffloadingLLVMTranslationAttrInterface handler(nullptr);
   mlir::OpBuilder builder(gpu_module->getContext());
   SmallVector<Attribute> objects;
@@ -132,9 +129,7 @@ LowerGpuModuleToBinary(GPUModuleOp gpu_module,
       builder.getNamedAttr("O", builder.getI32IntegerAttr(target_attr.getO()))};
 
   Attribute object = builder.getAttr<mlir::gpu::ObjectAttr>(
-      target_attr,
-      // mlir::gpu::CompilationTarget::Assembly,
-      mlir::gpu::CompilationTarget::Binary,
+      target_attr, mlir::gpu::CompilationTarget::Binary,
       builder.getStringAttr(llvm::StringRef(binary->data(), binary->size())),
       builder.getDictionaryAttr(properties), /*kernels=*/nullptr);
 
@@ -158,13 +153,13 @@ class RocmModuleToBinaryPass
 public:
   RocmModuleToBinaryPass() = default;
 
-  // TODO(Arech): CUDA has a weird implementation of a copy constructor of
-  // respective GpuModuleToAssemblyPass: it's just {}, skipping calling the base
-  // class c/constructor and not copying libraries_to_link_. libraries_to_link_
-  // is however problematic since one of its base classes prohibits copying, so
-  // the fix here isn't obvious.
-  // So how a correct copy of this class is expected to occur with such an
-  // implemnentation?
+  // TODO(Arech) for G review: CUDA has a weird implementation of a copy
+  // constructor of respective GpuModuleToAssemblyPass: it's just {}, skipping
+  // calling the base class c/constructor and not copying libraries_to_link_.
+  // libraries_to_link_ is however problematic since one of its base classes
+  // prohibits copying, so the fix here isn't obvious. So how a correct copy of
+  // this class is expected to occur with such an implemnentation? This class is
+  // copied by clonePass() in pass_boilerplate.h. Looks like a code design bug.
   RocmModuleToBinaryPass(const RocmModuleToBinaryPass &o) {};
 
   static constexpr llvm::StringLiteral kArgumentName =
@@ -192,11 +187,6 @@ private:
       llvm::cl::desc(
           "The GCN architecture name to compile for. Must be in a format "
           "suitable for stream_executor::RocmComputeCapability")};
-
-  /*ListOption<std::string> libraries_to_link_{
-      *this, "libraries-to-link",
-      llvm::cl::desc("A comma-separated list of bitcode files to link into the "
-                     "resulting assembly.")};*/
 };
 
 } // namespace
