@@ -99,6 +99,10 @@ load("//third_party/flatbuffers:workspace.bzl", flatbuffers = "repo")
 
 flatbuffers()
 
+load("//third_party/plugins:workspace.bzl", "plugin_wheel_deps_repository")
+
+plugin_wheel_deps_repository(name = "plugin_wheel_deps")
+
 load("//:test_shard_count.bzl", "test_shard_count_repository")
 
 test_shard_count_repository(

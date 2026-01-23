@@ -47,6 +47,7 @@ string_flag(
         "true",
         "false",
         "wheel",
+        "plugin_wheels",
     ],
 )
 
@@ -68,6 +69,13 @@ config_setting(
     name = "config_build_jaxlib_wheel",
     flag_values = {
         ":build_jaxlib": "wheel",
+    },
+)
+
+config_setting(
+    name = "config_build_jaxlib_plugin_wheels",
+    flag_values = {
+        ":build_jaxlib": "plugin_wheels",
     },
 )
 
