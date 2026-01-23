@@ -373,6 +373,7 @@ cc_library(
         "@llvm-project//mlir:ROCDLToLLVMIRTranslation",
         "@xla//xla/stream_executor/rocm:rocm_compute_capability",
         "@xla//xla/stream_executor/rocm:rocm_driver_wrapper",
+        # "@xla//xla/tsl/platform:rocm_rocdl_path"
     ]),
     alwayslink = True,
 )
@@ -441,7 +442,7 @@ cc_binary(
     ]),
 )
 
-# TODO(Arech): update for ROCm
+# Note, this remains CUDA specific, as ROCm uses XLA's compiler wrapper which doesn't need it
 cc_library(
     name = "library_paths",
     hdrs = ["library_paths.h"],

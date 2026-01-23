@@ -165,7 +165,6 @@ const llvm::StringMap<SerdeRuleType> &upgrade_rules() {
        vector_extractelement_upgrade},
       {::llvm::StringLiteral("vector.insertelement"),
        vector_insertelement_upgrade},
-      // TODO(Arech) NV specific
       {::llvm::StringLiteral("nvvm.cp.async.bulk.tensor.global.shared.cta"),
        nvvm_cp_async_bulk_tensor_global_shared_cta_upgrade},
       {::llvm::StringLiteral("vector.splat"), vector_splat_upgrade}};
@@ -174,7 +173,6 @@ const llvm::StringMap<SerdeRuleType> &upgrade_rules() {
 
 const llvm::StringMap<SerdeRuleType> &downgrade_rules() {
   static auto rules = new llvm::StringMap<SerdeRuleType>{
-      // TODO(Arech) NV specific
       {::llvm::StringLiteral("nvvm.cp.async.bulk.tensor.global.shared.cta"),
        nvvm_cp_async_bulk_tensor_global_shared_cta_downgrade}};
   return *rules;

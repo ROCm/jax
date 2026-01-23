@@ -160,6 +160,7 @@ limitations under the License.
 #elif defined(JAX_GPU_HIP)
 #include "xla/stream_executor/rocm/rocm_compute_capability.h"
 #include "xla/stream_executor/rocm/rocm_driver_wrapper.h"
+// #include "xla/tsl/platform/rocm_rocdl_path.h"
 #endif // defined( vendor )
 
 #include "xla/tsl/platform/statusor.h"
@@ -284,32 +285,21 @@ GetPassPipelineCUDA(mlir::MLIRContext *ctx,
 }
 #elif defined(JAX_GPU_HIP)
 mlir::FailureOr<mlir::OpPassManager>
-GetPassPipelineROCM(mlir::MLIRContext *ctx, const se::RocmComputeCapability &cc
-                    /*const std::string &sm, const std::string &ptx_isa,
-                    const std::string &nvshmem_path*/) {
+GetPassPipelineROCM(mlir::MLIRContext *ctx,
+                    const se::RocmComputeCapability &cc) {
   static absl::once_flag register_passes_flag;
-  absl::call_once(register_passes_flag, [/*&cc*/]() -> bool {
-    // mosaic::gpu::EnsureLLVMNVPTXTargetIsRegistered();
-
-    // llvm::InitializeNativeTarget();
-    llvm::InitializeNativeTarget(); // TODO(Arech): CUDA have these doubled.
-                                    // Why?
+  absl::call_once(register_passes_flag, []() -> bool {
+    llvm::InitializeNativeTarget();
     llvm::InitializeNativeTargetAsmPrinter();
     mlir::registerCanonicalizer();
     mlir::registerCSE();
     mlir::registerStripDebugInfo();
-    // mlir::registerConvertNVGPUToNVVMPass();
     mlir::registerConvertVectorToSCF();
     mlir::registerSCFToControlFlowPass();
-    // mlir::registerConvertNVVMToLLVMPass();
-
     mlir::registerConvertAMDGPUToROCDLPass();
-
     mlir::registerArithToLLVMConversionPass();
     mlir::registerConvertIndexToLLVMPass();
-    // mlir::registerConvertGpuOpsToNVVMOps();
     mlir::registerConvertGpuOpsToROCDLOps();
-
     mlir::registerConvertMathToLLVMPass();
     mlir::registerConvertFuncToLLVMPass();
     mlir::registerLowerAffinePass();
@@ -329,52 +319,30 @@ GetPassPipelineROCM(mlir::MLIRContext *ctx, const se::RocmComputeCapability &cc
     mlir::LLVM::registerDIScopeForLLVMFuncOpPass();
     return true;
   });
-  /*const char *cuda_root = mosaic::gpu::GetCUDARoot();
-  if (!cuda_root) {
-    return mlir::failure();
-  }
-  std::vector<std::string> libraries_to_link{
-      ::xla::gpu::nvptx::LibDevicePath(kDefaultCudaDataDir)};
-  if (!nvshmem_path.empty()) {
-    libraries_to_link.push_back(nvshmem_path);
-  }*/
-  // TODO(arech): fix this before the PR
 
-  std::vector<std::string> libraries_to_link{"/opt/rocm/lib"};
-  return mlir::parsePassPipeline(
-      // convert-nvgpu-to-nvvm,
-      // convert-nvvm-to-llvm,
+  // TODO(Arech) PR REVIEW: is this a correct lib path for linking the kernel?
+  // TODO(Arech): remove this if correctness confirms it's redundant
+  // std::vector<std::string> libraries_to_link{tsl::RocmRoot() + "/lib"};
+  // rocdl-attach-target{O=3 chip=%1$s fast=false features= module=
+  // triple=amdgcn-amd-amdhsa l=%2$s}, absl::StrJoin(libraries_to_link, ","),
 
-      // nvvm-attach-target{O=3 chip=%1$s fast=false features=+%2$s ftz=false
-      // module= triple=nvptx64-nvidia-cuda},  // sm, ptx_isa
-      // gpu.module(convert-gpu-to-nvvm{has-redux=false index-bitwidth=64
-      // use-bare-ptr-memref-call-conv=false}),
-
-      // TODO(Arech): proper params to rocdl-attach-target{}
-      // mosaic-rocm-module-to-binary{libraries-to-link=%1$s}
-      absl::StrFormat(R"(
+  return mlir::parsePassPipeline(absl::StrFormat(R"(
         builtin.module(
           mosaic-gpu-resolve-trivial-locations,
           arith-expand,
           canonicalize,
-          gpu-launch-sink-index-computations,
-          
+          gpu-launch-sink-index-computations,          
           gpu-kernel-outlining{data-layout-str=},
           convert-vector-to-scf{full-unroll=false lower-tensors=false target-rank=1},
-          convert-scf-to-cf,
-          
-          expand-strided-metadata,
-          
-          rocdl-attach-target{O=3 chip=gfx942 fast=false features= module= triple=amdgcn-amd-amdhsa l=%1$s},
-
+          convert-scf-to-cf,          
+          expand-strided-metadata,          
+          rocdl-attach-target{O=3 chip=%1$s fast=false features= module= triple=amdgcn-amd-amdhsa},
           lower-affine,
           convert-arith-to-llvm{index-bitwidth=0},
           convert-index-to-llvm{index-bitwidth=64},
           canonicalize{max-iterations=10 max-num-rewrites=-1 region-simplify=normal test-convergence=false top-down=true},
-          cse,
-          
+          cse,          
           gpu.module(convert-gpu-to-rocdl{index-bitwidth=64 use-bare-ptr-memref-call-conv=false}),
-
           gpu.module(canonicalize{max-iterations=10 max-num-rewrites=-1 region-simplify=normal test-convergence=false top-down=true}),
           gpu.module(cse),
           gpu.module(mosaic-byval-insertion),
@@ -391,8 +359,8 @@ GetPassPipelineROCM(mlir::MLIRContext *ctx, const se::RocmComputeCapability &cc
           reconcile-unrealized-casts
         )
       )",
-                      absl::StrJoin(libraries_to_link, ","),
-                      cc.gcn_arch_name()));
+                                                 cc.gfx_version(),
+                                                 cc.gcn_arch_name()));
 }
 #endif // defined( vendor )
 
@@ -464,11 +432,8 @@ inline void InitContext_ROCM(mlir::MLIRContext *context) {
                   mlir::func::FuncDialect, mlir::math::MathDialect,
                   mlir::memref::MemRefDialect, mlir::scf::SCFDialect,
                   mlir::vector::VectorDialect, mlir::gpu::GPUDialect,
-                  // mlir::nvgpu::NVGPUDialect,
-                  // mlir::NVVM::NVVMDialect,
                   mlir::ROCDL::ROCDLDialect, mlir::LLVM::LLVMDialect,
                   mosaic_gpu::MosaicGPUDialect>();
-  // mlir::registerConvertNVVMToLLVMInterface(registry);
   mlir::registerConvertComplexToLLVMInterface(registry);
   mlir::registerConvertMemRefToLLVMInterface(registry);
   mlir::registerConvertMathToLLVMInterface(registry);
@@ -480,7 +445,6 @@ inline void InitContext_ROCM(mlir::MLIRContext *context) {
   mlir::arith::registerConvertArithToLLVMInterface(registry);
   mlir::registerConvertMemRefToLLVMInterface(registry);
   mlir::gpu::registerOffloadingLLVMTranslationInterfaceExternalModels(registry);
-  // mlir::NVVM::registerNVVMTargetInterfaceExternalModels(registry);
   mlir::registerBuiltinDialectTranslation(registry);
   mlir::registerGPUDialectTranslation(registry);
   mlir::registerLLVMDialectTranslation(registry);

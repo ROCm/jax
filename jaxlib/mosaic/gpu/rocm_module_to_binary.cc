@@ -68,12 +68,10 @@ class ModuleToBinary : public mlir::LLVM::ModuleToObject {
 public:
   ModuleToBinary(gpu::GPUModuleOp gpu_module,
                  ::mlir::ROCDL::ROCDLTargetAttr target,
-                 const std::string &gcn_arch_name
-                 /*, std::vector<std::string> libraries_to_link*/)
+                 const std::string &gcn_arch_name)
       : ModuleToObject(*gpu_module, target.getTriple(), target.getChip(),
                        target.getFeatures(), target.getO()),
         gcn_arch_name_{gcn_arch_name}
-  // , libraries_to_link_(std::move(libraries_to_link))
   {};
 
   std::optional<SmallVector<char, 0>>
@@ -84,7 +82,7 @@ public:
     std::vector<uint8_t> hsaco{};
     auto ret = xla::gpu::amdgpu::CompileToHsaco(
         &llvm_module, cc, xla::GetDebugOptionsFromFlags(),
-        /*compilation_cache_key*/ "my_key",
+        /*compilation_cache_key*/ "my_key", // TODO(arech) is this correct?
         /*is_autotuning_compilation*/ false);
     if (!ret.ok()) {
       getOperation().emitError() << "Failed compiling the module to HSACO.";
@@ -95,37 +93,14 @@ public:
     return SmallVector<char, 0>(hsaco.begin(), hsaco.end());
   }
 
-  // Loads the bitcode files in `libraries_to_link_`.
-  /*std::optional<SmallVector<std::unique_ptr<llvm::Module>>>
-  loadBitcodeFiles(llvm::Module &llvm_module) override {
-    llvm::LLVMContext &ctx = llvm_module.getContext();
-    llvm::SMDiagnostic err;
-    SmallVector<std::unique_ptr<llvm::Module>> loaded_modules;
-    loaded_modules.reserve(libraries_to_link_.size());
-    for (const std::string &library_path : libraries_to_link_) {
-      std::unique_ptr<llvm::Module> library_module =
-          xla::gpu::LoadIRModule(library_path, &ctx);
-      if (!library_module) {
-        getOperation().emitError()
-            << "Failed loading file from " << library_path
-            << ", error: " << err.getMessage();
-        return std::nullopt;
-      }
-      loaded_modules.push_back(std::move(library_module));
-    }
-    return loaded_modules;
-  }*/
-
 private:
   // `this` isn't expected to outlive the reference.
   const std::string &gcn_arch_name_;
-  // std::vector<std::string> libraries_to_link_;
 };
 
 LogicalResult
 LowerGpuModuleToBinary(GPUModuleOp gpu_module,
-                       const std::string &gcn_arch_name /*,
-                       const std::vector<std::string> &libraries_to_link*/) {
+                       const std::string &gcn_arch_name) {
   mlir::gpu::OffloadingLLVMTranslationAttrInterface handler(nullptr);
   mlir::OpBuilder builder(gpu_module->getContext());
   SmallVector<Attribute> objects;
@@ -136,14 +111,6 @@ LowerGpuModuleToBinary(GPUModuleOp gpu_module,
                "Expected exactly one target attribute, but got ")
            << gpu_module.getTargetsAttr().size();
   }
-
-  /*auto target_attr = llvm::dyn_cast<mlir::NVVM::NVVMTargetAttr>(
-      gpu_module.getTargetsAttr()[0]);
-  if (!target_attr) {
-    return gpu_module.emitError(
-        "Target attribute is not of type NVVMTargetAttr");
-  }
-  ModuleToBinary serializer(gpu_module, target_attr, libraries_to_link);*/
 
   auto target_attr = llvm::dyn_cast<mlir::ROCDL::ROCDLTargetAttr>(
       gpu_module.getTargetsAttr()[0]);
