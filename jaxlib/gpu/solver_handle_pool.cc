@@ -45,26 +45,26 @@ template <>
   return Handle(pool, handle, stream);
 }
 
-#ifdef JAX_GPU_CUDA
 
 template <>
 /*static*/ absl::StatusOr<SpSolverHandlePool::Handle>
 SpSolverHandlePool::Borrow(gpuStream_t stream) {
   SpSolverHandlePool* pool = Instance();
   absl::MutexLock lock(pool->mu_);
-  cusolverSpHandle_t handle;
+  gpusolverSpHandle_t handle;
   if (pool->handles_[stream].empty()) {
-    JAX_RETURN_IF_ERROR(JAX_AS_STATUS(cusolverSpCreate(&handle)));
+    JAX_RETURN_IF_ERROR(JAX_AS_STATUS(gpusolverSpCreate(&handle)));
   } else {
     handle = pool->handles_[stream].back();
     pool->handles_[stream].pop_back();
   }
   if (stream) {
-    JAX_RETURN_IF_ERROR(JAX_AS_STATUS(cusolverSpSetStream(handle, stream)));
+    JAX_RETURN_IF_ERROR(JAX_AS_STATUS(gpusolverSpSetStream(handle, stream)));
   }
   return Handle(pool, handle, stream);
 }
 
+#ifdef JAX_GPU_CUDA
 #endif  // JAX_GPU_CUDA
 
 }  // namespace jax

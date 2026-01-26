@@ -168,6 +168,8 @@ typedef cusparseDnVecDescr_t gpusparseDnVecDescr_t;
 
 #define gpusolverDnCreate cusolverDnCreate
 #define gpusolverDnSetStream cusolverDnSetStream
+#define gpusolverSpCreate cusolverSpCreate
+#define gpusolverSpSetStream cusolverSpSetStream
 #define gpusolverDnCreateSyevjInfo cusolverDnCreateSyevjInfo
 #define gpusolverDnDestroySyevjInfo cusolverDnDestroySyevjInfo
 #define gpusolverDnCreateGesvdjInfo cusolverDnCreateGesvdjInfo
@@ -294,6 +296,8 @@ typedef cusparseDnVecDescr_t gpusparseDnVecDescr_t;
 #define gpusparseCreateCsr cusparseCreateCsr
 #define gpusparseCreateDnMat cusparseCreateDnMat
 #define gpusparseCreateDnVec cusparseCreateDnVec
+#define gpusparseCreateMatDescr cusparseCreateMatDescr
+#define gpusparseDestroyMatDescr cusparseDestroyMatDescr
 #define gpusparseDenseToSparse_analysis cusparseDenseToSparse_analysis
 #define gpusparseDenseToSparse_bufferSize cusparseDenseToSparse_bufferSize
 #define gpusparseDenseToSparse_convert cusparseDenseToSparse_convert
@@ -302,6 +306,8 @@ typedef cusparseDnVecDescr_t gpusparseDnVecDescr_t;
 #define gpusparseDestroyDnVec cusparseDestroyDnVec
 #define gpusparseDnMatSetStridedBatch cusparseDnMatSetStridedBatch
 #define gpusparseSetStream cusparseSetStream
+#define gpusparseSetMatType cusparseSetMatType
+#define gpusparseSetMatIndexBase cusparseSetMatIndexBase
 #define gpusparseSparseToDense cusparseSparseToDense
 #define gpusparseSparseToDense_bufferSize cusparseSparseToDense_bufferSize
 #define gpusparseSpMM cusparseSpMM
@@ -356,6 +362,9 @@ typedef cusparseDnVecDescr_t gpusparseDnVecDescr_t;
 #define GPUSPARSE_ORDER_ROW CUSPARSE_ORDER_ROW
 #define GPUSPARSE_SPARSETODENSE_ALG_DEFAULT CUSPARSE_SPARSETODENSE_ALG_DEFAULT
 #define GPUSPARSE_STATUS_SUCCESS CUSPARSE_STATUS_SUCCESS
+
+#define GPUSPARSE_MATRIX_TYPE_GENERAL CUSPARSE_MATRIX_TYPE_GENERAL
+#define GPUSPARSE_INDEX_BASE_ZERO CUSPARSE_INDEX_BASE_ZERO
 
 #define GPU_STREAM_CAPTURE_STATUS_ACTIVE CU_STREAM_CAPTURE_STATUS_ACTIVE
 #define GPU_STREAM_CAPTURE_MODE_RELAXED CU_STREAM_CAPTURE_MODE_RELAXED
@@ -733,6 +742,8 @@ inline hipsparseStatus_t gpusparseCreate(gpusparseHandle_t* handle) {
 #define gpusparseCreateCsr hipsparseCreateCsr
 #define gpusparseCreateDnMat hipsparseCreateDnMat
 #define gpusparseCreateDnVec hipsparseCreateDnVec
+#define gpusparseCreateMatDescr hipsparseCreateMatDescr
+#define gpusparseDestroyMatDescr hipsparseDestroyMatDescr
 #define gpusparseDenseToSparse_analysis hipsparseDenseToSparse_analysis
 #define gpusparseDenseToSparse_bufferSize hipsparseDenseToSparse_bufferSize
 #define gpusparseDenseToSparse_convert hipsparseDenseToSparse_convert
@@ -742,6 +753,8 @@ inline hipsparseStatus_t gpusparseCreate(gpusparseHandle_t* handle) {
 #define gpusparseDnMatSetStridedBatch hipsparseDnMatSetStridedBatch
 #define gpusparseSparseToDense hipsparseSparseToDense
 #define gpusparseSparseToDense_bufferSize hipsparseSparseToDense_bufferSize
+#define gpusparseSetMatType hipsparseSetMatType
+#define gpusparseSetMatIndexBase hipsparseSetMatIndexBase
 #define gpusparseSpMM hipsparseSpMM
 #define gpusparseSpMM_bufferSize hipsparseSpMM_bufferSize
 #define gpusparseSpMV hipsparseSpMV
@@ -783,6 +796,9 @@ inline hipsparseStatus_t gpusparseCreate(gpusparseHandle_t* handle) {
 #define GPUSPARSE_ORDER_ROW HIPSPARSE_ORDER_ROW
 #define GPUSPARSE_SPARSETODENSE_ALG_DEFAULT HIPSPARSE_SPARSETODENSE_ALG_DEFAULT
 #define GPUSPARSE_STATUS_SUCCESS HIPSPARSE_STATUS_SUCCESS
+
+#define GPUSPARSE_MATRIX_TYPE_GENERAL HIPSPARSE_MATRIX_TYPE_GENERAL
+#define GPUSPARSE_INDEX_BASE_ZERO HIPSPARSE_INDEX_BASE_ZERO
 
 #define GPU_STREAM_CAPTURE_STATUS_ACTIVE hipStreamCaptureStatusActive
 #define GPU_STREAM_CAPTURE_MODE_RELAXED hipStreamCaptureModeRelaxed

@@ -1279,8 +1279,6 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(GesvdpFfi, GesvdpDispatch,
 
 #endif  // JAX_GPU_CUDA
 
-#ifdef JAX_GPU_CUDA
-
 // csrlsvqr: Linear system solve via Sparse QR
 
 template <typename T>
@@ -1294,12 +1292,12 @@ ffi::Error CsrlsvqrImpl(int64_t n, int64_t nnz, double tol, int reorder,
   FFI_ASSIGN_OR_RETURN(auto int_n, MaybeCastNoOverflow<int>(n));
   FFI_ASSIGN_OR_RETURN(auto int_nnz, MaybeCastNoOverflow<int>(nnz));
 
-  cusparseMatDescr_t matdesc = nullptr;
-  JAX_FFI_RETURN_IF_GPU_ERROR(cusparseCreateMatDescr(&matdesc));
+  gpusparseMatDescr_t matdesc = nullptr;
+  JAX_FFI_RETURN_IF_GPU_ERROR(gpusparseCreateMatDescr(&matdesc));
   JAX_FFI_RETURN_IF_GPU_ERROR(
-      cusparseSetMatType(matdesc, CUSPARSE_MATRIX_TYPE_GENERAL));
+      gpusparseSetMatType(matdesc, GPUSPARSE_MATRIX_TYPE_GENERAL));
   JAX_FFI_RETURN_IF_GPU_ERROR(
-      cusparseSetMatIndexBase(matdesc, CUSPARSE_INDEX_BASE_ZERO));
+      gpusparseSetMatIndexBase(matdesc, GPUSPARSE_INDEX_BASE_ZERO));
 
   auto* csrValA_data = static_cast<T*>(csrValA.untyped_data());
   auto* csrColIndA_data = csrColIndA.typed_data();
@@ -1311,7 +1309,7 @@ ffi::Error CsrlsvqrImpl(int64_t n, int64_t nnz, double tol, int reorder,
   auto result = solver::Csrlsvqr<T>(
       handle.get(), int_n, int_nnz, matdesc, csrValA_data, csrRowPtrA_data,
       csrColIndA_data, b_data, tol, reorder, x_data, &singularity);
-  cusparseDestroyMatDescr(matdesc);
+  gpusparseDestroyMatDescr(matdesc);
   FFI_RETURN_IF_ERROR_STATUS(result);
 
   if (singularity >= 0) {
@@ -1357,6 +1355,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(CsrlsvqrFfi, CsrlsvqrDispatch,
                                   .Ret<ffi::AnyBuffer>()         // x
 );
 
+#ifdef JAX_GPU_CUDA
 #endif  // JAX_GPU_CUDA
 
 // Symmetric tridiagonal reduction: sytrd

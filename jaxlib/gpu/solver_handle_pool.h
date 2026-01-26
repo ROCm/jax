@@ -32,12 +32,12 @@ template <>
 absl::StatusOr<SolverHandlePool::Handle> SolverHandlePool::Borrow(
     gpuStream_t stream);
 
-#ifdef JAX_GPU_CUDA
 using SpSolverHandlePool = HandlePool<cusolverSpHandle_t, gpuStream_t>;
 
 template <>
 absl::StatusOr<SpSolverHandlePool::Handle> SpSolverHandlePool::Borrow(
     gpuStream_t stream);
+#ifdef JAX_GPU_CUDA
 #endif  // JAX_GPU_CUDA
 
 }  // namespace jax
