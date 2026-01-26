@@ -33,6 +33,7 @@ limitations under the License.
 #include "cuda_runtime_api.h"
 #include "third_party/gpus/cuda/include/cufft.h"
 #include "third_party/gpus/cuda/include/cusolverDn.h"
+#include "third_party/gpus/cuda/include/cusolverSp.h"
 #include "third_party/gpus/cuda/include/cusolver_common.h"
 #include "third_party/gpus/cuda/include/cusparse.h"
 #include "third_party/gpus/cudnn/cudnn.h"
@@ -86,6 +87,7 @@ typedef cudnnRNNMode_t gpudnnRNNMode_t;
 typedef cudnnForwardMode_t gpudnnForwardMode_t;
 typedef CUmodule gpuModule_t;
 typedef cusolverDnHandle_t gpusolverDnHandle_t;
+typedef cusolverSpHandle_t gpusolverSpHandle_t;
 typedef cusolverStatus_t gpusolverStatus_t;
 typedef cusolverEigMode_t gpusolverEigMode_t;
 typedef syevjInfo gpuSyevjInfo;
@@ -96,6 +98,7 @@ typedef cusparseIndexType_t gpusparseIndexType_t;
 typedef cusparseHandle_t gpusparseHandle_t;
 typedef cusparseOperation_t gpusparseOperation_t;
 typedef cusparseStatus_t gpusparseStatus_t;
+typedef cusparseMatDescr_t gpusparseMatDescr_t;
 typedef cusparseSpMatDescr_t gpusparseSpMatDescr_t;
 typedef cusparseDnMatDescr_t gpusparseDnMatDescr_t;
 typedef cusparseDnVecDescr_t gpusparseDnVecDescr_t;
@@ -269,6 +272,11 @@ typedef cusparseDnVecDescr_t gpusparseDnVecDescr_t;
 #define gpusolverDnDsytrd cusolverDnDsytrd
 #define gpusolverDnChetrd cusolverDnChetrd
 #define gpusolverDnZhetrd cusolverDnZhetrd
+
+#define gpusolverSpScsrlsvqr cusolverSpScsrlsvqr
+#define gpusolverSpDcsrlsvqr cusolverSpDcsrlsvqr
+#define gpusolverSpCcsrlsvqr cusolverSpCcsrlsvqr
+#define gpusolverSpZcsrlsvqr cusolverSpZcsrlsvqr
 
 #define GPUSOLVER_FILL_MODE_LOWER CUBLAS_FILL_MODE_LOWER
 #define GPUSOLVER_FILL_MODE_UPPER CUBLAS_FILL_MODE_UPPER
@@ -476,6 +484,7 @@ typedef hipDoubleComplex gpuDoubleComplex;
 typedef hipComplex gpublasComplex;
 typedef hipDoubleComplex gpublasDoubleComplex;
 typedef struct hipsolverHandle_* gpusolverDnHandle_t;
+typedef struct hipsolverHandle_* gpusolverSpHandle_t;
 typedef hipblasFillMode_t gpublasFillMode_t;
 typedef hipsolverFillMode_t gpusolverFillMode_t;
 typedef struct hipblasHandle_* gpublasHandle_t;
@@ -515,6 +524,7 @@ typedef hipsparseIndexType_t gpusparseIndexType_t;
 typedef struct hipsparseHandle_* gpusparseHandle_t;
 typedef hipsparseOperation_t gpusparseOperation_t;
 typedef hipsparseStatus_t gpusparseStatus_t;
+typedef hipsparseMatDescr_t gpusparseMatDescr_t;
 typedef hipsparseSpMatDescr_t gpusparseSpMatDescr_t;
 typedef hipsparseDnMatDescr_t gpusparseDnMatDescr_t;
 typedef hipsparseDnVecDescr_t gpusparseDnVecDescr_t;
@@ -694,6 +704,11 @@ inline hipsolverStatus_t gpusolverDnCreate(gpusolverDnHandle_t* handle) {
 #define gpusolverDnDsytrd hipsolverDnDsytrd
 #define gpusolverDnChetrd hipsolverDnChetrd
 #define gpusolverDnZhetrd hipsolverDnZhetrd
+
+#define gpusolverSpScsrlsvqr hipsolverSpScsrlsvqr
+#define gpusolverSpDcsrlsvqr hipsolverSpDcsrlsvqr
+#define gpusolverSpCcsrlsvqr hipsolverSpCcsrlsvqr
+#define gpusolverSpZcsrlsvqr hipsolverSpZcsrlsvqr
 
 #define GPUSOLVER_FILL_MODE_LOWER HIPSOLVER_FILL_MODE_LOWER
 #define GPUSOLVER_FILL_MODE_UPPER HIPSOLVER_FILL_MODE_UPPER

@@ -357,12 +357,11 @@ JAX_GPU_DEFINE_GESVDJ_BATCHED(gpuComplex, gpusolverDnCgesvdjBatched);
 JAX_GPU_DEFINE_GESVDJ_BATCHED(gpuDoubleComplex, gpusolverDnZgesvdjBatched);
 #undef JAX_GPU_DEFINE_GESVDJ_BATCHED
 
-#ifdef JAX_GPU_CUDA
 
 #define JAX_GPU_DEFINE_CSRLSVQR(Type, Scalar, Name)                          \
   template <>                                                                \
   absl::Status Csrlsvqr<Type>(                                               \
-      cusolverSpHandle_t handle, int n, int nnz, cusparseMatDescr_t matdesc, \
+      gpusolverSpHandle_t handle, int n, int nnz, gpusparseMatDescr_t matdesc, \
       const Type *csrValA, const int *csrRowPtrA, const int *csrColIndA,     \
       const Type *b, double tol, int reorder, Type *x, int *singularity) {   \
     return JAX_AS_STATUS(Name(handle, n, nnz, matdesc, csrValA, csrRowPtrA,  \
@@ -370,12 +369,13 @@ JAX_GPU_DEFINE_GESVDJ_BATCHED(gpuDoubleComplex, gpusolverDnZgesvdjBatched);
                               reorder, x, singularity));                     \
   }
 
-JAX_GPU_DEFINE_CSRLSVQR(float, float, cusolverSpScsrlsvqr);
-JAX_GPU_DEFINE_CSRLSVQR(double, double, cusolverSpDcsrlsvqr);
-JAX_GPU_DEFINE_CSRLSVQR(gpuComplex, float, cusolverSpCcsrlsvqr);
-JAX_GPU_DEFINE_CSRLSVQR(gpuDoubleComplex, double, cusolverSpZcsrlsvqr);
+JAX_GPU_DEFINE_CSRLSVQR(float, float, gpusolverSpScsrlsvqr);
+JAX_GPU_DEFINE_CSRLSVQR(double, double, gpusolverSpDcsrlsvqr);
+JAX_GPU_DEFINE_CSRLSVQR(gpuComplex, float, gpusolverSpCcsrlsvqr);
+JAX_GPU_DEFINE_CSRLSVQR(gpuDoubleComplex, double, gpusolverSpZcsrlsvqr);
 #undef JAX_GPU_DEFINE_CSRLSVQR
 
+#ifdef JAX_GPU_CUDA
 #endif  // JAX_GPU_CUDA
 
 // Symmetric tridiagonal reduction: sytrd
