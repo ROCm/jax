@@ -227,15 +227,15 @@ JAX_GPU_SOLVER_EXPAND_DEFINITION(absl::StatusOr<int>, GesvdjBatchedBufferSize);
 JAX_GPU_SOLVER_EXPAND_DEFINITION(absl::Status, GesvdjBatched);
 #undef JAX_GPU_SOLVER_GesvdjBatched_ARGS
 
-#ifdef JAX_GPU_CUDA
 
 #define JAX_GPU_SOLVER_Csrlsvqr_ARGS(Type, ...)                          \
-  cusolverSpHandle_t handle, int n, int nnz, cusparseMatDescr_t matdesc, \
+  gpusolverSpHandle_t handle, int n, int nnz, gpusparseMatDescr_t matdesc, \
       const Type *csrValA, const int *csrRowPtrA, const int *csrColIndA, \
       const Type *b, double tol, int reorder, Type *x, int *singularity
 JAX_GPU_SOLVER_EXPAND_DEFINITION(absl::Status, Csrlsvqr);
 #undef JAX_GPU_SOLVER_Csrlsvqr_ARGS
 
+#ifdef JAX_GPU_CUDA
 #endif  // JAX_GPU_CUDA
 
 // Symmetric tridiagonal reduction: sytrd

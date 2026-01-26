@@ -36,11 +36,11 @@ nb::dict Registrations() {
   dict[JAX_GPU_PREFIX "solver_gesvd_ffi"] = EncapsulateFfiHandler(GesvdFfi);
   dict[JAX_GPU_PREFIX "solver_gesvdj_ffi"] = EncapsulateFfiHandler(GesvdjFfi);
   dict[JAX_GPU_PREFIX "solver_sytrd_ffi"] = EncapsulateFfiHandler(SytrdFfi);
+  dict[JAX_GPU_PREFIX "solver_csrlsvqr_ffi"] =
+      EncapsulateFfiHandler(CsrlsvqrFfi);
 
 #ifdef JAX_GPU_CUDA
   dict[JAX_GPU_PREFIX "solver_gesvdp_ffi"] = EncapsulateFfiHandler(GesvdpFfi);
-  dict[JAX_GPU_PREFIX "solver_csrlsvqr_ffi"] =
-      EncapsulateFfiHandler(CsrlsvqrFfi);
 #endif  // JAX_GPU_CUDA
 
 #if JAX_GPU_HAVE_SOLVER_GEEV
