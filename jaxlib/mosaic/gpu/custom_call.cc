@@ -372,6 +372,11 @@ mlir::LogicalResult RunPasses(mlir::OpPassManager &&passes,
                               const mosaic::gpu::DumpOptions &dump_opts) {
   mlir::PassManager pm(module.getContext());
   *static_cast<mlir::OpPassManager *>(&pm) = std::move(passes);
+
+#if defined(JAX_GPU_HIP) && !defined(NDEBUG)
+  pm.enableVerifier(true);
+#endif
+
   std::optional<llvm::raw_fd_ostream> dump_stream;
   if (dump_opts.mlir_passes) {
     if (!dump_opts.dump_path.empty()) {
