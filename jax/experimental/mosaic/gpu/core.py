@@ -37,6 +37,7 @@ from jax._src.interpreters import mlir
 from jax._src.lib import mosaic_gpu_dialect as dialect
 from jaxlib.mlir import ir
 from jaxlib.mlir import passmanager
+from jaxlib.mlir.dialects import amdgpu
 from jaxlib.mlir.dialects import arith
 from jaxlib.mlir.dialects import builtin
 from jaxlib.mlir.dialects import func
@@ -625,18 +626,7 @@ def _launch(
 
       if IS_ROCM:
         # we don't have special handling for that, so just fencing the LDS
-        llvm.inline_asm(
-            ir.Type.parse("!llvm.void"),
-            [],
-            "s_waitcnt lgkmcnt(0);",
-            "",
-            has_side_effects=True,
-        )
-        # ^^ could be done with rocdl.s_waitcnt(), but that requires manually
-        # crafting the value of bitfield argument which less readable than ^^
-        # and not portable, compared to asm `s_waitcnt lgkmcnt(0)`.
-        # But inline asm content has a very reduced visibility/understanding to
-        # a compiler
+        amdgpu.memory_counter_wait(ds=0)
       else:
         nvvm.fence_mbarrier_init()
 

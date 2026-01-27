@@ -76,6 +76,7 @@ limitations under the License.
 #if defined(JAX_GPU_CUDA)
 #include "mlir/Conversion/NVVMToLLVM/NVVMToLLVM.h"
 #elif defined(JAX_GPU_HIP)
+#include "mlir/Conversion/AMDGPUToROCDL/AMDGPUToROCDL.h"
 #include "mlir/Conversion/GPUToROCDL/GPUToROCDLPass.h"
 #endif
 
@@ -98,6 +99,7 @@ limitations under the License.
 #include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Dialect/NVGPU/IR/NVGPUDialect.h"
 #elif defined(JAX_GPU_HIP)
+#include "mlir/Dialect/AMDGPU/IR/AMDGPUDialect.h"
 #include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
 #endif // defined(JAX_GPU_CUDA)
 
@@ -341,7 +343,8 @@ GetPassPipelineROCM(mlir::MLIRContext *ctx,
           convert-arith-to-llvm{index-bitwidth=0},
           convert-index-to-llvm{index-bitwidth=64},
           canonicalize{max-iterations=10 max-num-rewrites=-1 region-simplify=normal test-convergence=false top-down=true},
-          cse,          
+          cse,
+          gpu.module(convert-amdgpu-to-rocdl{chipset=%1$s}),
           gpu.module(convert-gpu-to-rocdl{index-bitwidth=64 use-bare-ptr-memref-call-conv=false}),
           gpu.module(canonicalize{max-iterations=10 max-num-rewrites=-1 region-simplify=normal test-convergence=false top-down=true}),
           gpu.module(cse),
@@ -433,7 +436,7 @@ inline void InitContext_ROCM(mlir::MLIRContext *context) {
                   mlir::memref::MemRefDialect, mlir::scf::SCFDialect,
                   mlir::vector::VectorDialect, mlir::gpu::GPUDialect,
                   mlir::ROCDL::ROCDLDialect, mlir::LLVM::LLVMDialect,
-                  mosaic_gpu::MosaicGPUDialect>();
+                  mosaic_gpu::MosaicGPUDialect, mlir::amdgpu::AMDGPUDialect>();
   mlir::registerConvertComplexToLLVMInterface(registry);
   mlir::registerConvertMemRefToLLVMInterface(registry);
   mlir::registerConvertMathToLLVMInterface(registry);
