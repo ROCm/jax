@@ -32,7 +32,7 @@ template <>
 absl::StatusOr<SolverHandlePool::Handle> SolverHandlePool::Borrow(
     gpuStream_t stream);
 
-using SpSolverHandlePool = HandlePool<cusolverSpHandle_t, gpuStream_t>;
+using SpSolverHandlePool = HandlePool<gpusolverSpHandle_t, gpuStream_t>;
 
 template <>
 absl::StatusOr<SpSolverHandlePool::Handle> SpSolverHandlePool::Borrow(

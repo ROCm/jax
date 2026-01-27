@@ -493,7 +493,8 @@ typedef hipDoubleComplex gpuDoubleComplex;
 typedef hipComplex gpublasComplex;
 typedef hipDoubleComplex gpublasDoubleComplex;
 typedef struct hipsolverHandle_* gpusolverDnHandle_t;
-typedef struct hipsolverHandle_* gpusolverSpHandle_t;
+//typedef struct hipsolverHandle_* gpusolverSpHandle_t;
+typedef hipsolverSpHandle_t gpusolverSpHandle_t;
 typedef hipblasFillMode_t gpublasFillMode_t;
 typedef hipsolverFillMode_t gpusolverFillMode_t;
 typedef struct hipblasHandle_* gpublasHandle_t;
@@ -608,7 +609,18 @@ inline hipsolverStatus_t gpusolverDnCreate(gpusolverDnHandle_t* handle) {
 }
 }
 
+/*
+// Wrapper functions for SOLVER handles to ensure unique types
+namespace{
+inline hipsolverStatus_t gpusolverSpCreate(gpusolverSpHandle_t* handle) {
+    return hipsolverCreate(reinterpret_cast<hipsolverHandle_t*>(handle));
+}
+}
+*/
+
 #define gpusolverDnSetStream hipsolverSetStream
+#define gpusolverSpSetStream hipsolverSpSetStream
+#define gpusolverSpCreate hipsolverSpCreate
 #define gpusolverDnCreateSyevjInfo hipsolverCreateSyevjInfo
 #define gpusolverDnDestroySyevjInfo hipsolverDestroySyevjInfo
 #define gpusolverDnCreateGesvdjInfo hipsolverCreateGesvdjInfo

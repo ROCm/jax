@@ -532,8 +532,8 @@ def _spsolve_abstract_eval(data, indices, indptr, b, *, tol, reorder):
   return b
 
 
-def _spsolve_gpu_lowering(ctx, data, indices, indptr, b, *, tol, reorder):
-  return ffi.ffi_lowering("cusolver_csrlsvqr_ffi")(
+def _spsolve_gpu_lowering(ctx, data, indices, indptr, b, *, tol, reorder, target_name_prefix):
+  return ffi.ffi_lowering(f"{target_name_prefix}solver_csrlsvqr_ffi")(
       ctx, data, indices, indptr, b, tol=np.float64(tol),
       reorder=np.int32(reorder))
 
@@ -593,7 +593,14 @@ spsolve_p.def_impl(functools.partial(dispatch.apply_primitive, spsolve_p))
 spsolve_p.def_abstract_eval(_spsolve_abstract_eval)
 ad.defjvp(spsolve_p, _spsolve_jvp_lhs, None, None, _spsolve_jvp_rhs)
 ad.primitive_transposes[spsolve_p] = _spsolve_transpose
-mlir.register_lowering(spsolve_p, _spsolve_gpu_lowering, platform='cuda')
+mlir.register_lowering(
+  spsolve_p,
+  functools.partial(_spsolve_gpu_lowering, target_name_prefix='cu'),
+  platform='cuda')
+mlir.register_lowering(
+  spsolve_p,
+  functools.partial(_spsolve_gpu_lowering, target_name_prefix='hip'),
+  platform='rocm')
 mlir.register_lowering(spsolve_p, _spsolve_cpu_lowering, platform='cpu')
 
 
