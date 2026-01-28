@@ -1132,11 +1132,10 @@ def _pallas_call_lowering(
         ctx, *in_nodes, **params
     )
 
-  def _gpu_lowering_impl(ctx: mlir.LoweringRuleContext,
-                         *in_nodes: mlir.ir.Value | Sequence[mlir.ir.Value],
-                         is_rocm: bool,
-                         **params):
-    """Shared GPU lowering implementation for CUDA and ROCm."""
+  def gpu_lowering(ctx: mlir.LoweringRuleContext,
+                   *in_nodes: mlir.ir.Value | Sequence[mlir.ir.Value],
+                   **params):
+    is_rocm = ctx.module_context.platforms == ("rocm",)
     try:
       match backend:
         case "mosaic_gpu":
