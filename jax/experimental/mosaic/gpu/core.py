@@ -41,6 +41,7 @@ from jax._src.lib import mosaic_gpu_dialect as dialect
 from jaxlib.mlir import ir
 from jaxlib.mlir import passmanager
 from jaxlib.mlir.dialects import _gpu_ops_gen
+from jaxlib.mlir.dialects import amdgpu
 from jaxlib.mlir.dialects import arith
 from jaxlib.mlir.dialects import builtin
 from jaxlib.mlir.dialects import func
@@ -57,6 +58,8 @@ from . import layouts
 from . import profiler
 from . import tcgen05
 from . import utils
+
+IS_ROCM = utils.IS_ROCM
 
 # MLIR can't find libdevice unless we point it to the CUDA path
 cuda_root = lib.cuda_path or "/usr/local/cuda"
@@ -640,7 +643,14 @@ def _launch(
       )
       # TODO(apaszke): Skip fences if no barriers or TMEM is initialized.
       # TODO(apaszke): Only initialize cluster barriers before the cluster wait.
-      nvvm.fence_mbarrier_init()
+
+      if IS_ROCM:
+        # we don't have special handling for that, so just fencing the LDS
+        amdgpu.memory_counter_wait(ds=0)
+      else:
+        nvvm.fence_mbarrier_init()
+
+      
       if math.prod(cluster) != 1:
         nvvm.cluster_arrive_relaxed(aligned=ir.UnitAttr.get())
         nvvm.cluster_wait(aligned=ir.UnitAttr.get())
