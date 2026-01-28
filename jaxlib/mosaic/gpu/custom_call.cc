@@ -29,12 +29,11 @@ limitations under the License.
 #include <optional>
 #include <string>
 #include <string_view>
-#include <system_error>  // NOLINT
+#include <system_error> // NOLINT
 #include <tuple>
 #include <utility>
 #include <vector>
 
-#include "jaxlib/mosaic/gpu/library_paths.h"
 #include "absl/base/call_once.h"
 #include "absl/base/no_destructor.h"
 #include "absl/base/optimization.h"
@@ -51,13 +50,11 @@ limitations under the License.
 #include "absl/strings/str_join.h"
 #include "absl/strings/str_split.h"
 #include "absl/synchronization/mutex.h"
+
+#if defined(JAX_GPU_CUDA)
 #include "third_party/gpus/cuda/include/cuda.h"
-#include "llvm/ADT/SmallVector.h"
-#include "llvm/Support/CodeGen.h"
-#include "llvm/Support/Debug.h"
-#include "llvm/Support/FileSystem.h"
-#include "llvm/Support/TargetSelect.h"
-#include "llvm/Support/raw_ostream.h"
+#endif // defined(JAX_GPU_CUDA)
+
 #include "mlir/Conversion/ArithToLLVM/ArithToLLVM.h"
 #include "mlir/Conversion/ComplexToLLVM/ComplexToLLVM.h"
 #include "mlir/Conversion/ControlFlowToLLVM/ControlFlowToLLVM.h"
@@ -65,10 +62,23 @@ limitations under the License.
 #include "mlir/Conversion/IndexToLLVM/IndexToLLVM.h"
 #include "mlir/Conversion/MathToLLVM/MathToLLVM.h"
 #include "mlir/Conversion/MemRefToLLVM/MemRefToLLVM.h"
-#include "mlir/Conversion/NVVMToLLVM/NVVMToLLVM.h"
 #include "mlir/Conversion/Passes.h"
 #include "mlir/Conversion/UBToLLVM/UBToLLVM.h"
 #include "mlir/Conversion/VectorToLLVM/ConvertVectorToLLVM.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/CodeGen.h"
+#include "llvm/Support/Debug.h"
+#include "llvm/Support/FileSystem.h"
+#include "llvm/Support/TargetSelect.h"
+#include "llvm/Support/raw_ostream.h"
+
+#if defined(JAX_GPU_CUDA)
+#include "mlir/Conversion/NVVMToLLVM/NVVMToLLVM.h"
+#elif defined(JAX_GPU_HIP)
+#include "mlir/Conversion/AMDGPUToROCDL/AMDGPUToROCDL.h"
+#include "mlir/Conversion/GPUToROCDL/GPUToROCDLPass.h"
+#endif // defined( vendor )
+
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Arith/Transforms/Passes.h"
 #include "mlir/Dialect/ControlFlow/IR/ControlFlow.h"
@@ -76,14 +86,21 @@ limitations under the License.
 #include "mlir/Dialect/GPU/IR/GPUDialect.h"
 #include "mlir/Dialect/GPU/Transforms/Passes.h"
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
-#include "mlir/Dialect/LLVMIR/NVVMDialect.h"
 #include "mlir/Dialect/LLVMIR/Transforms/Passes.h"
 #include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Dialect/MemRef/Transforms/Passes.h"
-#include "mlir/Dialect/NVGPU/IR/NVGPUDialect.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/Dialect/Vector/IR/VectorOps.h"
+
+#if defined(JAX_GPU_CUDA)
+#include "mlir/Dialect/LLVMIR/NVVMDialect.h"
+#include "mlir/Dialect/NVGPU/IR/NVGPUDialect.h"
+#elif defined(JAX_GPU_HIP)
+#include "mlir/Dialect/AMDGPU/IR/AMDGPUDialect.h"
+#include "mlir/Dialect/LLVMIR/ROCDLDialect.h"
+#endif // defined( vendor )
+
 #include "mlir/ExecutionEngine/ExecutionEngine.h"
 #include "mlir/ExecutionEngine/OptUtils.h"
 #include "mlir/IR/AsmState.h"
@@ -95,28 +112,46 @@ limitations under the License.
 #include "mlir/Pass/PassRegistry.h"
 #include "mlir/Support/LLVM.h"
 #include "mlir/Support/LogicalResult.h"
-#include "mlir/Target/LLVM/NVVM/Target.h"
 #include "mlir/Target/LLVMIR/Dialect/Builtin/BuiltinToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/GPU/GPUToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
-#include "mlir/Target/LLVMIR/Dialect/NVVM/NVVMToLLVMIRTranslation.h"
 #include "mlir/Transforms/Passes.h"
+
+#if defined(JAX_GPU_CUDA)
+#include "mlir/Target/LLVM/NVVM/Target.h"
+#include "mlir/Target/LLVMIR/Dialect/NVVM/NVVMToLLVMIRTranslation.h"
+#elif defined(JAX_GPU_HIP)
+#include "mlir/Target/LLVM/ROCDL/Target.h"
+#include "mlir/Target/LLVMIR/Dialect/ROCDL/ROCDLToLLVMIRTranslation.h"
+#endif // defined( vendor )
+
 #include "jaxlib/gpu/vendor.h"
 #include "jaxlib/mosaic/dialect/gpu/mosaic_gpu.h"
-#include "jaxlib/mosaic/gpu/assembly_to_binary.h"
 #include "jaxlib/mosaic/gpu/dump.h"
-#include "jaxlib/mosaic/gpu/gpu_module_to_assembly.h"
 #include "jaxlib/mosaic/gpu/launch_lowering.h"
-#include "jaxlib/mosaic/gpu/nvshmem.h"
 #include "jaxlib/mosaic/gpu/passes.h"
 #include "jaxlib/mosaic/gpu/serde.h"
-#include "jaxlib/mosaic/gpu/target.h"
 #include "xla/backends/gpu/ffi.h"
+#if defined(JAX_GPU_CUDA)
+#include "jaxlib/mosaic/gpu/assembly_to_binary.h"
+#include "jaxlib/mosaic/gpu/gpu_module_to_assembly.h"
+#include "jaxlib/mosaic/gpu/library_paths.h"
+#include "jaxlib/mosaic/gpu/nvshmem.h"
+#include "jaxlib/mosaic/gpu/target.h"
+#elif defined(JAX_GPU_HIP)
+#include "jaxlib/mosaic/gpu/rocm_module_to_binary.h"
+#endif // defined( vendor )
+
+#include "tsl/platform/path.h"
+#include "tsl/profiler/lib/traceme.h"
 #include "xla/executable_run_options.h"
 #include "xla/ffi/ffi.h"
 #include "xla/ffi/ffi_api.h"
 #include "xla/service/custom_call_status.h"
 #include "xla/service/custom_call_target_registry.h"
+#include "xla/tsl/platform/statusor.h"
+
+#if defined(JAX_GPU_CUDA)
 #include "xla/service/gpu/llvm_gpu_backend/nvptx_libdevice_path.h"
 #include "xla/service/llvm_ir/llvm_command_line_options.h"
 #include "xla/stream_executor/cuda/assemble_compilation_provider.h"
@@ -124,23 +159,25 @@ limitations under the License.
 #include "xla/stream_executor/cuda/compilation_provider_options.h"
 #include "xla/stream_executor/cuda/cuda_compute_capability.h"
 #include "xla/stream_executor/cuda/ptx_compiler_support.h"
-#include "xla/tsl/platform/statusor.h"
-#include "tsl/platform/path.h"
-#include "tsl/profiler/lib/traceme.h"
+#elif defined(JAX_GPU_HIP)
+#include "xla/stream_executor/rocm/rocm_compute_capability.h"
+#include "xla/stream_executor/rocm/rocm_driver_wrapper.h"
+#endif // defined( vendor )
 
 namespace {
 
 namespace ffi = xla::ffi;
 namespace se = stream_executor;
 
-using MosaicInitFunc = void(void****);
-using MosaicHostFunc = void(void**);
+using MosaicInitFunc = void(void ****);
+using MosaicHostFunc = void(void **);
 
 // Mirrors `--xla_gpu_cuda_data_dir`'s default value.
 constexpr std::string_view kDefaultCudaDataDir = "./cuda_sdk_lib";
 
-absl::StatusOr<std::string> GetPtxIsaVersion(
-    const se::cuda::CompilationProvider& compilation_provider) {
+#if defined(JAX_GPU_CUDA)
+absl::StatusOr<std::string>
+GetPtxIsaVersion(const se::cuda::CompilationProvider &compilation_provider) {
   TF_ASSIGN_OR_RETURN(int ptxas_latest_version,
                       compilation_provider.GetLatestPtxIsaVersion());
   // We'd like to target the latest PTX ISA version supported by
@@ -154,50 +191,50 @@ absl::StatusOr<std::string> GetPtxIsaVersion(
   return absl::StrFormat("ptx%d", final_version);
 }
 
-mlir::FailureOr<mlir::OpPassManager> GetPassPipeline(
-    mlir::MLIRContext* ctx,
-    const se::cuda::CompilationProvider* compilation_provider,
-    const se::CudaComputeCapability& cc, const std::string& sm,
-    const std::string& ptx_isa, const std::string& nvshmem_path) {
+mlir::FailureOr<mlir::OpPassManager>
+GetPassPipelineCUDA(mlir::MLIRContext *ctx,
+                    const se::cuda::CompilationProvider *compilation_provider,
+                    const se::CudaComputeCapability &cc, const std::string &sm,
+                    const std::string &ptx_isa,
+                    const std::string &nvshmem_path) {
   static absl::once_flag register_passes_flag;
-  absl::call_once(
-      register_passes_flag, [&compilation_provider, &cc]() {
-        mosaic::gpu::EnsureLLVMNVPTXTargetIsRegistered();
+  absl::call_once(register_passes_flag, [&compilation_provider, &cc]() {
+    mosaic::gpu::EnsureLLVMNVPTXTargetIsRegistered();
 
-        llvm::InitializeNativeTarget();
-        llvm::InitializeNativeTarget();
-        llvm::InitializeNativeTargetAsmPrinter();
-        mlir::registerCanonicalizer();
-        mlir::registerCSE();
-        mlir::registerStripDebugInfo();
-        mlir::registerConvertNVGPUToNVVMPass();
-        mlir::registerConvertVectorToSCF();
-        mlir::registerSCFToControlFlowPass();
-        mlir::registerConvertNVVMToLLVMPass();
-        mlir::registerArithToLLVMConversionPass();
-        mlir::registerConvertIndexToLLVMPass();
-        mlir::registerConvertGpuOpsToNVVMOps();
-        mlir::registerConvertMathToLLVMPass();
-        mlir::registerConvertFuncToLLVMPass();
-        mlir::registerLowerAffinePass();
-        mlir::registerReconcileUnrealizedCastsPass();
-        // TODO(apaszke): Only register the passes we actually use.
-        mlir::memref::registerMemRefPasses();
-        mlir::registerConvertToLLVMPass();
-        mlir::registerGPUPasses();
-        mlir::registerGpuLaunchSinkIndexComputationsPass();
-        mosaic::gpu::registerGpuModuleToAssemblyPass();
-        mosaic::gpu::registerAssemblyToBinaryPass(compilation_provider, cc);
-        mosaic::gpu::registerGpuLaunchLoweringPass();
-        mosaic::gpu::registerConvertGpuToLLVMPass();
-        mosaic::gpu::registerByvalInsertionPass();
-        mosaic::gpu::registerLLVMAttrInsertionPass();
-        mosaic::gpu::registerResolveTrivialLocationsPass();
-        mlir::arith::registerArithExpandOpsPass();
-        mlir::LLVM::registerDIScopeForLLVMFuncOpPass();
-        return true;
-      });
-  const char* cuda_root = mosaic::gpu::GetCUDARoot();
+    llvm::InitializeNativeTarget();
+    llvm::InitializeNativeTarget();
+    llvm::InitializeNativeTargetAsmPrinter();
+    mlir::registerCanonicalizer();
+    mlir::registerCSE();
+    mlir::registerStripDebugInfo();
+    mlir::registerConvertNVGPUToNVVMPass();
+    mlir::registerConvertVectorToSCF();
+    mlir::registerSCFToControlFlowPass();
+    mlir::registerConvertNVVMToLLVMPass();
+    mlir::registerArithToLLVMConversionPass();
+    mlir::registerConvertIndexToLLVMPass();
+    mlir::registerConvertGpuOpsToNVVMOps();
+    mlir::registerConvertMathToLLVMPass();
+    mlir::registerConvertFuncToLLVMPass();
+    mlir::registerLowerAffinePass();
+    mlir::registerReconcileUnrealizedCastsPass();
+    // TODO(apaszke): Only register the passes we actually use.
+    mlir::memref::registerMemRefPasses();
+    mlir::registerConvertToLLVMPass();
+    mlir::registerGPUPasses();
+    mlir::registerGpuLaunchSinkIndexComputationsPass();
+    mosaic::gpu::registerGpuModuleToAssemblyPass();
+    mosaic::gpu::registerAssemblyToBinaryPass(compilation_provider, cc);
+    mosaic::gpu::registerGpuLaunchLoweringPass();
+    mosaic::gpu::registerConvertGpuToLLVMPass();
+    mosaic::gpu::registerByvalInsertionPass();
+    mosaic::gpu::registerLLVMAttrInsertionPass();
+    mosaic::gpu::registerResolveTrivialLocationsPass();
+    mlir::arith::registerArithExpandOpsPass();
+    mlir::LLVM::registerDIScopeForLLVMFuncOpPass();
+    return true;
+  });
+  const char *cuda_root = mosaic::gpu::GetCUDARoot();
   if (!cuda_root) {
     return mlir::failure();
   }
@@ -245,12 +282,92 @@ mlir::FailureOr<mlir::OpPassManager> GetPassPipeline(
       )",
                       sm, ptx_isa, absl::StrJoin(libraries_to_link, ",")));
 }
+#elif defined(JAX_GPU_HIP)
+mlir::FailureOr<mlir::OpPassManager>
+GetPassPipelineROCM(mlir::MLIRContext *ctx,
+                    const se::RocmComputeCapability &cc) {
+  static absl::once_flag register_passes_flag;
+  absl::call_once(register_passes_flag, []() -> bool {
+    llvm::InitializeNativeTarget();
+    llvm::InitializeNativeTargetAsmPrinter();
+    mlir::registerCanonicalizer();
+    mlir::registerCSE();
+    mlir::registerStripDebugInfo();
+    mlir::registerConvertVectorToSCF();
+    mlir::registerSCFToControlFlowPass();
+    mlir::registerConvertAMDGPUToROCDLPass();
+    mlir::registerArithToLLVMConversionPass();
+    mlir::registerConvertIndexToLLVMPass();
+    mlir::registerConvertGpuOpsToROCDLOps();
+    mlir::registerConvertMathToLLVMPass();
+    mlir::registerConvertFuncToLLVMPass();
+    mlir::registerLowerAffinePass();
+    mlir::registerReconcileUnrealizedCastsPass();
+    // TODO(apaszke): Only register the passes we actually use.
+    mlir::memref::registerMemRefPasses();
+    mlir::registerConvertToLLVMPass();
+    mlir::registerGPUPasses();
+    mlir::registerGpuLaunchSinkIndexComputationsPass();
+    mosaic::gpu::registerRocmModuleToBinaryPass();
+    mosaic::gpu::registerGpuLaunchLoweringPass();
+    mosaic::gpu::registerConvertGpuToLLVMPass();
+    mosaic::gpu::registerByvalInsertionPass();
+    mosaic::gpu::registerLLVMAttrInsertionPass();
+    mosaic::gpu::registerResolveTrivialLocationsPass();
+    mlir::arith::registerArithExpandOpsPass();
+    mlir::LLVM::registerDIScopeForLLVMFuncOpPass();
+    return true;
+  });
 
-mlir::LogicalResult RunPasses(mlir::OpPassManager&& passes,
+  return mlir::parsePassPipeline(absl::StrFormat(R"(
+        builtin.module(
+          mosaic-gpu-resolve-trivial-locations,
+          arith-expand,
+          canonicalize,
+          gpu-launch-sink-index-computations,          
+          gpu-kernel-outlining{data-layout-str=},
+          convert-vector-to-scf{full-unroll=false lower-tensors=false target-rank=1},
+          convert-scf-to-cf,          
+          expand-strided-metadata,          
+          rocdl-attach-target{O=3 chip=%1$s fast=false features= module= triple=amdgcn-amd-amdhsa},
+          lower-affine,
+          convert-arith-to-llvm{index-bitwidth=0},
+          convert-index-to-llvm{index-bitwidth=64},
+          canonicalize{max-iterations=10 max-num-rewrites=-1 region-simplify=normal test-convergence=false top-down=true},
+          cse,
+          gpu.module(convert-amdgpu-to-rocdl{chipset=%1$s}),
+          gpu.module(convert-gpu-to-rocdl{index-bitwidth=64 use-bare-ptr-memref-call-conv=false}),
+          gpu.module(canonicalize{max-iterations=10 max-num-rewrites=-1 region-simplify=normal test-convergence=false top-down=true}),
+          gpu.module(cse),
+          gpu.module(mosaic-byval-insertion),
+          gpu.module(mosaic-llvm-attr-insertion),
+          gpu.module(reconcile-unrealized-casts),
+          mosaic-convert-gpu-to-llvm,
+          ensure-debug-info-scope-on-llvm-func{emission-kind=DebugDirectivesOnly},
+          convert-math-to-llvm{approximate-log1p=true},
+          canonicalize{max-iterations=10 max-num-rewrites=-1 region-simplify=normal test-convergence=false top-down=true},
+          cse,
+          mosaic-rocm-module-to-binary{gcn-arch-name=%2$s},
+          gpu-launch-lowering,
+          convert-to-llvm,
+          reconcile-unrealized-casts
+        )
+      )",
+                                                 cc.gfx_version(),
+                                                 cc.gcn_arch_name()));
+}
+#endif // defined( vendor )
+
+mlir::LogicalResult RunPasses(mlir::OpPassManager &&passes,
                               mlir::ModuleOp module,
-                              const mosaic::gpu::DumpOptions& dump_opts) {
+                              const mosaic::gpu::DumpOptions &dump_opts) {
   mlir::PassManager pm(module.getContext());
-  *static_cast<mlir::OpPassManager*>(&pm) = std::move(passes);
+  *static_cast<mlir::OpPassManager *>(&pm) = std::move(passes);
+
+#if defined(JAX_GPU_HIP) && !defined(NDEBUG)
+  pm.enableVerifier(true);
+#endif
+
   std::optional<llvm::raw_fd_ostream> dump_stream;
   if (dump_opts.mlir_passes) {
     if (!dump_opts.dump_path.empty()) {
@@ -266,7 +383,7 @@ mlir::LogicalResult RunPasses(mlir::OpPassManager&& passes,
       }
     }
     pm.getContext()->disableMultithreading();
-    auto print_always = [](mlir::Pass*, mlir::Operation*) { return true; };
+    auto print_always = [](mlir::Pass *, mlir::Operation *) { return true; };
     pm.enableIRPrinting(/*shouldPrintBeforePass=*/print_always,
                         /*shouldPrintAfterPass=*/print_always,
                         /*printModuleScope=*/true,
@@ -278,7 +395,8 @@ mlir::LogicalResult RunPasses(mlir::OpPassManager&& passes,
   return pm.run(module);
 }
 
-void InitContext(mlir::MLIRContext* context) {
+#if defined(JAX_GPU_CUDA)
+inline void InitContext_CUDA(mlir::MLIRContext *context) {
   mlir::DialectRegistry registry;
   registry.insert<mlir::arith::ArithDialect, mlir::cf::ControlFlowDialect,
                   mlir::func::FuncDialect, mlir::math::MathDialect,
@@ -306,13 +424,51 @@ void InitContext(mlir::MLIRContext* context) {
   context->appendDialectRegistry(registry);
   context->loadAllAvailableDialects();
 }
+#elif defined(JAX_GPU_HIP)
+inline void InitContext_ROCM(mlir::MLIRContext *context) {
+  mlir::DialectRegistry registry;
+  registry.insert<mlir::amdgpu::AMDGPUDialect, mlir::arith::ArithDialect,
+                  mlir::cf::ControlFlowDialect, mlir::func::FuncDialect,
+                  mlir::math::MathDialect, mlir::memref::MemRefDialect,
+                  mlir::scf::SCFDialect, mlir::vector::VectorDialect,
+                  mlir::gpu::GPUDialect, mlir::ROCDL::ROCDLDialect,
+                  mlir::LLVM::LLVMDialect, mosaic_gpu::MosaicGPUDialect>();
+  mlir::registerConvertComplexToLLVMInterface(registry);
+  mlir::registerConvertMemRefToLLVMInterface(registry);
+  mlir::registerConvertMathToLLVMInterface(registry);
+  mlir::registerConvertFuncToLLVMInterface(registry);
+  mlir::vector::registerConvertVectorToLLVMInterface(registry);
+  mlir::index::registerConvertIndexToLLVMInterface(registry);
+  mlir::cf::registerConvertControlFlowToLLVMInterface(registry);
+  mlir::ub::registerConvertUBToLLVMInterface(registry);
+  mlir::arith::registerConvertArithToLLVMInterface(registry);
+  mlir::registerConvertMemRefToLLVMInterface(registry);
+  mlir::gpu::registerOffloadingLLVMTranslationInterfaceExternalModels(registry);
+  mlir::registerBuiltinDialectTranslation(registry);
+  mlir::registerGPUDialectTranslation(registry);
+  mlir::registerLLVMDialectTranslation(registry);
+  mlir::registerROCDLDialectTranslation(registry);
 
+  context->appendDialectRegistry(registry);
+  context->loadAllAvailableDialects();
+}
+#endif // defined( vendor )
+
+void InitContext(mlir::MLIRContext *context) {
+#if defined(JAX_GPU_CUDA)
+  InitContext_CUDA(context);
+#elif defined(JAX_GPU_HIP)
+  InitContext_ROCM(context);
+#endif // defined( vendor )
+}
+
+#if defined(JAX_GPU_CUDA)
 bool is_nvshmem_used(mlir::ModuleOp module) {
   constexpr std::string_view prefix1 = "nvshmem_";
   constexpr std::string_view prefix2 = "nvshmemx_";
   for (mlir::LLVM::LLVMFuncOp llvm_func :
        module.getOps<mlir::LLVM::LLVMFuncOp>()) {
-    const auto& func_name = llvm_func.getName();
+    const auto &func_name = llvm_func.getName();
     if (!func_name.starts_with(prefix1) && !func_name.starts_with(prefix2)) {
       continue;
     }
@@ -326,13 +482,13 @@ bool is_nvshmem_used(mlir::ModuleOp module) {
 }
 
 absl::StatusOr<std::string> get_nvshmem_llvm_lib_path() {
-  const char* nvshmem_path_ptr = getenv("MOSAIC_GPU_NVSHMEM_BC_PATH");
+  const char *nvshmem_path_ptr = getenv("MOSAIC_GPU_NVSHMEM_BC_PATH");
   if (!nvshmem_path_ptr)
     return absl::InternalError("Failed to get MOSAIC_GPU_NVSHMEM_BC_PATH");
   return nvshmem_path_ptr;
 }
 
-absl::StatusOr<se::cuda::CompilationProvider*>
+absl::StatusOr<se::cuda::CompilationProvider *>
 GetAssemblyToBinaryCompilationProvider() {
   auto create_provider = []() {
     // Defaults mirror those used in `xla/debug_options_flags.cc`.
@@ -360,30 +516,17 @@ GetAssemblyToBinaryCompilationProvider() {
   return (*compilation_provider)->get();
 }
 
-std::string CUDAErrorString(CUresult result) {
-  const char* error;
-  cuGetErrorString(result, &error);
-  return error;
-}
-// Returns if the CUDA expression returns an error.
-#define CUDA_RETURN_IF_ERROR(stmt)                         \
-  do {                                                     \
-    if (CUresult result = stmt; result != CUDA_SUCCESS) {  \
-      return absl::InternalError(CUDAErrorString(result)); \
-    }                                                      \
-  } while (0)
-
 absl::StatusOr<se::CudaComputeCapability> GetCudaComputeCapability() {
   // Assumes driver has been initialized and a context exists. XLA already has
   // some utilities to query this, but we try to stay runtime-agnostic, so we
   // build our own here.
   CUdevice device;
-  CUDA_RETURN_IF_ERROR(cuCtxGetDevice(&device));
+  GPUDRV_RETURN_IF_ERROR(cuCtxGetDevice(&device));
   int major = 0;
-  CUDA_RETURN_IF_ERROR(cuDeviceGetAttribute(
+  GPUDRV_RETURN_IF_ERROR(cuDeviceGetAttribute(
       &major, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MAJOR, device));
   int minor = 0;
-  CUDA_RETURN_IF_ERROR(cuDeviceGetAttribute(
+  GPUDRV_RETURN_IF_ERROR(cuDeviceGetAttribute(
       &minor, CU_DEVICE_ATTRIBUTE_COMPUTE_CAPABILITY_MINOR, device));
 
   TF_ASSIGN_OR_RETURN(std::string sm, mosaic::gpu::GetSmVersion(major, minor));
@@ -395,10 +538,25 @@ absl::StatusOr<se::CudaComputeCapability> GetCudaComputeCapability() {
                                        ? FeatureExtension::kAcceleratedFeatures
                                        : FeatureExtension::kNone);
 }
+#elif defined(JAX_GPU_HIP)
+absl::StatusOr<se::RocmComputeCapability> GetRocmComputeCapability() {
+  hipDevice_t device;
+  GPUDRV_RETURN_IF_ERROR(hipGetDevice(&device));
+  hipDeviceProp_t props;
+  hipError_t result = se::wrap::hipGetDeviceProperties(&props, device);
+  if (result != hipSuccess) {
+    return absl::InternalError(absl::StrFormat(
+        "failed to determine AMDGpu GCN Arch Name for device %d", device));
+  }
+  return se::RocmComputeCapability(props.gcnArchName);
+}
+#endif // defined( vendor )
 
-absl::StatusOr<std::pair<std::unique_ptr<mlir::ExecutionEngine>, bool>> Compile(
-    mlir::ModuleOp module) {
+absl::StatusOr<std::pair<std::unique_ptr<mlir::ExecutionEngine>, bool>>
+Compile(mlir::ModuleOp module) {
   tsl::profiler::TraceMe trace("Compile");
+
+#if defined(JAX_GPU_CUDA)
   mosaic::gpu::EnsureLLVMNVPTXTargetIsRegistered();
   TF_ASSIGN_OR_RETURN(se::cuda::CompilationProvider * compilation_provider,
                       GetAssemblyToBinaryCompilationProvider());
@@ -417,8 +575,17 @@ absl::StatusOr<std::pair<std::unique_ptr<mlir::ExecutionEngine>, bool>> Compile(
           "`pip install nvidia-nvshmem-cu12`).");
     }
   }
-  const char* dump_llvm = getenv("MOSAIC_GPU_DUMP_LLVM");
-  const char* llvm_debug_only = getenv("MOSAIC_GPU_LLVM_DEBUG_ONLY");
+#elif defined(JAX_GPU_HIP)
+  TF_ASSIGN_OR_RETURN(se::RocmComputeCapability cc, GetRocmComputeCapability());
+  const bool is_comm_used{false}; // TODO(Arech) should this be fixed?
+#endif // defined( vendor )
+
+  // 2GOOGLE: the checks for env vars only check if the var is defined, but
+  // ignores actual value, so for instance, setting MOSAIC_GPU_DUMP_LLVM=0
+  // would trigger the same path, as MOSAIC_GPU_DUMP_LLVM=1, which is wrong.
+  // Should I fix it?
+  const char *dump_llvm = getenv("MOSAIC_GPU_DUMP_LLVM");
+  const char *llvm_debug_only = getenv("MOSAIC_GPU_LLVM_DEBUG_ONLY");
 #ifndef NDEBUG
   bool old_debug_state = false;
   std::vector<std::string_view> debug_only_types;
@@ -430,7 +597,7 @@ absl::StatusOr<std::pair<std::unique_ptr<mlir::ExecutionEngine>, bool>> Compile(
   }
   if (!debug_only_types.empty()) {
     old_debug_state = llvm::DebugFlag;
-    std::vector<const char*> debug_only_types_ptrs;
+    std::vector<const char *> debug_only_types_ptrs;
     debug_only_types_ptrs.reserve(debug_only_types.size());
     for (std::string_view debug_only_type : debug_only_types) {
       debug_only_types_ptrs.push_back(debug_only_type.data());
@@ -448,6 +615,7 @@ absl::StatusOr<std::pair<std::unique_ptr<mlir::ExecutionEngine>, bool>> Compile(
     abort();
   }
 #endif
+#if defined(JAX_GPU_CUDA)
   // Use `div.full` for float32 division---this generates better SASS.
   const std::vector<std::string> llvm_cl_options{"-nvptx-prec-divf32=1"};
   // Acquire a lock over the LLVM command line options here. XLA uses this
@@ -456,8 +624,12 @@ absl::StatusOr<std::pair<std::unique_ptr<mlir::ExecutionEngine>, bool>> Compile(
   // setting our own command line options makes compilation dependent on
   // outside state/non-deterministic.
   xla::llvm_ir::LLVMCommandLineOptionsLock llvm_lock(llvm_cl_options);
-  auto passes = GetPassPipeline(module.getContext(), compilation_provider, cc,
-                                sm, ptx_isa, nvshmem_path);
+  auto passes = GetPassPipelineCUDA(module.getContext(), compilation_provider,
+                                    cc, sm, ptx_isa, nvshmem_path);
+#elif defined(JAX_GPU_HIP)
+  auto passes = GetPassPipelineROCM(module.getContext(), cc);
+#endif
+
   if (mlir::failed(passes)) {
     return absl::InternalError("Failed to construct pass pipeline");
   }
@@ -467,16 +639,20 @@ absl::StatusOr<std::pair<std::unique_ptr<mlir::ExecutionEngine>, bool>> Compile(
     return absl::InternalError("Pass pipeline failed");
   }
   llvm::SmallVector<llvm::StringRef> runtime_libs;
-  if (const char* runtime_lib_path = getenv("MOSAIC_GPU_RUNTIME_LIB_PATH")) {
+  if (const char *runtime_lib_path = getenv("MOSAIC_GPU_RUNTIME_LIB_PATH")) {
     runtime_libs.emplace_back(runtime_lib_path);
   }
-  if (const char* nvshmem_path = getenv("MOSAIC_GPU_NVSHMEM_SO_PATH")) {
+
+#if defined(JAX_GPU_CUDA)
+  if (const char *nvshmem_path = getenv("MOSAIC_GPU_NVSHMEM_SO_PATH")) {
     runtime_libs.emplace_back(nvshmem_path);
   }
+#endif // defined(JAX_GPU_CUDA)
+
   // Create a transformer to run all LLVM optimization passes at the
   // specified optimization level.
-  std::function<llvm::Error(llvm::Module*)> transformer =
-      [dump_opts](llvm::Module* module) {
+  std::function<llvm::Error(llvm::Module *)> transformer =
+      [dump_opts](llvm::Module *module) {
         if (getenv("MOSAIC_GPU_DUMP_HOST_LLVM")) {
           std::string ll_str;
           llvm::raw_string_ostream os(ll_str);
@@ -505,27 +681,25 @@ absl::StatusOr<std::pair<std::unique_ptr<mlir::ExecutionEngine>, bool>> Compile(
 }
 
 class CompiledKernel {
- public:
-  CompiledKernel(std::unique_ptr<mlir::ExecutionEngine> engine, void* ctx,
-                 MosaicHostFunc* host_launch, bool is_comm_used)
-      : engine_(std::move(engine)),
-        ctx_(ctx),
-        host_launch_(host_launch),
+public:
+  CompiledKernel(std::unique_ptr<mlir::ExecutionEngine> engine, void *ctx,
+                 MosaicHostFunc *host_launch, bool is_comm_used)
+      : engine_(std::move(engine)), ctx_(ctx), host_launch_(host_launch),
         is_comm_used_(is_comm_used) {}
 
-  std::tuple<void*, MosaicHostFunc*, bool> GetHostLaunch() {
+  std::tuple<void *, MosaicHostFunc *, bool> GetHostLaunch() {
     return std::make_tuple(ctx_, host_launch_, is_comm_used_);
   }
 
- private:
+private:
   std::unique_ptr<mlir::ExecutionEngine> engine_;
-  void* ctx_;  // TODO(apaszke): Destroy this properly
-  MosaicHostFunc* host_launch_;
+  void *ctx_; // TODO(apaszke): Destroy this properly
+  MosaicHostFunc *host_launch_;
   bool is_comm_used_;
 };
 
-absl::StatusOr<std::pair<std::string, std::string>> GetHostAndInitFuncNames(
-    mlir::ModuleOp module_op) {
+absl::StatusOr<std::pair<std::string, std::string>>
+GetHostAndInitFuncNames(mlir::ModuleOp module_op) {
   // We look for two top level C-interface functions:
   // - "host" function with symbol name "_mlir_ciface_<foo>"
   // - "init" function with symbol name "_mlir_ciface_<foo>_init"
@@ -579,7 +753,7 @@ absl::StatusOr<CompiledKernel> CompileAndInit(llvm::StringRef module) {
   if (!maybe_engine.ok()) {
     return maybe_engine.status();
   }
-  mlir::ExecutionEngine* execution_engine = maybe_engine.value().first.get();
+  mlir::ExecutionEngine *execution_engine = maybe_engine.value().first.get();
   bool is_comm_used = maybe_engine.value().second;
 
   auto host_and_init_func_names = GetHostAndInitFuncNames(*module_op);
@@ -601,7 +775,8 @@ absl::StatusOr<CompiledKernel> CompileAndInit(llvm::StringRef module) {
   reinterpret_cast<MosaicInitFunc*>(*init)(init_args);
   VLOG(5) << "Successfully compiled and initialized Mosaic GPU kernel";
   return CompiledKernel(std::move(maybe_engine.value().first), kernel_ptr,
-                        reinterpret_cast<MosaicHostFunc*>(*host), is_comm_used);
+                        reinterpret_cast<MosaicHostFunc *>(*host),
+                        is_comm_used);
 }
 
 using KernelHash = std::array<uint64_t, 4>;
@@ -619,8 +794,8 @@ absl::StatusOr<CompiledKernel*> CachedCompileAndInit(
   };
   static absl::NoDestructor<Cache> cache;
 
-  CUcontext ctx;
-  CUDA_RETURN_IF_ERROR(cuCtxGetCurrent(&ctx));
+  gpuContext_t ctx;
+  GPUDRV_RETURN_IF_ERROR(gpuCtxGetCurrent(&ctx));
   CacheKey key(kernel_hash, reinterpret_cast<uintptr_t>(ctx));
 
   {
@@ -640,6 +815,7 @@ absl::StatusOr<CompiledKernel*> CachedCompileAndInit(
   return &cache->kernels.at(key);
 }
 
+#if defined(JAX_GPU_CUDA)
 // TODO(b/464203195): Backward-compatible version using the legacy FFI
 // API. Remove once backward compatibility window has passed.
 void MosaicGPUCustomCall(void* stream, void** buffers, char* opaque,
@@ -656,7 +832,7 @@ void MosaicGPUCustomCall(void* stream, void** buffers, char* opaque,
   }
   auto ctx_kernel_comm = (*compiled_kernel)->GetHostLaunch();
   bool is_comm_used = std::get<2>(ctx_kernel_comm);
-  void* args[4] = {&std::get<0>(ctx_kernel_comm), &stream, &buffers};
+  void *args[4] = {&std::get<0>(ctx_kernel_comm), &stream, &buffers};
   if (is_comm_used) {
     mosaic::gpu::NvshmemApi::Default().barrier_all_on_stream(
         reinterpret_cast<cudaStream_t>(stream));
@@ -666,8 +842,9 @@ void MosaicGPUCustomCall(void* stream, void** buffers, char* opaque,
 
 XLA_REGISTER_CUSTOM_CALL_TARGET_WITH_SYM("mosaic_gpu", &MosaicGPUCustomCall,
                                          "CUDA");
+#endif // defined(JAX_GPU_CUDA)
 
-absl::Status MosaicGpuExecute(cudaStream_t stream, ffi::RemainingArgs inputs,
+absl::Status MosaicGpuExecute(gpuStream_t stream, ffi::RemainingArgs inputs,
                               ffi::RemainingRets results,
                               std::string_view kernel_hash,
                               std::string_view module,
@@ -686,7 +863,7 @@ absl::Status MosaicGpuExecute(cudaStream_t stream, ffi::RemainingArgs inputs,
   auto ctx_kernel_comm = compiled_kernel->GetHostLaunch();
   bool is_comm_used = std::get<2>(ctx_kernel_comm);
 
-  std::vector<void*> buffers;
+  std::vector<void *> buffers;
   buffers.reserve(inputs.size() + results.size());
   for (int i = 0; i < inputs.size(); ++i) {
     buffers.push_back(inputs.get<ffi::AnyBuffer>(i)->untyped_data());
@@ -706,19 +883,21 @@ absl::Status MosaicGpuExecute(cudaStream_t stream, ffi::RemainingArgs inputs,
                           mosaic::gpu::kExpectedHbmAlignment));
     }
   }
-  void** buffers_ptr = buffers.data();
-  void* args[4] = {&std::get<0>(ctx_kernel_comm), &stream, &buffers_ptr};
+  void **buffers_ptr = buffers.data();
+  void *args[4] = {&std::get<0>(ctx_kernel_comm), &stream, &buffers_ptr};
 
+#if defined(JAX_GPU_CUDA)
   if (is_comm_used) {
     mosaic::gpu::NvshmemApi::Default().barrier_all_on_stream(stream);
   }
+#endif // defined(JAX_GPU_CUDA)
   std::get<1>(ctx_kernel_comm)(args);
   return absl::OkStatus();
 }
 
 XLA_FFI_DEFINE_HANDLER(kMosaicGpuExecute, MosaicGpuExecute,
                        ffi::Ffi::Bind<ffi::ExecutionStage::kExecute>()
-                           .Ctx<xla::ffi::PlatformStream<cudaStream_t>>()
+                           .Ctx<xla::ffi::PlatformStream<gpuStream_t>>()
                            .RemainingArgs()
                            .RemainingRets()
                            .Attr<std::string_view>("kernel_hash")
@@ -726,7 +905,16 @@ XLA_FFI_DEFINE_HANDLER(kMosaicGpuExecute, MosaicGpuExecute,
                            .Attr<bool>("use_custom_barrier"),
                        {ffi::Traits::kCmdBufferCompatible});
 
-XLA_FFI_REGISTER_HANDLER(ffi::GetXlaFfiApi(), "mosaic_gpu_v2", "CUDA",
+XLA_FFI_REGISTER_HANDLER(ffi::GetXlaFfiApi(), "mosaic_gpu_v2",
+#if defined(JAX_GPU_CUDA)
+                         "CUDA",
+#elif defined(JAX_GPU_HIP)
+                         "ROCM",
+#else // defined( vendor )
+// while vendor.h already have this saveguard, this file also needs to updated
+// if another platform is added, so this error will help to catch it.
+#error "Either JAX_GPU_CUDA or JAX_GPU_HIP must be defined"
+#endif // defined( vendor )
                          {
                              /*instantiate=*/nullptr,
                              /*prepare=*/nullptr,
@@ -734,24 +922,24 @@ XLA_FFI_REGISTER_HANDLER(ffi::GetXlaFfiApi(), "mosaic_gpu_v2", "CUDA",
                              /*execute=*/kMosaicGpuExecute,
                          });
 
-}  // namespace
+} // namespace
 
 extern "C" {
 
-__attribute__((visibility("default"))) void** MosaicGpuCompile(
-    const char* module, int num_module_bytes) {
+__attribute__((visibility("default"))) void **
+MosaicGpuCompile(const char *module, int num_module_bytes) {
   std::string module_str(module, num_module_bytes);
   auto compiled = CompileAndInit(module_str);
   if (!compiled.ok()) {
     return nullptr;
   }
   auto [ctx, launch, is_comm_used] = compiled->GetHostLaunch();
-  auto tuple_ptr = std::unique_ptr<void*>(new void*[3]);
+  auto tuple_ptr = std::unique_ptr<void *>(new void *[3]);
   if (!tuple_ptr) {
     return nullptr;
   }
   tuple_ptr.get()[0] = ctx;
-  tuple_ptr.get()[1] = reinterpret_cast<void*>(launch);
+  tuple_ptr.get()[1] = reinterpret_cast<void *>(launch);
   tuple_ptr.get()[2] = new CompiledKernel(std::move(*compiled));
   if (!tuple_ptr.get()[2]) {
     return nullptr;
@@ -759,9 +947,9 @@ __attribute__((visibility("default"))) void** MosaicGpuCompile(
   return tuple_ptr.release();
 }
 
-__attribute__((visibility("default"))) void MosaicGpuUnload(void** tuple_ptr) {
-  delete reinterpret_cast<CompiledKernel*>(tuple_ptr[2]);
+__attribute__((visibility("default"))) void MosaicGpuUnload(void **tuple_ptr) {
+  delete reinterpret_cast<CompiledKernel *>(tuple_ptr[2]);
   delete[] tuple_ptr;
 }
 
-}  // extern "C"
+} // extern "C"

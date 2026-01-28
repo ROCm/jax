@@ -27,6 +27,7 @@ limitations under the License.
 #include "mlir/IR/Operation.h"
 #include "mlir/IR/Value.h"
 #include "mlir/Support/LLVM.h"
+
 #include "jaxlib/mosaic/serde.h"
 
 namespace mosaic::gpu {
@@ -56,8 +57,8 @@ constexpr int kVersion = 6;
 
 using SerdeRuleType = jaxlib::mosaic::SerdeRuleType;
 
-LogicalResult vector_extractelement_upgrade(Operation* op, int version,
-                                            bool& erased) {
+LogicalResult vector_extractelement_upgrade(Operation *op, int version,
+                                            bool &erased) {
   if (version < 2) {
     // vector.extractelement was removed in
     // https://github.com/llvm/llvm-project/commit/33465bb2bb75f26b7ad42ab87ccb2464c0245476.
@@ -76,8 +77,8 @@ LogicalResult vector_extractelement_upgrade(Operation* op, int version,
   return success();
 }
 
-LogicalResult vector_insertelement_upgrade(Operation* op, int version,
-                                           bool& erased) {
+LogicalResult vector_insertelement_upgrade(Operation *op, int version,
+                                           bool &erased) {
   if (version < 2) {
     // vector.insertelement was removed in
     // https://github.com/llvm/llvm-project/commit/33465bb2bb75f26b7ad42ab87ccb2464c0245476.
@@ -98,8 +99,9 @@ LogicalResult vector_insertelement_upgrade(Operation* op, int version,
   return success();
 }
 
-LogicalResult nvvm_cp_async_bulk_tensor_global_shared_cta_upgrade(
-    Operation* op, int version, bool& erased) {
+LogicalResult
+nvvm_cp_async_bulk_tensor_global_shared_cta_upgrade(Operation *op, int version,
+                                                    bool &erased) {
   // A new operand was added in
   // https://github.com/llvm/llvm-project/pull/155435/commits/216550ca2169677dd6fc33bc47c3e1ba6d93fc20
   if (version < 3) {
@@ -121,7 +123,7 @@ LogicalResult nvvm_cp_async_bulk_tensor_global_shared_cta_upgrade(
 }
 
 LogicalResult nvvm_cp_async_bulk_tensor_global_shared_cta_downgrade(
-    Operation* op, int version, bool& erased) {
+    Operation *op, int version, bool &erased) {
   // A new operand was added in
   // https://github.com/llvm/llvm-project/pull/155435/commits/216550ca2169677dd6fc33bc47c3e1ba6d93fc20
   if (version < 3) {
@@ -145,7 +147,7 @@ LogicalResult nvvm_cp_async_bulk_tensor_global_shared_cta_downgrade(
   return success();
 }
 
-LogicalResult vector_splat_upgrade(Operation* op, int version, bool& erased) {
+LogicalResult vector_splat_upgrade(Operation *op, int version, bool &erased) {
   if (version < 4) {
     // vector.splat was removed in
     // https://github.com/llvm/llvm-project/commit/ea291d0e8c93d47d7953eff5ca1048891a5fcc55.
@@ -230,14 +232,14 @@ const llvm::StringMap<SerdeRuleType>& upgrade_rules() {
   return *rules;
 }
 
-const llvm::StringMap<SerdeRuleType>& downgrade_rules() {
+const llvm::StringMap<SerdeRuleType> &downgrade_rules() {
   static auto rules = new llvm::StringMap<SerdeRuleType>{
       {::llvm::StringLiteral("nvvm.cp.async.bulk.tensor.global.shared.cta"),
        nvvm_cp_async_bulk_tensor_global_shared_cta_downgrade}};
   return *rules;
 }
 
-}  // namespace
+} // namespace
 
 void SerdePass::runOnOperation() {
   mlir::ModuleOp module = getOperation();
@@ -259,4 +261,4 @@ void SerdePass::runOnOperation() {
   }
 }
 
-}  // namespace mosaic::gpu
+} // namespace mosaic::gpu
