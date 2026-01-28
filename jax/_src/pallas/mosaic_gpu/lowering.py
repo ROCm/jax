@@ -331,6 +331,8 @@ def _run_scoped_resource_estimator(
         raise ValueError(f"TMEM allocations must be 2D. Got {aval.shape}")
       # Estimate columns used.
       if isinstance(aval, gpu_core.AbstractRefUnion):
+        # TODO(arechins) 128 below might be a hardcoded WARPGROUP_SIZE which needs to be fixed once
+        # we have TMEM support ready
         assert aval.shape[0] == 128
         cols_used = aval.shape[1]
       else:
@@ -361,7 +363,7 @@ def _run_scoped_resource_estimator(
           f"Unsupported memory space: {aval.memory_space}")
   return rs + _estimate_resources(ctx, jaxpr)
 
-REDUCE_SCRATCH_ELEMS = 128 * 2  # vector of 2 elements per lane in each WG
+REDUCE_SCRATCH_ELEMS = WARPGROUP_SIZE * 2  # vector of 2 elements per lane in each WG
 
 @_register_resource_estimator(lax.reduce_sum_p)
 @_register_resource_estimator(lax.reduce_max_p)
@@ -729,13 +731,13 @@ def lower_pipelined_jaxpr_to_module(
 
   if gpu_mesh:
     assert isinstance(gpu_mesh, gpu_core.Mesh)
-    block = (128 * (gpu_mesh.num_threads or 1), 1, 1)
+    block = (WARPGROUP_SIZE * (gpu_mesh.num_threads or 1), 1, 1)
     grid = gpu_mesh.grid
     thread_axis = (
         gpu_mesh.thread_name if gpu_mesh.thread_name is not None else ()
     )
   else:
-    block = (128, 1, 1)
+    block = (WARPGROUP_SIZE, 1, 1)
     grid = grid_mapping.grid
     thread_axis = ()
 
