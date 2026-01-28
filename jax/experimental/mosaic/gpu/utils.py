@@ -986,8 +986,9 @@ class BarrierRef:
       raise NotImplementedError("Only up to 32 barriers per group supported")
     i32 = ir.IntegerType.get_signless(32)
     if IS_ROCM:
-      # Current generation of GPUs doesn't have asynchrous barriers, so we'll emulate that
-      # TODO(Arech) FIX BEFORE THE PR. This is only a stub
+      # Current generation of GPUs don't have asynchrous barriers, so we'll use
+      # regular barriers and fences instead. The code below is only to conform
+      # to the interface of the asynchronous barrier code.
       address = memref_ptr(
           barrier_memref, memory_space=WORKGROUP_NVPTX_ADDRESS_SPACE
       )
@@ -1039,8 +1040,9 @@ class BarrierRef:
     ticks = arith.constant(i32, 10000000)
     parity = arith.extui(i32, parity)
     if IS_ROCM:
-      # TODO(Arech) FIX BEFORE THE PR. This is only a stub
-      pass
+      # just a fence and a raw barrier is all we can/should do so far
+      rocdl.s_waitcnt(0)
+      rocdl.s_barrier()
     else:
       nvvm.mbarrier_try_wait_parity_shared(self.get_ptr(), parity, ticks)
       if orders_tensor_core:
@@ -1072,34 +1074,29 @@ class BarrierRef:
       predicate: ir.Value | None = None,
   ):
     i64 = ir.IntegerType.get_signless(64)
-
-    if IS_ROCM:
-      # TODO(Arech) FIX BEFORE THE PR. This is only a stub
-      pass
+    if orders_tensor_core:
+      llvm.inline_asm(
+          ir.Type.parse("!llvm.void"),
+          [], "tcgen05.fence::before_thread_sync;", "",
+          has_side_effects=True,
+      )
+    if can_complete:
+      pred_ptx = pred_constraint = ""
+      if predicate is not None:
+        pred_ptx = "@$2"
+        pred_constraint = ",b"
+      llvm.inline_asm(
+          ir.IntegerType.get_signless(64),
+          [self.get_ptr()] + ([predicate] if predicate is not None else []),
+          f"{pred_ptx} mbarrier.arrive.release.cta.shared::cta.b64 $0, [$1], {arrival_count};",
+          "=l,r" + pred_constraint,
+          has_side_effects=True,
+      )
     else:
-      if orders_tensor_core:
-        llvm.inline_asm(
-            ir.Type.parse("!llvm.void"),
-            [], "tcgen05.fence::before_thread_sync;", "",
-            has_side_effects=True,
-        )
-      if can_complete:
-        pred_ptx = pred_constraint = ""
-        if predicate is not None:
-          pred_ptx = "@$2"
-          pred_constraint = ",b"
-        llvm.inline_asm(
-            ir.IntegerType.get_signless(64),
-            [self.get_ptr()] + ([predicate] if predicate is not None else []),
-            f"{pred_ptx} mbarrier.arrive.release.cta.shared::cta.b64 $0, [$1], {arrival_count};",
-            "=l,r" + pred_constraint,
-            has_side_effects=True,
-        )
-      else:
-        if predicate is not None:
-          raise NotImplementedError("Predicate not supported for no-complete arrive")
-        count = c(arrival_count, ir.IntegerType.get_signless(32))
-        nvvm.mbarrier_arrive_nocomplete_shared(i64, self.get_ptr(), count)
+      if predicate is not None:
+        raise NotImplementedError("Predicate not supported for no-complete arrive")
+      count = c(arrival_count, ir.IntegerType.get_signless(32))
+      nvvm.mbarrier_arrive_nocomplete_shared(i64, self.get_ptr(), count)
 
   def arrive_expect_tx(
       self, bytes: int | ir.Value, predicate: ir.Value | None = None
@@ -1110,7 +1107,7 @@ class BarrierRef:
       i32 = ir.IntegerType.get_signless(32)
       bytes = arith.index_cast(i32, bytes)
     if IS_ROCM:
-      # TODO(Arech) FIX BEFORE THE PR. This is only a stub
+      # arrival doesn't make sence in synchronous barriers
       pass
     else:
       nvvm.mbarrier_arrive_expect_tx_shared(self.get_ptr(), bytes, predicate=predicate)
