@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools", "wheel"]
+requires = ["setuptools", "wheel<0.46"]
 build-backend = "setuptools.build_meta"
 
 [tool.mypy]
