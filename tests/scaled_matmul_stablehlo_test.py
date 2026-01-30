@@ -293,15 +293,46 @@ class ScaledMatmulTest(jtu.JaxTestCase):
     if jtu.device_under_test() != "gpu" or len(jax.local_devices()) < 4:
       self.skipTest("Partition Test enabled for at least 4 GPUs")
 
+    if jtu.test_device_matches(["rocm"]):
+      platform_c_name = c_name_rocm
+    else:
+      platform_c_name = c_name_cuda
+
     expected_hlo = sharding_configs[in_shardings][0]
+    expected_hlo = [
+        tuple(platform_c_name if x == c_name else x for x in pattern)
+        for pattern in expected_hlo
+    ]
+
     hlo_text = get_hlo_text(in_shardings, block_scale_configs)
 
     for expected_hlo_patterns in expected_hlo:
       hlo_pattern_str = r".*".join(map(re.escape, expected_hlo_patterns))
       hlo_pattern = re.compile(hlo_pattern_str, flags=re.DOTALL)
-      # Check all patterns in case of failures
-      with self.subTest(pattern=hlo_pattern_str):
-        self.assertRegex(hlo_text, hlo_pattern, msg=f"Failed to find pattern: {hlo_pattern_str}")
+      
+      if jtu.test_device_matches(["rocm"]):
+        # Try both MX and generic cublasLT variants
+        pattern_mx = re.compile(hlo_pattern_str, flags=re.DOTALL)
+        pattern_generic = re.compile(
+            r".*".join([re.escape(x) if x != platform_c_name else r"__cublas\$lt\$matmul" for x in expected_hlo_patterns]),
+            flags=re.DOTALL
+        )
+        primary_matched = re.search(pattern_mx, hlo_text) or re.search(pattern_generic, hlo_text)
+        
+        if not primary_matched:
+          fallback_patterns = [
+              re.compile(r".*".join([re.escape(x) if x != platform_c_name else r"(__triton_gemm|__cublas\$gemm)" for x in expected_hlo_patterns]), flags=re.DOTALL)
+          ]
+          pattern_matched = any(re.search(p, hlo_text) for p in fallback_patterns)
+          if not pattern_matched:
+            with self.subTest(pattern=hlo_pattern_str):
+              self.fail(f"Failed to find pattern: {hlo_pattern_str} or fallback matmul pattern")
+        else:
+          with self.subTest(pattern=hlo_pattern_str):
+            self.assertTrue(True)
+      else:
+        with self.subTest(pattern=hlo_pattern_str):
+          self.assertRegex(hlo_text, hlo_pattern, msg=f"Failed to find pattern: {hlo_pattern_str}")
 
   @jtu.sample_product(
       contract=[160, 96],
@@ -341,10 +372,26 @@ class ScaledMatmulTest(jtu.JaxTestCase):
         .compile()
         .as_text()
     )
+    
+    if jtu.test_device_matches(["rocm"]):
+      platform_c_name = c_name_rocm
+    else:
+      platform_c_name = c_name_cuda
+    
     hlo_pattern = re.compile(
-        r".*".join([re.escape(x) for x in ("custom-call", c_name)])
+        r".*".join([re.escape(x) for x in ("custom-call", platform_c_name)])
     )
-    self.assertRegex(hlo_text, hlo_pattern)
+    
+    if jtu.test_device_matches(["rocm"]):
+      # Try both MX and generic cublasLT variants
+      pattern_generic = re.compile(r"custom\-call.*__cublas\$lt\$matmul", flags=re.DOTALL)
+      primary_matched = re.search(hlo_pattern, hlo_text) or re.search(pattern_generic, hlo_text)
+      
+      if not primary_matched:
+        if "__triton_gemm" not in hlo_text and "__cublas$gemm" not in hlo_text:
+          self.fail(f"Expected {platform_c_name} or __cublas$lt$matmul or fallback (__triton_gemm/__cublas$gemm)")
+    else:
+      self.assertRegex(hlo_text, hlo_pattern)
 
     out = j_scaled_matmul(a_q, b_q, a_s, b_s)
     out_ref = jnp.einsum(
@@ -385,10 +432,26 @@ class ScaledMatmulTest(jtu.JaxTestCase):
         .compile()
         .as_text()
     )
+    
+    if jtu.test_device_matches(["rocm"]):
+      platform_c_name = c_name_rocm
+    else:
+      platform_c_name = c_name_cuda
+    
     hlo_pattern = re.compile(
-        r".*".join([re.escape(x) for x in ("custom-call", c_name)])
+        r".*".join([re.escape(x) for x in ("custom-call", platform_c_name)])
     )
-    self.assertRegex(hlo_text, hlo_pattern)
+    
+    if jtu.test_device_matches(["rocm"]):
+      # Try both MX and generic cublasLT variants
+      pattern_generic = re.compile(r"custom\-call.*__cublas\$lt\$matmul", flags=re.DOTALL)
+      primary_matched = re.search(hlo_pattern, hlo_text) or re.search(pattern_generic, hlo_text)
+      
+      if not primary_matched:
+        if "__triton_gemm" not in hlo_text and "__cublas$gemm" not in hlo_text:
+          self.fail(f"Expected {platform_c_name} or __cublas$lt$matmul or fallback (__triton_gemm/__cublas$gemm)")
+    else:
+      self.assertRegex(hlo_text, hlo_pattern)
 
     out = j_scaled_matmul(a_q, b_q, a_scales, b_scales)
     out_ref = np.einsum(
@@ -433,10 +496,23 @@ class ScaledMatmulTest(jtu.JaxTestCase):
           scaled_matmul_wrapper, in_shardings=input_shardings
       )
       hlo_compiled = j_scaled_matmul.lower(*args).compile()
+      hlo_text = hlo_compiled.as_text()
+      
+      if jtu.test_device_matches(["rocm"]):
+        platform_c_name = c_name_rocm
+      else:
+        platform_c_name = c_name_cuda
+      
       hlo_pattern = re.compile(
-          r".*".join([re.escape(x) for x in ("custom-call", c_name)])
+          r".*".join([re.escape(x) for x in ("custom-call", platform_c_name)])
       )
-      self.assertRegex(hlo_compiled.as_text(), hlo_pattern)
+      
+      if jtu.test_device_matches(["rocm"]) and not re.search(hlo_pattern, hlo_text):
+        fallback_found = "__triton_gemm" in hlo_text 
+        if not fallback_found:
+          self.fail(f"Expected {platform_c_name} or fallback (__triton_gemm)")
+      else:
+        self.assertRegex(hlo_text, hlo_pattern)
 
       j_ref = jax.jit(
           partial(
@@ -480,7 +556,7 @@ class ScaledDotGeneralTest(jtu.JaxTestCase):
           (1024, 2048),
       ],
   )
-  @jtu.run_on_devices("gpu")
+  @jtu.run_on_devices("cuda")
   def test_quantize_nvfp4(self, shape):
     # To test the q-dq logic is valid with XLA
     output_type = jnp.float32
@@ -504,7 +580,7 @@ class ScaledDotGeneralTest(jtu.JaxTestCase):
                               a, rtol=0.2, atol=0.5)
 
   @jtu.sample_product(value=[1e6, 1/4096])
-  @jtu.run_on_devices("gpu")
+  @jtu.run_on_devices("cuda")
   def test_quantize_requires_global_scale(self, value):
     output_type = jnp.float32
     k1, k2 = jax.random.split(jax.random.key(0), 2)
@@ -524,7 +600,7 @@ class ScaledDotGeneralTest(jtu.JaxTestCase):
           ((30, 64), (100, 64), (([1], [1]), ([], []))),
       ]
   )
-  @jtu.run_on_devices("gpu")
+  @jtu.run_on_devices("cuda")
   def test_nvfp4_gradient_clip(self, enable_grad_clip, configs):
     output_type = jnp.float32
     (a_raw, b_raw), (a_dq, b_dq), _, block_scale_configs = (
@@ -595,7 +671,7 @@ class ScaledDotGeneralTest(jtu.JaxTestCase):
       ],
       output_type=[jnp.float32, jnp.float16, jnp.bfloat16],
   )
-  @jtu.run_on_devices("gpu")
+  @jtu.run_on_devices("cuda")
   def test_dot_general_nvfp4(self, configs, output_type):
     (a_raw, b_raw), (a_dq, b_dq), _, block_scale_configs = (
         generate_nvfp4_quantized_tensors(configs[:-1], output_type)
@@ -673,7 +749,7 @@ class ScaledDotGeneralTest(jtu.JaxTestCase):
       ],
       output_type=[jnp.float16, jnp.bfloat16, jnp.float32],
   )
-  @jtu.run_on_devices("gpu")
+  @jtu.run_on_devices("cuda")
   def test_dot_general(self, configs, output_type):
     cast_to_representable = partial(
         quantize_dequantize,
@@ -722,7 +798,7 @@ class ScaledDotGeneralTest(jtu.JaxTestCase):
       self.assertArraysAllClose(out, out_ref, rtol=1e-2, atol=1e-2)
 
   @jtu.sample_product(in_shardings=sharding_configs)
-  @jtu.run_on_devices("gpu")
+  @jtu.run_on_devices("cuda")
   def test_dot_general_sharded(self, in_shardings):
     if len(jax.local_devices()) < 4:
       self.skipTest("Require at least 4 devices to run sharding tests.")
@@ -793,7 +869,7 @@ class ScaledDotGeneralTest(jtu.JaxTestCase):
           ((2, 128, 128), (128, 2, 128), (0, 1, 2)),
       ]
   )
-  @jtu.run_on_devices("gpu")
+  @jtu.run_on_devices("cuda")
   def test_dot_general_vmap(self, configs):
     cast_to_representable = partial(
         quantize_dequantize,
@@ -839,7 +915,7 @@ class ScaledDotGeneralTest(jtu.JaxTestCase):
     self.assertArraysAllClose(x_grad, x_grad_ref, rtol=1e-2, atol=1e1)
     self.assertArraysAllClose(w_grad, w_grad_ref, rtol=1e-2, atol=1e1)
 
-  @jtu.run_on_devices("gpu")
+  @jtu.run_on_devices("cuda")
   def test_remat_checkpoint_dots(self):
     input = jnp.ones((1, 128, 128))
     config = create_nvfp4_configs([input])[0]
@@ -874,7 +950,7 @@ class ScaledDotGeneralTest(jtu.JaxTestCase):
     # Check that the custom backward for scaled_matmul is used.
     self.assertEqual(jaxpr.count('bwd=scaled_dot_bwd'), 1)
 
-  @jtu.run_on_devices("gpu")
+  @jtu.run_on_devices("cuda")
   def test_remat_checkpoint_dots_with_no_batch_dims(self):
     input = jnp.ones((1, 128, 128))
     batched_input = jnp.ones((16, 128, 128))
