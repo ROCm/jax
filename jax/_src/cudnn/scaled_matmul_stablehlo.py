@@ -175,6 +175,12 @@ def _enable_all_reduce(lhs, rhs):
   _, n_spec, rhs_k_spec = rhs.spec
   return lhs_k_spec != None and lhs_k_spec == rhs_k_spec and n_spec == None
 
+def _are_specs_overlapping(lhs, rhs):
+  if lhs is None or rhs is None:
+    return False
+  lhs = (lhs,) if isinstance(lhs, str) else lhs
+  rhs = (rhs,) if isinstance(rhs, str) else rhs
+  return not set(lhs).isdisjoint(rhs)
 
 def _get_output_sharding(shardings):
   lhs, rhs = shardings[0], shardings[1]
@@ -241,7 +247,8 @@ def supported_in_sharding(shardings, reduce_scatter_dim):
   lhs_specs[2] = None
   rhs_specs[2] = None
   m_spec, n_spec = lhs_specs[1], rhs_specs[1]
-  if m_spec == n_spec:
+  # Check if m_spec and n_spec share any axis names to avoid duplicates
+  if _are_specs_overlapping(m_spec, n_spec):
     rhs_specs[1] = None
 
   return named_sharding(lhs_sharding, rhs_sharding, lhs_specs, rhs_specs)
@@ -259,7 +266,8 @@ def _supported_out_sharding(lhs, rhs, reduce_scatter_dim):
     out_n_spec = k_spec
   else:
     out_m_spec = m_spec
-    out_n_spec = n_spec if m_spec != n_spec else None
+    # Check if m_spec and n_spec share any axis names to avoid duplicates
+    out_n_spec = n_spec if not _are_specs_overlapping(m_spec, n_spec) else None
 
   return [NamedSharding(lhs.mesh, P(batch_spec, out_m_spec, out_n_spec))]
 
