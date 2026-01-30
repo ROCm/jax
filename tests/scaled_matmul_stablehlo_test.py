@@ -46,7 +46,9 @@ input_shardings = [
     ((None, None, "tp"), (None, "tp", None)),
     ((None, ("dp", "tp"), None), (None, ("dp"), None)),
 ]
-c_name = "__cudnn$blockScaledDot"
+c_name_cuda = "__cudnn$blockScaledDot"
+c_name_rocm = "__cublas$lt$matmul$mx"
+c_name = c_name_cuda
 expected_hlos = [
     [("all-reduce", "f32[1,512,512]", "replica_groups={{0,1},{2,3}}"), (c_name,)],
     [("all-gather", "f8e4m3fn[512,512]", "replica_groups=[2,2]<=[4]"), (c_name,)],
