@@ -288,7 +288,7 @@ class ScaledMatmulTest(jtu.JaxTestCase):
       in_shardings=sharding_configs,
       block_scale_configs=[mxfp8_configs,],
   )
-  @jtu.run_on_devices("cuda")
+  @jtu.run_on_devices("gpu")
   def test_collectives(self, in_shardings, block_scale_configs):
     if jtu.device_under_test() != "gpu" or len(jax.local_devices()) < 4:
       self.skipTest("Partition Test enabled for at least 4 GPUs")
@@ -339,7 +339,7 @@ class ScaledMatmulTest(jtu.JaxTestCase):
       lhs_non_contract=[240, 100],
       dtype=[jnp.float32, jnp.bfloat16, jnp.float16],
   )
-  @jtu.run_on_devices("cuda")
+  @jtu.run_on_devices("gpu")
   def test_scaled_matmul_nvfp4(
       self, contract, lhs_non_contract, dtype,
   ):
@@ -407,7 +407,7 @@ class ScaledMatmulTest(jtu.JaxTestCase):
       dtype=[jnp.float16, jnp.bfloat16, jnp.float32],
       block_scale_configs=[mxfp8_configs,],
   )
-  @jtu.run_on_devices("cuda")
+  @jtu.run_on_devices("gpu")
   def test_scaled_matmul(
       self, contract, lhs_non_contract, dtype, block_scale_configs,
   ):
@@ -465,7 +465,7 @@ class ScaledMatmulTest(jtu.JaxTestCase):
         in_shardings=sharding_configs,
         block_scale_configs=[mxfp8_configs,],
   )
-  @jtu.run_on_devices("cuda")
+  @jtu.run_on_devices("gpu")
   def test_scaled_matmul_sharded(self, in_shardings, block_scale_configs):
     if len(jax.local_devices()) < 4:
       self.skipTest("Require at least 4 devices to run sharding tests.")
@@ -556,7 +556,7 @@ class ScaledDotGeneralTest(jtu.JaxTestCase):
           (1024, 2048),
       ],
   )
-  @jtu.run_on_devices("cuda")
+  @jtu.run_on_devices("gpu")
   def test_quantize_nvfp4(self, shape):
     # To test the q-dq logic is valid with XLA
     output_type = jnp.float32
@@ -580,7 +580,7 @@ class ScaledDotGeneralTest(jtu.JaxTestCase):
                               a, rtol=0.2, atol=0.5)
 
   @jtu.sample_product(value=[1e6, 1/4096])
-  @jtu.run_on_devices("cuda")
+  @jtu.run_on_devices("gpu")
   def test_quantize_requires_global_scale(self, value):
     output_type = jnp.float32
     k1, k2 = jax.random.split(jax.random.key(0), 2)
@@ -600,7 +600,7 @@ class ScaledDotGeneralTest(jtu.JaxTestCase):
           ((30, 64), (100, 64), (([1], [1]), ([], []))),
       ]
   )
-  @jtu.run_on_devices("cuda")
+  @jtu.run_on_devices("gpu")
   def test_nvfp4_gradient_clip(self, enable_grad_clip, configs):
     output_type = jnp.float32
     (a_raw, b_raw), (a_dq, b_dq), _, block_scale_configs = (
@@ -671,7 +671,7 @@ class ScaledDotGeneralTest(jtu.JaxTestCase):
       ],
       output_type=[jnp.float32, jnp.float16, jnp.bfloat16],
   )
-  @jtu.run_on_devices("cuda")
+  @jtu.run_on_devices("gpu")
   def test_dot_general_nvfp4(self, configs, output_type):
     (a_raw, b_raw), (a_dq, b_dq), _, block_scale_configs = (
         generate_nvfp4_quantized_tensors(configs[:-1], output_type)
@@ -749,7 +749,7 @@ class ScaledDotGeneralTest(jtu.JaxTestCase):
       ],
       output_type=[jnp.float16, jnp.bfloat16, jnp.float32],
   )
-  @jtu.run_on_devices("cuda")
+  @jtu.run_on_devices("gpu")
   def test_dot_general(self, configs, output_type):
     cast_to_representable = partial(
         quantize_dequantize,
@@ -798,7 +798,7 @@ class ScaledDotGeneralTest(jtu.JaxTestCase):
       self.assertArraysAllClose(out, out_ref, rtol=1e-2, atol=1e-2)
 
   @jtu.sample_product(in_shardings=sharding_configs)
-  @jtu.run_on_devices("cuda")
+  @jtu.run_on_devices("gpu")
   def test_dot_general_sharded(self, in_shardings):
     if len(jax.local_devices()) < 4:
       self.skipTest("Require at least 4 devices to run sharding tests.")
@@ -869,7 +869,7 @@ class ScaledDotGeneralTest(jtu.JaxTestCase):
           ((2, 128, 128), (128, 2, 128), (0, 1, 2)),
       ]
   )
-  @jtu.run_on_devices("cuda")
+  @jtu.run_on_devices("gpu")
   def test_dot_general_vmap(self, configs):
     cast_to_representable = partial(
         quantize_dequantize,
@@ -915,7 +915,7 @@ class ScaledDotGeneralTest(jtu.JaxTestCase):
     self.assertArraysAllClose(x_grad, x_grad_ref, rtol=1e-2, atol=1e1)
     self.assertArraysAllClose(w_grad, w_grad_ref, rtol=1e-2, atol=1e1)
 
-  @jtu.run_on_devices("cuda")
+  @jtu.run_on_devices("gpu")
   def test_remat_checkpoint_dots(self):
     input = jnp.ones((1, 128, 128))
     config = create_nvfp4_configs([input])[0]
@@ -950,7 +950,7 @@ class ScaledDotGeneralTest(jtu.JaxTestCase):
     # Check that the custom backward for scaled_matmul is used.
     self.assertEqual(jaxpr.count('bwd=scaled_dot_bwd'), 1)
 
-  @jtu.run_on_devices("cuda")
+  @jtu.run_on_devices("gpu")
   def test_remat_checkpoint_dots_with_no_batch_dims(self):
     input = jnp.ones((1, 128, 128))
     batched_input = jnp.ones((16, 128, 128))
