@@ -272,12 +272,13 @@ class ScaledMatmulTest(jtu.JaxTestCase):
 
   def setUp(self):
     super().setUp()
-    try:
-      check_cudnn_version()
-    except RuntimeError as e:
-      self.skipTest(str(e))
-    if not jtu.is_cuda_compute_capability_at_least("10.0"):
-      self.skipTest("Requires at least Blackwell arch")
+    if jtu.test_device_matches(["cuda"]):
+      try:
+        check_cudnn_version()
+      except RuntimeError as e:
+        self.skipTest(str(e))
+      if not jtu.is_cuda_compute_capability_at_least("10.0"):
+        self.skipTest("Requires at least Blackwell arch")
 
   mxfp8_configs = create_mxfp8_configs()
 
