@@ -30,6 +30,15 @@ source ci/envs/default.env
 echo "Installing wheels locally..."
 source ./ci/utilities/install_wheels_locally.sh
 
+# TESTING ONLY: Apply patch to bypass ROCm plugin version check
+echo "Applying ROCm plugin version bypass patch (TESTING ONLY)..."
+JAXLIB_PATH=$("$JAXCI_PYTHON" -c "import jaxlib; import os; print(os.path.dirname(jaxlib.__file__))")
+echo "Jaxlib installed at: $JAXLIB_PATH"
+cd "$JAXLIB_PATH"
+patch -p2 < "$GITHUB_WORKSPACE/.github/workflows/patches/rocm_plugin_version_bypass.patch"
+grep -A 3 "TEMPORARY: Bypass version check" plugin_support.py || echo "Warning: Patch may not have been applied correctly"
+cd "$GITHUB_WORKSPACE"
+
 # Print all the installed packages
 echo "Installed packages:"
 "$JAXCI_PYTHON" -m uv pip freeze
