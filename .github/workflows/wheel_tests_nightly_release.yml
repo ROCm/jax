@@ -182,19 +182,10 @@ jobs:
           rocm: [
             {version: "7.2.0", tag: "rocm720"},
           ]
-          ubuntu-version: ["22", "24"]
-          exclude:
-            # TODO: decouple ubuntu version and python version.
-            # Match python version with ubuntu version.
-            - python: "3.11"
-              ubuntu-version: "24"
-            - python: "3.12"
-              ubuntu-version: "22"
     name: "Pytest ROCm (JAX artifacts version = ${{ startsWith(github.ref_name, 'release/') && 'latest release' || 'nightly' }})"
     with:
       runner: ${{ matrix.runner }}
       python: ${{ matrix.python }}
-      ubuntu-version: ${{ matrix.ubuntu-version }}
       rocm-version: ${{ matrix.rocm.version }}
       rocm-tag: ${{ matrix.rocm.tag }}
       jax-version: "0.9.0"
