@@ -6,8 +6,8 @@
 #
 # It consists of the following job:
 # run-tests:
-#    - Runs in ROCm team's container (ghcr.io/rocm/jax-ubu*.rocm*:latest)
-#    - Downloads the JAX wheel and ROCm artifacts (custom jaxlib and plugins).
+#    - Runs in ROCm team's container (ghcr.io/rocm/jax-base-ubu24-rocm*:latest)
+#    - Downloads the JAX and jaxlib wheels from GCS, and ROCm plugins from latest release.
 #    - Executes the `run_pytest_rocm.sh` script, which performs the following actions:
 #      - Installs the downloaded wheel artifacts.
 #      - Runs the ROCm tests with Pytest.
@@ -38,38 +38,27 @@ on:
         options:
           - "7.2.0"
       rocm-tag:
-        description: "ROCm tag for container image (e.g., rocm711)"
+        description: "ROCm tag for container image (e.g., rocm720)"
         type: string
         default: "rocm720"
-      jax-version:
-        description: "Which JAX version to download from PyPI? (e.g., 0.8.0, 0.8.2, or 'latest')"
-        type: string
-        default: "0.9.0"
       jaxlib-version:
-        description: "Which jaxlib version to use? (pypi_latest/github_release)"
+        description: "Which jaxlib version to use? (head/pypi_latest)"
         type: choice
-        default: "github_release"
+        default: "head"
         options:
-          - "github_release"
+          - "head"
           - "pypi_latest"
-      github-release-tag:
-        description: "GitHub release tag for custom jaxlib (required if jaxlib-version is github_release)"
-        type: string
-        default: "rocm-jax-v0.9.0-rc"
-      skip-download-jaxlib-and-rocm-plugins:
-        description: "Whether to skip downloading the jaxlib and ROCm plugins (e.g for testing a jax only release)"
+      skip-download-jaxlib-and-rocm-plugins-from-gcs:
+        description: "Whether to skip downloading the jaxlib and ROCm plugins from GCS (e.g for testing a jax only release)"
         type: choice
         default: '0'
         options:
           - '0'
           - '1'
-      download-jax-from-pypi:
-        description: "Whether to download the jax wheel from PyPI"
-        type: choice
-        default: '1'
-        options:
-          - '1'
-          - '0'
+      gcs_download_uri:
+        description: "GCS location prefix from where the artifacts should be downloaded"
+        type: string
+        default: 'gs://general-ml-ci-transient/jax-github-actions/jax/${{ github.workflow }}/${{ github.run_number }}/${{ github.run_attempt }}'
       halt-for-connection:
         description: 'Should this workflow run wait for a remote connection?'
         type: string
@@ -89,28 +78,20 @@ on:
         type: string
         default: "7.2.0"
       rocm-tag:
-        description: "ROCm tag for container image (e.g., rocm711)"
+        description: "ROCm tag for container image (e.g., rocm720)"
         type: string
         default: "rocm720"
-      jax-version:
-        description: "Which JAX version to download from PyPI? (e.g., 0.8.0, 0.8.2, or 'latest')"
-        type: string
-        default: "0.9.0"
       jaxlib-version:
-        description: "Which jaxlib version to use? (pypi_latest/github_release)"
+        description: "Which jaxlib version to use? (head/pypi_latest)"
         type: string
-        default: "github_release"
-      github-release-tag:
-        description: "GitHub release tag for custom jaxlib (required if jaxlib-version is github_release)"
-        type: string
-        default: "rocm-jax-v0.9.0-rc"
-      skip-download-jaxlib-and-rocm-plugins:
-        description: "Whether to skip downloading the jaxlib and ROCm plugins (e.g for testing a jax only release)"
+        default: "head"
+      skip-download-jaxlib-and-rocm-plugins-from-gcs:
+        description: "Whether to skip downloading the jaxlib and ROCm plugins from GCS (e.g for testing a jax only release)"
         default: '0'
         type: string
-      download-jax-from-pypi:
-        description: "Whether to download the jax wheel from PyPI"
-        default: '1'
+      gcs_download_uri:
+        description: "GCS location prefix from where the artifacts should be downloaded"
+        default: 'gs://general-ml-ci-transient/jax-github-actions/jax/${{ github.workflow }}/${{ github.run_number }}/${{ github.run_attempt }}'
         type: string
 permissions: {}
 
@@ -148,11 +129,9 @@ jobs:
         with:
           python: ${{ inputs.python }}
           rocm-version: ${{ inputs.rocm-version }}
-          jax-version: ${{ inputs.jax-version }}
           jaxlib-version: ${{ inputs.jaxlib-version }}
-          github-release-tag: ${{ inputs.github-release-tag }}
-          skip-download-jaxlib-and-rocm-plugins: ${{ inputs.skip-download-jaxlib-and-rocm-plugins }}
-          download-jax-from-pypi: ${{ inputs.download-jax-from-pypi }}
+          skip-download-jaxlib-and-rocm-plugins-from-gcs: ${{ inputs.skip-download-jaxlib-and-rocm-plugins-from-gcs }}
+          gcs_download_uri: ${{ inputs.gcs_download_uri }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Install Python dependencies
