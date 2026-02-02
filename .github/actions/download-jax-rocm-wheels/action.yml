@@ -88,6 +88,7 @@ runs:
             echo "Downloading ROCm PJRT plugin from latest release in ROCm/jax-plugin..."
             gh release download \
               --repo ROCm/jax-plugin \
+              --include-pre-releases \
               --pattern "jax_rocm${JAXCI_ROCM_VERSION}_pjrt-*-py3-none-manylinux*.whl" \
               --dir $(pwd)/dist/
 
@@ -95,6 +96,7 @@ runs:
             echo "Downloading ROCm plugin from latest release in ROCm/jax-plugin..."
             gh release download \
               --repo ROCm/jax-plugin \
+              --include-pre-releases \
               --pattern "jax_rocm${JAXCI_ROCM_VERSION}_plugin-*-${PYTHON_MAJOR_MINOR}*manylinux*.whl" \
               --dir $(pwd)/dist/
           elif [[ ${{ inputs.jaxlib-version }} == "pypi_latest" ]]; then
