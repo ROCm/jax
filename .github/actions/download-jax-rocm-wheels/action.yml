@@ -81,14 +81,14 @@ runs:
         else
           if [[ ${{ inputs.jaxlib-version }} == "head" ]]; then
             gcloud storage cp -r "${{ inputs.gcs_download_uri }}/jaxlib*${PYTHON_MAJOR_MINOR}*${OS}*${ARCH}*.whl" $(pwd)/dist/
-            
+
             # Download ROCm PJRT plugin from latest release in ROCm/jax-plugin
             echo "Downloading ROCm PJRT plugin from latest release in ROCm/jax-plugin..."
             gh release download \
               --repo ROCm/jax-plugin \
               --pattern "jax_rocm${JAXCI_ROCM_VERSION}_pjrt-*-py3-none-manylinux*.whl" \
               --dir $(pwd)/dist/
-            
+
             # Download ROCm plugin from latest release in ROCm/jax-plugin
             echo "Downloading ROCm plugin from latest release in ROCm/jax-plugin..."
             gh release download \
