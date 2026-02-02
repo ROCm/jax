@@ -26,8 +26,13 @@ import glob
 from collections.abc import Sequence
 from jaxlib.tools import platform_tags
 
+from bazel_tools.tools.python.runfiles import runfiles
 
-MAIN_RUNFILES_DIR = "__main__/"
+# we need to figure out the current runfiles main
+# as jax might be used as an external dependency @jax//
+# e.g to execute the jax tests through the plugin project
+bazel_runfiles = runfiles.Create()
+MAIN_RUNFILES_DIR = f"{bazel_runfiles.CurrentRepository()}/"
 
 
 def is_windows() -> bool:

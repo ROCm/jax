@@ -103,7 +103,7 @@ def patch_copy_mlir_import(
 
 
 def verify_mac_libraries_dont_reference_chkstack(
-    runfiles=None, wheel_sources_map=None
+    runfiles=None, wheel_sources_map=None, jax_source_prefix="__main__"
 ):
   """Verifies that _jax.so doesn't depend on ____chkstk_darwin.
 
@@ -168,7 +168,7 @@ def prepare_wheel(wheel_sources_path: pathlib.Path, *, cpu, wheel_sources):
   )
 
   verify_mac_libraries_dont_reference_chkstack(
-      runfiles=r, wheel_sources_map=wheel_sources_map
+      runfiles=r, wheel_sources_map=wheel_sources_map, jax_source_prefix=source_file_prefix
   )
   copy_files(
       dst_dir=wheel_sources_path,
@@ -384,14 +384,23 @@ def prepare_wheel(wheel_sources_path: pathlib.Path, *, cpu, wheel_sources):
       wheel_sources_map=wheel_sources_map,
   )
 
+  if wheel_sources:
+    xla_ffi_files = [
+        "xla/ffi/api/c_api.h",
+        "xla/ffi/api/api.h",
+        "xla/ffi/api/ffi.h",
+    ]
+  else:
+    xla_ffi_files = [
+        f"{source_file_prefix}jaxlib/include/xla/ffi/api/c_api.h",
+        f"{source_file_prefix}jaxlib/include/xla/ffi/api/api.h",
+        f"{source_file_prefix}jaxlib/include/xla/ffi/api/ffi.h",
+    ]
+
   copy_files(
-      dst_dir=jaxlib_dir / "include" / "xla" / "ffi" / "api",
-      src_files=[
-          "xla/xla/ffi/api/c_api.h",
-          "xla/xla/ffi/api/api.h",
-          "xla/xla/ffi/api/ffi.h",
-      ],
-  )
+        dst_dir=jaxlib_dir / "include" / "xla" / "ffi" / "api",
+        src_files=xla_ffi_files,
+   )
 
 tmpdir = None
 sources_path = args.sources_path

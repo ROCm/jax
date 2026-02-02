@@ -72,7 +72,7 @@ def get_zstandard():
         return []
     return ["@pypi//zstandard"]
 
-def get_optional_dep(package, excluded_py_versions=["3.14", "3.14-ft"]):
+def get_optional_dep(package, excluded_py_versions = ["3.14", "3.14-ft"]):
     if HERMETIC_PYTHON_VERSION in excluded_py_versions:
         return []
     return [package]
@@ -297,6 +297,7 @@ def jax_multiplatform_test(
             tags = test_tags,
             main = main,
             exec_properties = tf_exec_properties({"tags": test_tags}),
+            legacy_create_init = 0,
         )
 
 def jax_generate_backend_suites(backends = []):
