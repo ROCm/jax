@@ -68,6 +68,8 @@ runs:
       continue-on-error: true
       run: |
         mkdir -p $(pwd)/dist
+        # Disable Authentication on the ROCm runners.
+        gcloud config set auth/disable_credentials True
         if [[ "${{ inputs.download-jax-from-gcs }}" == "1" ]]; then
           gcloud storage cp -r "${{ inputs.gcs_download_uri }}"/jax*py3*none*any.whl $(pwd)/dist/
         else
