@@ -24,13 +24,6 @@ on:
           - "linux-x86-64-1gpu-amd"
           - "linux-x86-64-4gpu-amd"
           - "linux-x86-64-8gpu-amd"
-      ubuntu-version:
-        description: "Which Ubuntu version to use for container? (ubu22=py3.11, ubu24=py3.12)"
-        type: choice
-        default: "22"
-        options:
-          - "22"
-          - "24"
       python:
         description: "Which Python version to use?"
         type: choice
@@ -87,10 +80,6 @@ on:
         description: "Which runner should the workflow run on?"
         type: string
         default: "linux-x86-64-4gpu-amd"
-      ubuntu-version:
-        description: "Which Ubuntu version to use for container? (ubu22=py3.11, ubu24=py3.12)"
-        type: string
-        default: "22"
       python:
         description: "Which Python version to use?"
         type: string
@@ -138,12 +127,12 @@ jobs:
     continue-on-error: true
     # Run in ROCm team's GHCR container with GPU access
     container:
-      image: ghcr.io/rocm/jax-base-ubu${{ inputs.ubuntu-version }}.${{ inputs.rocm-tag }}:latest
+      image: ghcr.io/rocm/jax-base-ubu24-${{ inputs.rocm-tag }}:latest
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
       options: --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --shm-size 64G --env-file /etc/podinfo/gha-gpu-isolation-settings
-    name: "ROCm ${{ inputs.rocm-version }}, ubu${{ inputs.ubuntu-version }}, py${{ inputs.python }}"
+    name: "ROCm ${{ inputs.rocm-version }}, py${{ inputs.python }}"
 
     env:
       JAXCI_HERMETIC_PYTHON_VERSION: "${{ inputs.python }}"
