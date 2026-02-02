@@ -188,11 +188,9 @@ jobs:
       python: ${{ matrix.python }}
       rocm-version: ${{ matrix.rocm.version }}
       rocm-tag: ${{ matrix.rocm.tag }}
-      jax-version: "0.9.0"
-      jaxlib-version: "github_release"
-      github-release-tag: "rocm-jax-v0.9.0-rc"
-      skip-download-jaxlib-and-rocm-plugins: "0"
-      download-jax-from-pypi: "1"
+      jaxlib-version: "head"
+      skip-download-jaxlib-and-rocm-plugins-from-gcs: ${{inputs.skip-download-jaxlib-and-cuda-plugins-from-gcs}}
+      gcs_download_uri: ${{inputs.gcs_download_uri}}
 
   run-pytest-tpu:
     uses: ./.github/workflows/pytest_tpu.yml
