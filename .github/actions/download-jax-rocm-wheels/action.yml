@@ -16,7 +16,7 @@ inputs:
     default: "head"
   download-jax-from-gcs:
     description: "Whether to download the jax wheel from GCS"
-    default: '1'
+    default: '0'
     type: string
   skip-download-jaxlib-and-rocm-plugins-from-gcs:
     description: "Whether to skip downloading the jaxlib and ROCm plugins from GCS (e.g for testing a jax only release)"
@@ -105,7 +105,34 @@ runs:
               --dir $(pwd)/dist/
           elif [[ ${{ inputs.jaxlib-version }} == "pypi_latest" ]]; then
             PYTHON=python${{ inputs.python }}
-            $PYTHON -m pip download jaxlib jax-rocm${JAXCI_ROCM_VERSION}-pjrt jax-rocm${JAXCI_ROCM_VERSION}-plugin --dest $(pwd)/dist/
+
+            # TESTING: Pin to v0.9.0 for comparison testing
+            JAX_VERSION="0.9.0"
+            JAXLIB_VERSION="0.9.0"
+
+            echo "Downloading JAX ${JAX_VERSION} and jaxlib ${JAXLIB_VERSION} from PyPI..."
+            $PYTHON -m pip download jax==${JAX_VERSION} --dest $(pwd)/dist/
+            $PYTHON -m pip download jaxlib==${JAXLIB_VERSION} --dest $(pwd)/dist/
+
+            # Download ROCm plugins from GitHub (same as head mode)
+            echo "Finding latest ROCm plugin release (including pre-releases)..."
+            LATEST_PLUGIN_TAG=$(gh release list -R ROCm/jax-plugin --limit 10 --json tagName,publishedAt \
+                                --jq 'sort_by(.publishedAt) | reverse | .[0].tagName')
+            echo "Latest plugin release: $LATEST_PLUGIN_TAG"
+
+            # Download ROCm PJRT plugin from latest release
+            echo "Downloading ROCm PJRT plugin from release $LATEST_PLUGIN_TAG..."
+            gh release download "$LATEST_PLUGIN_TAG" \
+              --repo ROCm/jax-plugin \
+              --pattern "jax_rocm${JAXCI_ROCM_VERSION}_pjrt-*-py3-none-manylinux*.whl" \
+              --dir $(pwd)/dist/
+
+            # Download ROCm plugin from latest release
+            echo "Downloading ROCm plugin from release $LATEST_PLUGIN_TAG..."
+            gh release download "$LATEST_PLUGIN_TAG" \
+              --repo ROCm/jax-plugin \
+              --pattern "jax_rocm${JAXCI_ROCM_VERSION}_plugin-*-${PYTHON_MAJOR_MINOR}*manylinux*.whl" \
+              --dir $(pwd)/dist/
           else
             echo "Invalid jaxlib version: ${{ inputs.jaxlib-version }}"
             exit 1

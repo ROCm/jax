@@ -4,8 +4,11 @@
 # All other jobs (CPU, CUDA, TPU, Bazel tests, and verification) have been removed.
 # This is a temporary modification for testing purposes.
 #
+# TESTING: Using PyPI v0.9.0 for JAX/jaxlib instead of GCS nightly builds.
+# ROCm plugins still downloaded from ROCm/jax-plugin GitHub releases.
+#
 # DO NOT MERGE - Restore full workflow before merging.
-name: CI - Wheel Tests (Nightly/Release) [TESTING - ROCm ONLY]
+name: CI - Wheel Tests (Nightly/Release) [TESTING - ROCm PyPI v0.9.0]
 
 on:
   workflow_dispatch:
@@ -45,12 +48,12 @@ jobs:
           rocm: [
             {version: "7.2.0", tag: "rocm720"},
           ]
-    name: "Pytest ROCm (JAX artifacts version = ${{ startsWith(github.ref_name, 'release/') && 'latest release' || 'nightly' }})"
+    name: "Pytest ROCm PyPI v0.9.0"
     with:
       runner: ${{ matrix.runner }}
       python: ${{ matrix.python }}
       rocm-version: ${{ matrix.rocm.version }}
       rocm-tag: ${{ matrix.rocm.tag }}
-      jaxlib-version: "head"
-      skip-download-jaxlib-and-rocm-plugins-from-gcs: ${{inputs.skip-download-jaxlib-and-plugins-from-gcs}}
+      jaxlib-version: "pypi_latest"
+      skip-download-jaxlib-and-rocm-plugins-from-gcs: "0"
       gcs_download_uri: ${{inputs.gcs_download_uri}}
