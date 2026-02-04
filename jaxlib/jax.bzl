@@ -20,7 +20,6 @@ load("@jax_wheel//:wheel.bzl", "WHEEL_VERSION")
 load("@jax_wheel_version_suffix//:wheel_version_suffix.bzl", "WHEEL_VERSION_SUFFIX")
 load("@local_config_cuda//cuda:build_defs.bzl", _cuda_library = "cuda_library", _if_cuda_is_configured = "if_cuda_is_configured")
 load("@local_config_rocm//rocm:build_defs.bzl", _if_rocm_is_configured = "if_rocm_is_configured", _rocm_library = "rocm_library")
-load("@plugin_wheel_deps//:deps.bzl", "PLUGIN_WHEEL_DEPS")
 load("@python_version_repo//:py_version.bzl", "HERMETIC_PYTHON_VERSION", "HERMETIC_PYTHON_VERSION_KIND")
 load("@rules_cc//cc:defs.bzl", _cc_proto_library = "cc_proto_library")
 load("@rules_python//python:defs.bzl", "py_library", "py_test")
@@ -174,7 +173,6 @@ def if_building_jaxlib(
     return select({
         "//jax:config_build_jaxlib_true": if_building,
         "//jax:config_build_jaxlib_false": if_not_building,
-        "//jax:config_build_jaxlib_plugin_wheels": [],
         "//jax:config_build_jaxlib_wheel": [],
     })
 
@@ -183,7 +181,6 @@ def _cpu_test_deps():
     return select({
         "//jax:config_build_jaxlib_true": [],
         "//jax:config_build_jaxlib_false": ["@pypi//jaxlib"],
-        "//jax:config_build_jaxlib_plugin_wheels": [],
         "//jax:config_build_jaxlib_wheel": ["//jaxlib/tools:jaxlib_py_import"],
     })
 
@@ -195,7 +192,6 @@ def _gpu_test_deps():
             "//jaxlib/rocm:gpu_only_test_deps",
             "//jax_plugins:gpu_plugin_only_test_deps",
         ],
-        "//jax:config_build_jaxlib_plugin_wheels": PLUGIN_WHEEL_DEPS,
         "//jax:config_build_jaxlib_false": if_rocm_is_configured([
             "//jaxlib/tools:rocm_plugin_kernels_wheel",
             "//jaxlib/tools:rocm_plugin_pjrt_wheel",

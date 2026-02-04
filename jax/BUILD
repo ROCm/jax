@@ -72,13 +72,6 @@ config_setting(
     },
 )
 
-config_setting(
-    name = "config_build_jaxlib_plugin_wheels",
-    flag_values = {
-        ":build_jaxlib": "plugin_wheels",
-    },
-)
-
 # The flag controls whether jax should be built by Bazel.
 # If ":build_jax=true", then jax will be built.
 # If ":build_jax=false", then jax is not built. It is assumed that the pre-built jax wheel
