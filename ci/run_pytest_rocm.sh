@@ -119,6 +119,8 @@ export XLA_FLAGS="--xla_gpu_force_compilation_parallelism=1 --xla_gpu_enable_ncc
 # Disable core dumps just in case
 ulimit -c 0
 
+df -h
+
 echo "Running ROCm tests..."
 # TODO: Add examples directory to test suite (CUDA tests both: tests examples)
 # TODO: Verify if CSV/HTML report generation should be kept (unique to ROCm)
