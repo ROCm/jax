@@ -52,6 +52,10 @@ def add_imports(doctest_namespace):
 # For GPU, the env var JAX_ENABLE_CUDA_XDIST must be set equal to the number of
 # CUDA devices. Test processes will be assigned in round robin fashion across
 # the devices.
+#
+# For ROCm, the env var JAX_ENABLE_ROCM_XDIST must be set equal to the number of
+# ROCm devices. Test processes will be assigned in round robin fashion across
+# the devices.
 def pytest_collection() -> None:
   if os.environ.get("JAX_ENABLE_TPU_XDIST", None):
     # When running as an xdist worker, will be something like "gw0"
@@ -72,3 +76,23 @@ def pytest_collection() -> None:
     os.environ.setdefault(
         "CUDA_VISIBLE_DEVICES", str(xdist_worker_number % num_cuda_devices)
     )
+
+  elif num_rocm_devices := os.environ.get("JAX_ENABLE_ROCM_XDIST", None):
+    num_rocm_devices = int(num_rocm_devices)
+    xdist_worker_name = os.environ.get("PYTEST_XDIST_WORKER", "")
+    if not xdist_worker_name.startswith("gw"):
+      return
+    xdist_worker_number = int(xdist_worker_name[len("gw") :])
+    assigned = str(xdist_worker_number % num_rocm_devices)
+
+    # If ROCR_VISIBLE_DEVICES is set, don't also set HIP_VISIBLE_DEVICES
+    # (double-filtering can produce HIP_ERROR_NoDevice). Respect the outer setting.
+    if os.environ.get("ROCR_VISIBLE_DEVICES"):
+      return
+
+    # If present-but-empty, this can hide all GPUs.
+    if os.environ.get("HIP_VISIBLE_DEVICES", None) == "":
+      del os.environ["HIP_VISIBLE_DEVICES"]
+
+    # HIP layer isolation (ROCm also accepts CUDA_VISIBLE_DEVICES, but we avoid it here).
+    os.environ["HIP_VISIBLE_DEVICES"] = assigned
