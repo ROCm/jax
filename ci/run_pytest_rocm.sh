@@ -73,7 +73,7 @@ export memory_per_gpu_gib=$((memory_per_gpu_mib / 1024))
 echo "Effective memory per GPU: $memory_per_gpu_gib GiB"
 
 # Allow 2 GiB of GPU RAM per test.
-export max_tests_per_gpu=$((memory_per_gpu_gib / 2))
+export max_tests_per_gpu=$((memory_per_gpu_gib / 4))
 echo "Max tests per GPU (assuming 2GiB/test): $max_tests_per_gpu"
 
 export num_processes=$((gpu_count * max_tests_per_gpu))
