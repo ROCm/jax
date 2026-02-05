@@ -28,6 +28,7 @@ import numpy as np
 import jax
 from jax import lax
 from jax._src.export import _export
+from jax._src.lib import version as jaxlib_version
 
 from jax._src.internal_test_util import export_back_compat_test_util as bctu
 
@@ -49,6 +50,7 @@ from jax._src.internal_test_util.export_back_compat_test_data import cpu_tridiag
 from jax._src.internal_test_util.export_back_compat_test_data import cpu_tridiagonal_solve_lapack_gtsv
 from jax._src.internal_test_util.export_back_compat_test_data import cuda_threefry2x32
 from jax._src.internal_test_util.export_back_compat_test_data import cuda_lu_pivots_to_permutation
+from jax._src.internal_test_util.export_back_compat_test_data import rocm_lu_pivots_to_permutation
 from jax._src.internal_test_util.export_back_compat_test_data import cuda_lu_cusolver_getrf
 from jax._src.internal_test_util.export_back_compat_test_data import cuda_svd_cusolver_gesvd
 from jax._src.internal_test_util.export_back_compat_test_data import cuda_tridiagonal_cusolver_sytrd
@@ -119,7 +121,7 @@ class CompatTest(bctu.CompatTestBase):
         cpu_eigh_lapack_syev.data_2024_08_19,
         cpu_lu_lapack_getrf.data_2024_05_31,
         cpu_schur_lapack_gees.data_2024_11_29,
-        cpu_triangular_solve_blas_trsm.data_2025_10_20,
+        cpu_triangular_solve_blas_trsm.data_2024_12_02,
         cpu_svd_lapack_gesdd.data_2024_08_13,
         cpu_hessenberg_lapack_gehrd.data_2024_08_31,
         cpu_tridiagonal_lapack_sytrd_hetrd.data_2024_12_01,
@@ -131,6 +133,7 @@ class CompatTest(bctu.CompatTestBase):
         cuda_cholesky_solver_potrf.data_2025_10_15,
         cuda_threefry2x32.data_2024_07_30,
         cuda_lu_pivots_to_permutation.data_2025_04_01,
+        rocm_lu_pivots_to_permutation.data_2026_02_04,
         cuda_lu_cusolver_getrf.data_2024_08_19,
         cuda_qr_cusolver_geqrf.data_2024_09_26,
         cuda_eigh_cusolver_syev.data_2024_09_30,
@@ -209,6 +212,8 @@ class CompatTest(bctu.CompatTestBase):
       dict(testcase_name=f"_dtype={dtype_name}", dtype_name=dtype_name)
       for dtype_name in ("f32", "f64", "c64", "c128"))
   def test_gpu_cholesky_solver_potrf(self, dtype_name="f32"):
+    if jaxlib_version < (0, 8, 0):
+      self.skipTest("Test disabled for jaxlib version < 0.8.0")
     if not config.enable_x64.value and dtype_name in ["f64", "c128"]:
       self.skipTest("Test disabled for x32 mode")
 
@@ -224,7 +229,10 @@ class CompatTest(bctu.CompatTestBase):
 
     info = cuda_cholesky_solver_potrf.data_2025_10_15[dtype_name]
     data = self.load_testdata(info)
-    self.run_one_test(func, data, rtol=rtol, atol=atol)
+    # TODO(necula): remove after Nov 10, 2025, when the forward compatibility
+    # window closes for the cholesky solver_potrf_ffi custom call.
+    with config.export_ignore_forward_compatibility(True):
+      self.run_one_test(func, data, rtol=rtol, atol=atol)
 
   @parameterized.named_parameters(
       dict(testcase_name=f"_dtype={dtype_name}", dtype_name=dtype_name)
@@ -381,6 +389,13 @@ class CompatTest(bctu.CompatTestBase):
     func = lambda: CompatTest.lu_pivots_to_permutation_harness(shape)
     data = self.load_testdata(cuda_lu_pivots_to_permutation.data_2025_04_01)
     self.run_one_test(func, data)
+
+  def test_rocm_lu_pivots_to_permutation(self):
+    shape = (2, 3, 4)
+    func = lambda: CompatTest.lu_pivots_to_permutation_harness(shape)
+    data = self.load_testdata(rocm_lu_pivots_to_permutation.data_2026_02_04)
+    self.run_one_test(func, data)
+
 
   @parameterized.named_parameters(
       dict(testcase_name=f"_dtype={dtype_name}",
@@ -662,7 +677,7 @@ class CompatTest(bctu.CompatTestBase):
       y = matmul(a, x) if left_side else matmul(x, a)
       self.assertArraysAllClose(y, jnp.broadcast_to(b, y.shape), rtol=rtol, atol=atol)
 
-    info = cpu_triangular_solve_blas_trsm.data_2025_10_20[dtype_name]
+    info = cpu_triangular_solve_blas_trsm.data_2024_12_02[dtype_name]
     data = self.load_testdata(info)
     self.run_one_test(func, data, rtol=rtol, atol=atol,
                       check_results=check_triangular_solve_results)
@@ -1006,8 +1021,8 @@ class CompatTest(bctu.CompatTestBase):
     )
 
 
+@jtu.with_config(jax_use_shardy_partitioner=True)
 class ShardyCompatTest(bctu.CompatTestBase):
-
   def test_shardy_sharding_ops_with_different_meshes(self):
     # Tests whether we can save and load a module with meshes that have the
     # same axis sizes (and same order) but different axis names.
@@ -1031,6 +1046,7 @@ class ShardyCompatTest(bctu.CompatTestBase):
       return shard_map_func(x)
 
     data = [
+        (shardy_sharding_ops_with_different_meshes.data_2025_02_12, []),
         (shardy_sharding_ops_with_different_meshes.data_2025_04_14, []),
         (shardy_sharding_ops_with_different_meshes.data_2025_06_30, None),
     ]
@@ -1044,6 +1060,8 @@ class ShardyCompatTest(bctu.CompatTestBase):
         self.run_one_test(
             func, self.load_testdata(data),
             expect_current_custom_calls=custom_call_targets_override)
+
+
 
 
 if __name__ == "__main__":
