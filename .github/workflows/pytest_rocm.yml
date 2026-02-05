@@ -148,3 +148,11 @@ jobs:
       - name: Run Pytest ROCm tests
         timeout-minutes: 120
         run: ./ci/run_pytest_rocm.sh
+      - name: Upload pytest results to artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs
+          path: logs/
+          if-no-files-found: warn
+          retention-days: 2
