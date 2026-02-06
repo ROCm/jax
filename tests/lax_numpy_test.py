@@ -6371,7 +6371,6 @@ class NumpySignaturesTest(jtu.JaxTestCase):
       'stack': ['casting'],
       'tri': ['like'],
       'unravel_index': ['order'],
-      'var': ['mean'],
       'vstack': ['casting'],
       'zeros': ['order', 'like'],
       'zeros_like': ['subok', 'order']
