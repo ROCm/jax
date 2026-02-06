@@ -268,9 +268,10 @@ class JaxAotTest(jtu.JaxTestCase):
     if jaxlib_extension_version < 393:
       raise unittest.SkipTest('Test requires jaxlib extension version 393 or higher')
     target_config = xc.get_topology_for_devices(jax.devices()).target_config
+    gpu_platform = jax.devices()[0].platform  # Capture before switching to cpu
     with jtu.global_config_context(jax_platforms="cpu"):
       topology = topologies.get_topology_desc(
-        platform="cuda",
+        platform=gpu_platform,
         target_config=target_config,
         topology="1x1x1",
       )
@@ -290,7 +291,7 @@ class JaxAotTest(jtu.JaxTestCase):
         serialized_executable,
         in_tree,
         out_tree,
-        backend="cuda",
+        backend=gpu_platform,
         execution_devices=jax.devices()[:1]
     )
     input = jnp.array([[0., 1.], [2., 3.]], dtype=jnp.float32, device=jax.devices()[0])
