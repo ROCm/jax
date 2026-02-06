@@ -148,6 +148,19 @@ jobs:
       - name: Run Pytest ROCm tests
         timeout-minutes: 120
         run: ./ci/run_pytest_rocm.sh
+      - name: Write minimal metadata
+        if: always()
+        run: |
+          mkdir -p logs
+          cat > logs/metadata.json << 'EOF'
+          {
+            "github_run_id": "${{ github.run_id }}",
+            "github_sha": "${{ github.sha }}",
+            "runner_label": "${{ inputs.runner }}",
+            "rocm_version": "${{ inputs.rocm-version }}",
+            "ubuntu_version": "24.04"
+          }
+          EOF
       - name: Upload pytest results to artifact
         if: always()
         uses: actions/upload-artifact@v4
