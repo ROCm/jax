@@ -64,6 +64,7 @@ from jax._src import test_util as jtu
 from jax._src.internal_test_util.export_back_compat_test_data import export_with_specified_sharding
 from jax._src.internal_test_util.export_back_compat_test_data import export_with_unspecified_sharding
 from jax._src.internal_test_util.export_back_compat_test_data import export_with_memory_space
+from jax._src.internal_test_util.export_back_compat_test_data import rocm_export_with_memory_space
 
 config.parse_flags_with_absl()
 jtu.request_cpu_devices(8)
@@ -190,9 +191,36 @@ class CompatTest(jtu.JaxTestCase):
 
       if testdata is None:
         serialized = self.export_and_serialize(
-            f, a, platforms=("tpu", "cuda"))
+            f, a, platforms=("tpu", "cuda", "rocm"))
       else:
-        serialized = testdata["exported_serialized"]
+
+        # The back compatibility tesdata file `export_with_memory_space.py`
+        # does not contain the serialized export for ROCm. Instead, this data
+        # is in `export_with_memory_space_rocm.py`. We use the serialization
+        # version of the testdata to find the corresponding testdata in the
+        # ROCm file.
+        if jtu.is_device_rocm():
+
+          rocm_serial = rocm_export_with_memory_space.serializations
+          version = testdata["serialization_version"]
+
+          # If the ROCm testdata is out of sync with the standard testdata
+          # file, retrieval will return a KeyError. A more explicit error
+          # message has been added to ease future debugging.
+          try:
+            rocm_testdata = rocm_serial[version]
+          except KeyError as err:
+            err.args += ("The serialized export for serialization version "
+                         f"{version} has not been added to the ROCm back "
+                         "compatibility testdata",)
+            raise err
+
+          serialized = rocm_testdata["exported_serialized"]
+
+        # If the device under test is not ROCm, we can use the
+        # existing testdata for the serialized export.
+        else:
+          serialized = testdata["exported_serialized"]
 
     exported = _export.deserialize(serialized)
     self.assertEqual(exported.in_avals[0].memory_space, core.MemorySpace.Host)
