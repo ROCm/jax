@@ -581,11 +581,12 @@ class NumpyLinalgTest(jtu.JaxTestCase):
           np.linalg.norm(np.matmul(a, v) - w * v), 2.5 * eps * np.linalg.norm(a)
       )
 
+
   def testEighTinyNorm(self):
-    # Skip test on ROCm due to numerical error. Issue #34711
-    # TODO(GulsumGudukbay): Unskip once fixed.
     if jtu.is_device_rocm():
-      self.skipTest("Skipped on ROCm due to numerical error.")
+      # numerical errors seen as of ROCm 7.2 due to hipSolver issue
+      # TODO: re-enable the test once the hipSolver issue is fixed
+      self.skipTest("testEighNorm not supported on ROCm due to hipSOLVER issue")
     rng = jtu.rand_default(self.rng())
     a = rng((300, 300), dtype=np.float32)
     eps = jnp.finfo(a.dtype).eps
