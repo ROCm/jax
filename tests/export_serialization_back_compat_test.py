@@ -190,8 +190,19 @@ class CompatTest(jtu.JaxTestCase):
 
       if testdata is None:
         serialized = self.export_and_serialize(
-            f, a, platforms=("tpu", "cuda"))
+            f, a, platforms=("tpu", "cuda", "rocm"))
       else:
+        # The testdata for the serialization formats has been generated and
+        # is awaiting review and merging upstream. It is not included
+        # downstream to avoid import errors. For this reason, the downstream
+        # version of this test is currently skipped.
+        #
+        # TODO: Remove this skip once the testdata and modified unit test
+        # are merged upstream.
+        if jtu.is_device_rocm():
+          self.skipTest("Serialized export testdata for serialization format "
+                        f"{testdata['serialization_version']} is not "
+                        "currently available for ROCm.")
         serialized = testdata["exported_serialized"]
 
     exported = _export.deserialize(serialized)
