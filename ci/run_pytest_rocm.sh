@@ -115,6 +115,7 @@ echo "Running ROCm tests..."
 # TODO: Verify if CSV/HTML report generation should be kept (unique to ROCm)
 # TODO: Verify if log file output should be kept (unique to ROCm)
 export NPROC=32
+export MIOPEN_FIND_ENFORCE=SEARCH_DB_UPDATE
 "$JAXCI_PYTHON" -m pytest -n $num_processes --tb=short \
 tests \
 --deselect=tests/multi_device_test.py::MultiDeviceTest::test_computation_follows_data \
