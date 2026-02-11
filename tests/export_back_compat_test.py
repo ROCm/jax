@@ -625,15 +625,22 @@ class CompatTest(bctu.CompatTestBase):
     algorithm = dict(qr=lax.linalg.SvdAlgorithm.QR,
                      jacobi=lax.linalg.SvdAlgorithm.JACOBI)[algorithm_name]
 
+    # The `platform_data_map` dictionary allows additional testdata modules
+    # to be easily added to the unit test. If no acceptable testdata is found
+    # for the current platform, the test will be skipped.
     platform_data = None
-    if jtu.test_device_matches(["cuda"]):
-      platform_data = \
-          cuda_svd_cusolver_gesvd.data_2024_10_08[algorithm_name][dtype_name]
-    elif jtu.test_device_matches(["rocm"]):
-      platform_data = \
-          rocm_svd_hipsolver_gesvd.data_2026_02_04[algorithm_name][dtype_name]
-    else:
-      self.skipTest("Unsupported platform")
+    platform_data_map = {
+        "cuda": cuda_svd_cusolver_gesvd.data_2024_10_08,
+        "rocm": rocm_svd_hipsolver_gesvd.data_2026_02_04,
+    }
+
+    for platform, data_module in platform_data_map.items():
+      if jtu.test_device_matches([platform]):
+        platform_data = data_module[algorithm_name][dtype_name]
+        break
+
+    if platform_data is None:
+      self.skipTest("Unsupported platform: " + jtu.device_under_test())
 
     data = self.load_testdata(platform_data)
     self.run_one_test(func, data, rtol=rtol, atol=atol,
