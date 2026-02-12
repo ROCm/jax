@@ -1037,7 +1037,7 @@ class OpsTest(PallasBaseTest):
       # originally configured. Have no way to test cuda.
 
     if jtu.is_device_rocm():
-      self.skipTest("is_finite not in Triton lowering for jax 0.8.0")
+      self.skipTest("is_finite not in Triton lowering for jax 0.9.0")
 
     size = len(self.IS_FINITE_TEST_VALUES)
 
@@ -1090,7 +1090,7 @@ class OpsTest(PallasBaseTest):
       self.skipTest("Not tested on CUDA, todo for the respective team")
 
     if jtu.is_device_rocm():
-      self.skipTest("is_finite not in Triton lowering for jax 0.8.0")
+      self.skipTest("is_finite not in Triton lowering for jax 0.9.0")
 
     size = len(self.IS_FINITE_TEST_VALUES)
 
