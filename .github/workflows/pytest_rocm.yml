@@ -163,12 +163,7 @@ jobs:
             "python_version": "${{ inputs.python }}"
           }
           EOF
-      - name: Upload pytest results to artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: logs-${{ inputs.runner }}-py${{ inputs.python }}-${{ inputs.rocm-tag }}
-          path: logs/
-          if-no-files-found: warn
-          retention-days: 2
+      - name: Return AWS CLI version
+        run: aws --version
+
 
