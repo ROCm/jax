@@ -167,11 +167,12 @@ jobs:
           tar -czf logs.tar.gz logs
       - name: Upload logs archive to S3
         if: always()
+        env:
+         AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+         AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         run: |
           set -euo pipefail
           export BUCKET="amd-jax-ci"
-          export AWS_ACCESS_KEY_ID="${AMD_S3_BUCKET_ACCESS_KEY}"
-          export AWS_SECRET_ACCESS_KEY="${AMD_S3_BUCKET_SECRET_KEY}"
           $JAXCI_PYTHON -m pip install -q boto3
           SHARD="py${{ inputs.python }}-${{ inputs.rocm-tag }}-$(echo "${{ inputs.runner }}" | sed 's/.*-\([0-9]\)gpu.*/\1gpu/')"
           export PREFIX="test-logs/${{ github.repository }}/${{ github.run_id }}/${{ github.run_attempt }}/${{ github.job }}/${SHARD}/"
