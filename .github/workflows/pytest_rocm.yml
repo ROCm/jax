@@ -152,29 +152,24 @@ jobs:
           cat > logs/run-manifest.json << 'EOF'
           {
             "github_run_id": "${{ github.run_id }}",
+            "github_run_attempt": "${{ github.run_attempt }}",
+            "github_run_number": "${{ github.run_number }}",
             "github_sha": "${{ github.sha }}",
+            "github_ref": "${{ github.ref }}",
             "repo_name": "${{ github.repository }}",
+            "github_workflow": "${{ github.workflow }}",
+            "github_job": "${{ github.job }}",
             "branch_name": "${{ github.ref_name }}",
             "runner_label": "${{ inputs.runner }}",
             "rocm_version": "${{ inputs.rocm-version }}",
             "python_version": "${{ inputs.python }}"
           }
           EOF
-      - name: Pack logs
+      - name: Capture wheel sha256
         if: always()
-        run: |
-          set -euo pipefail
-          tar -czf logs.tar.gz logs
-      - name: Upload logs archive to S3
+        run: sha256sum dist/*.whl | awk '{print $1}'
+      - name: Capture image digest
         if: always()
-        env:
-         AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-         AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        run: |
-          set -euo pipefail
-          export BUCKET="amd-jax-ci"
-          $JAXCI_PYTHON -m pip install -q boto3
-          SHARD="py${{ inputs.python }}-${{ inputs.rocm-tag }}-$(echo "${{ inputs.runner }}" | sed 's/.*-\([0-9]\)gpu.*/\1gpu/')"
-          export PREFIX="test-logs/${{ github.repository }}/${{ github.run_id }}/${{ github.run_attempt }}/${{ github.job }}/${SHARD}/"
-          $JAXCI_PYTHON -c "import boto3,os;s3=boto3.client('s3');s3.upload_file('logs.tar.gz',os.environ['BUCKET'],os.environ['PREFIX']+'logs.tar.gz')"
-
+        run: docker inspect --format='{{.Id}}' ghcr.io/rocm/jax-base-ubu24.${{ inputs.rocm-tag }}:latest
+      - name: Print run manifest info
+        run: cat logs/run-manifest.json
