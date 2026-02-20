@@ -65,6 +65,11 @@ on:
         default: 'no'
   workflow_call:
     inputs:
+      call-id:
+        description: "Unique ID from caller job (for S3 prefix)"
+        type: string
+        required: false
+        default: ""
       runner:
         description: "Which runner should the workflow run on?"
         type: string
@@ -93,6 +98,14 @@ on:
         description: "GCS location prefix from where the artifacts should be downloaded"
         default: 'gs://jax-nightly-artifacts/latest'
         type: string
+    secrets:
+      AWS_ACCESS_KEY_ID:
+        required: true
+      AWS_SECRET_ACCESS_KEY:
+        required: true
+      S3_BUCKET_NAME:
+        required: true
+
 permissions: {}
 
 env:
@@ -160,20 +173,17 @@ jobs:
             "python_version": "${{ inputs.python }}"
           }
           EOF
-      - name: Pack logs
-        if: always()
-        run: |
-          set -euo pipefail
-          tar -czf logs.tar.gz logs
       - name: Upload logs archive to S3
         if: always()
+        env:
+         AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+         AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+         S3_BUCKET_NAME: ${{ secrets.S3_BUCKET_NAME }}
         run: |
           set -euo pipefail
-          export BUCKET="amd-jax-ci"
-          export AWS_ACCESS_KEY_ID="${AMD_S3_BUCKET_ACCESS_KEY}"
-          export AWS_SECRET_ACCESS_KEY="${AMD_S3_BUCKET_SECRET_KEY}"
           $JAXCI_PYTHON -m pip install -q boto3
-          SHARD="py${{ inputs.python }}-${{ inputs.rocm-tag }}-$(echo "${{ inputs.runner }}" | sed 's/.*-\([0-9]\)gpu.*/\1gpu/')"
-          export PREFIX="test-logs/${{ github.repository }}/${{ github.run_id }}/${{ github.run_attempt }}/${{ github.job }}/${SHARD}/"
-          $JAXCI_PYTHON -c "import boto3,os;s3=boto3.client('s3');s3.upload_file('logs.tar.gz',os.environ['BUCKET'],os.environ['PREFIX']+'logs.tar.gz')"
+          SHARD="py${{ inputs.python }}-${{ inputs.rocm-version }}-${{ inputs.runner }}"
+          export PREFIX="test-logs/${{ github.repository }}/${{ github.run_id }}/${{ github.run_attempt }}/${{ inputs.call-id }}/${SHARD}/"
+          $JAXCI_PYTHON -c "import boto3,os;s3=boto3.client('s3');s3.upload_file('logs/run-manifest.json',os.environ['S3_BUCKET_NAME'],os.environ['PREFIX']+'run-manifest.json')"
+          $JAXCI_PYTHON -c "import boto3,os;s3=boto3.client('s3');s3.put_object(Bucket=os.environ['S3_BUCKET_NAME'],Key=os.environ['PREFIX']+'_SUCCESS',Body=b"")"
 
