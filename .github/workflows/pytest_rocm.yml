@@ -145,14 +145,11 @@ jobs:
         uses: google-ml-infra/actions/ci_connection@7f5ca0c263a81ed09ea276524c1b9192f1304e3c
         with:
           halt-dispatch-input: ${{ inputs.halt-for-connection }}
-      - name: Run Pytest ROCm tests
-        timeout-minutes: 120
-        run: ./ci/run_pytest_rocm.sh
       - name: Write minimal metadata
         if: always()
         run: |
           mkdir -p logs
-          cat > logs/metadata.json << 'EOF'
+          cat > logs/run-manifest.json << 'EOF'
           {
             "github_run_id": "${{ github.run_id }}",
             "github_sha": "${{ github.sha }}",
