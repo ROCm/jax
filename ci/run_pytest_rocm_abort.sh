@@ -150,13 +150,16 @@ echo "Running ROCm tests (with abort/retry wrapper)..."
 mkdir -p logs_abort
 logfile="logs_abort/jax_ToT_UT_abort.log"
 
+# Allow the workflow to override worker restart limit.
+max_worker_restart="${MAX_WORKER_RESTART:-10}"
+
 # pytest-abort output directories (must be set before running pytest).
 export PYTEST_ABORT_LAST_RUNNING_DIR="logs_abort/last_running"
 export PYTEST_ABORT_CRASHED_TESTS_LOG="logs_abort/crashed_tests.jsonl"
 mkdir -p "$PYTEST_ABORT_LAST_RUNNING_DIR"
 
 set +e
-rocm_test_cmd 1 "$JAXCI_PYTHON" -m pytest -n "$num_processes" --max-worker-restart=200 --tb=short --timeout=1200 --timeout-method=thread tests \
+rocm_test_cmd 1 "$JAXCI_PYTHON" -m pytest -n "$num_processes" --max-worker-restart="$max_worker_restart" --tb=short --timeout=1200 --timeout-method=thread tests \
   "${ROCM_PYTEST_DESELECT_ARGS[@]}" \
   --json-report \
   --json-report-file=logs_abort/tests-report-abort.json \
