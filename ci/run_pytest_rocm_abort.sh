@@ -73,7 +73,7 @@ export num_cpu_cores=$(nproc)
 echo "Number of CPU cores available: $num_cpu_cores"
 
 # Reads total memory from /proc/meminfo (in KiB) and converts to GiB.
-export total_ram_gib=$(awk '/MemTotal/ {printf \"%.0f\", $2/1048576}' /proc/meminfo)
+export total_ram_gib=$(awk '/MemTotal/ {printf "%.0f", $2/1048576}' /proc/meminfo)
 echo "Total system RAM: $total_ram_gib GiB"
 
 # Set a safety limit for system RAM usage, e.g., 1/6th of total.
