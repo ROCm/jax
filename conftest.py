@@ -269,7 +269,7 @@ def pytest_collection() -> None:
 
 def pytest_configure(config: pytest.Config) -> None:
   """Register custom pytest markers and print attached GPUs to xdist workers."""
-    config.addinivalue_line(
+  config.addinivalue_line(
       "markers",
       "mosaic_gpu: tests that use Mosaic GPU (skipped on ROCm)",
   )
