@@ -16,6 +16,181 @@
 import os
 import pytest
 
+# Mosaic GPU checking based on test *file path* only (avoid test-name substrings).
+_MOSAIC_GPU_PATH_NEEDLES = (
+    f"{os.sep}tests{os.sep}mosaic{os.sep}",
+    f"{os.sep}tests{os.sep}pallas{os.sep}mgpu_",
+    f"{os.sep}tests{os.sep}pallas{os.sep}mosaic_gpu",
+    f"{os.sep}tests{os.sep}pallas{os.sep}mosaic",
+)
+
+# Simple Mosaic GPU *usage* substring checks (avoid import-only signals).
+_MOSAIC_GPU_SOURCE_NEEDLES = (
+    "inline_mgpu",
+    "plgpu_mgpu.",
+    "mosaic_gpu_interpret",
+    "mosaic_gpu_backend",
+    "jax.experimental.mosaic.gpu",  # runtime usage in body (not module import scan)
+    "jax.experimental.pallas.mosaic_gpu",
+)
+
+
+def _pallas_defaults_to_mosaic_gpu() -> bool:
+  """Returns True if Pallas GPU lowering defaults to Mosaic GPU."""
+  try:
+    from jax._src.pallas import pallas_call as pallas_call_lib  # pytype: disable=import-error
+    return bool(pallas_call_lib._PALLAS_USE_MOSAIC_GPU.value)  # pylint: disable=protected-access
+  except Exception:
+    return False
+
+
+def _running_on_rocm() -> bool:
+  """Best-effort ROCm detection.
+
+  First tries to check rocm in jaxlib version, falls back to checking backend 
+  platform_version so that it works for ROCm PJRT plugin installs where jaxlib's 
+  version tag may not contain rocm.
+  """
+  try:
+    import jaxlib.version as jaxlib_version  # pytype: disable=import-error
+    version_str = getattr(jaxlib_version, "__version__", "")
+  except Exception:
+    version_str = ""
+  if "rocm" in version_str.lower():
+    return True
+  try:
+    import jax  # pytype: disable=import-error
+    from jax._src import xla_bridge  # pytype: disable=import-error
+    backend = xla_bridge.get_backend()
+    pv = getattr(backend, "platform_version", "") or ""
+    return "rocm" in str(pv).lower()
+  except Exception:
+    return False
+
+
+def _source_mentions_mosaic_gpu(src: str) -> bool:
+  """Returns True if the test file content has Mosaic GPU usage."""
+  lowered = src.lower()
+  return any(n in lowered for n in _MOSAIC_GPU_SOURCE_NEEDLES)
+
+
+def _looks_like_mosaic_gpu_path(path_str: str) -> bool:
+  """Returns True if the path is a Mosaic-GPU-only test file."""
+  lowered = path_str.lower()
+  return any(n.lower() in lowered for n in _MOSAIC_GPU_PATH_NEEDLES)
+
+
+def _class_mosaic_override(cls: type | None, cache: dict[object, object]) -> bool | None:
+  """Detects explicit class-level Mosaic enable/disable.
+
+  Returns:
+    - True if the class forces Mosaic GPU (`_PALLAS_USE_MOSAIC_GPU(True)`).
+    - False if it forces Triton (`_PALLAS_USE_MOSAIC_GPU(False)`).
+    - None if no explicit override is found.
+  """
+  if cls is None:
+    return None
+  cache_key = ("__mosaic_override__", cls)
+  if cache_key in cache:
+    return cache[cache_key]  # type: ignore[return-value]
+  import inspect
+  try:
+    src = inspect.getsource(cls).lower()
+  except Exception:
+    cache[cache_key] = None
+    return None
+  if "_pallas_use_mosaic_gpu(true" in src:
+    cache[cache_key] = True
+    return True
+  if "_pallas_use_mosaic_gpu(false" in src:
+    cache[cache_key] = False
+    return False
+  cache[cache_key] = None
+  return None
+
+
+def _is_mosaic_gpu_item(
+    item: pytest.Item,
+    cache: dict[object, bool],
+    *,
+    running_on_rocm: bool,
+    pallas_defaults_to_mosaic: bool,
+) -> bool:
+  """Returns True if this test item uses (or would use) Mosaic GPU."""
+  path_obj = getattr(item, "path", None) or getattr(item, "fspath", None)
+  path_str = str(path_obj) if path_obj is not None else ""
+  if _looks_like_mosaic_gpu_path(path_str):
+    return True
+
+  import inspect
+
+  obj = getattr(item, "obj", None)
+  if obj is None:
+    return False
+  if obj in cache:
+    return cache[obj]
+  try:
+    src = inspect.getsource(obj)
+  except Exception:
+    cache[obj] = False
+    return False
+
+  lowered = src.lower()
+  # Direct Mosaic usage in the test function/method.
+  if _source_mentions_mosaic_gpu(lowered):
+    cache[obj] = True
+    return True
+
+  # Respect explicit class-level override: if a test class forces Mosaic off,
+  # we should not skip it just because Pallas defaults to Mosaic elsewhere.
+  cls_override = _class_mosaic_override(getattr(item, "cls", None), cache)  # type: ignore[arg-type]
+  if cls_override is False:
+    cache[obj] = False
+    return False
+  if cls_override is True:
+    cache[obj] = True
+    return True
+
+  # Implicit Mosaic usage: on ROCm, `pallas_call` defaults to Mosaic GPU when
+  # `compiler_params` is not specified and Mosaic is the default backend.
+  if running_on_rocm and pallas_defaults_to_mosaic:
+    uses_pallas_call = (
+        ".pallas_call" in lowered
+        or "pl.pallas_call" in lowered
+        or "pallas_call(" in lowered
+    )
+    explicitly_selects_compiler = "compiler_params=" in lowered
+    if uses_pallas_call and not explicitly_selects_compiler:
+      cache[obj] = True
+      return True
+
+  cache[obj] = False
+  return False
+
+
+def pytest_collection_modifyitems(
+    config: pytest.Config, items: list[pytest.Item]
+) -> None:
+  """Mark Mosaic GPU tests and skip them on ROCm."""
+  running_on_rocm = _running_on_rocm()
+  pallas_defaults_to_mosaic = _pallas_defaults_to_mosaic_gpu() if running_on_rocm else False
+  cache: dict[object, bool] = {}
+  for item in items:
+    is_mosaic_gpu = _is_mosaic_gpu_item(
+        item,
+        cache,
+        running_on_rocm=running_on_rocm,
+        pallas_defaults_to_mosaic=pallas_defaults_to_mosaic,
+    )
+    if not is_mosaic_gpu:
+      continue
+    item.add_marker(pytest.mark.mosaic_gpu)
+    if running_on_rocm:
+      item.add_marker(pytest.mark.skip(
+          reason="Mosaic GPU tests are not supported on ROCm"
+      ))
+
+
 @pytest.fixture(autouse=True)
 def add_imports(doctest_namespace):
   import jax
@@ -92,7 +267,13 @@ def pytest_collection() -> None:
     # HIP layer isolation (ROCm also accepts CUDA_VISIBLE_DEVICES, but we avoid it here).
     os.environ["HIP_VISIBLE_DEVICES"] = assigned
 
-def pytest_configure(config) -> None:
+def pytest_configure(config: pytest.Config) -> None:
+  """Register custom pytest markers and print attached GPUs to xdist workers."""
+    config.addinivalue_line(
+      "markers",
+      "mosaic_gpu: tests that use Mosaic GPU (skipped on ROCm)",
+  )
+  
   # Real pytest hook (runs early in main + each xdist worker).
   xdist_worker_name = os.environ.get("PYTEST_XDIST_WORKER", "") or "main"
 
