@@ -67,7 +67,7 @@ on:
       max-worker-restart:
         description: "Max xdist worker restarts (passed to pytest --max-worker-restart)"
         type: string
-        default: '10'
+        default: '50'
   workflow_call:
     inputs:
       runner:
@@ -105,7 +105,7 @@ on:
       max-worker-restart:
         description: "Max xdist worker restarts (passed to pytest --max-worker-restart)"
         type: string
-        default: '10'
+        default: '50'
 
 permissions: {}
 

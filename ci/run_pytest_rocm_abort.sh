@@ -151,7 +151,7 @@ mkdir -p logs_abort
 logfile="logs_abort/jax_ToT_UT_abort.log"
 
 # Allow the workflow to override worker restart limit.
-max_worker_restart="${MAX_WORKER_RESTART:-10}"
+max_worker_restart="${MAX_WORKER_RESTART:-50}"
 
 # pytest-abort output directories (must be set before running pytest).
 export PYTEST_ABORT_LAST_RUNNING_DIR="logs_abort/last_running"
