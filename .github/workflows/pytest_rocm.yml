@@ -65,6 +65,11 @@ on:
         default: 'no'
   workflow_call:
     inputs:
+      call-id:
+        description: "Unique ID from caller job (for S3 prefix)"
+        type: string
+        required: false
+        default: ""
       runner:
         description: "Which runner should the workflow run on?"
         type: string
@@ -151,10 +156,11 @@ jobs:
           mkdir -p logs
           cat > logs/run-manifest.json << 'EOF'
           {
+            "call_id": "${{ inputs.call-id }}",
             "github_run_id": "${{ github.run_id }}",
             "github_run_attempt": "${{ github.run_attempt }}",
             "github_run_number": "${{ github.run_number }}",
-            "github_sha": "${{ github.sha }}",
+            "github_event_name": "${{ github.event_name }}",
             "github_ref": "${{ github.ref }}",
             "repo_name": "${{ github.repository }}",
             "github_workflow": "${{ github.workflow }}",
