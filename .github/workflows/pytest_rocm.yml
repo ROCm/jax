@@ -167,9 +167,20 @@ jobs:
           EOF
       - name: Capture wheel sha256
         if: always()
-        run: sha256sum dist/*.whl | awk '{print $1}'
+        run: sha256sum dist/*.whl | awk '{print $2 ":" $1}'
       - name: Capture image digest
         if: always()
-        run: docker inspect --format='{{.Id}}' ghcr.io/rocm/jax-base-ubu24.${{ inputs.rocm-tag }}:latest
+        run: |
+          BASE=https://ghcr.io
+          REPO=rocm/jax-base-ubu24.rocm720
+          SCOPE="repository:${REPO}:pull"
+          TOKEN=$(curl -fsSL "$BASE/token?service=ghcr.io&scope=$SCOPE" \
+            | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+          curl -fsSL -D - \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
+            "$BASE/v2/$REPO/manifests/latest" \
+            -o /dev/null \
+          | grep -i '^Docker-Content-Digest:' | cut -d' ' -f2
       - name: Print run manifest info
         run: cat logs/run-manifest.json
