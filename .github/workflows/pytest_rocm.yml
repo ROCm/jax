@@ -98,6 +98,14 @@ on:
         description: "GCS location prefix from where the artifacts should be downloaded"
         default: 'gs://jax-nightly-artifacts/latest'
         type: string
+    secrets:
+      AWS_ACCESS_KEY_ID:
+        required: true
+      AWS_SECRET_ACCESS_KEY:
+        required: true
+      S3_BUCKET_NAME:
+        required: true
+
 permissions: {}
 
 env:
@@ -152,50 +160,39 @@ jobs:
           halt-dispatch-input: ${{ inputs.halt-for-connection }}
       - name: Collect + upload results to S3
         if: always()
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          S3_BUCKET_NAME: ${{ secrets.S3_BUCKET_NAME }}
         run: |
-          set -euo pipefail
-          $JAXCI_PYTHON -m pip install -q boto3
+          JOB_KEY="${{ inputs.call-id }}"
+          if [ -z "${JOB_KEY}" ]; then JOB_KEY="${{ github.job }}"; fi
 
-          JAX_PKGS_JSON="$($JAXCI_PYTHON -m pip list --format=json \
-            | jq '[.[] | select(.name|test("^(jax|jaxlib)|pjrt|plugin"))]')"
+          PKGS="$($JAXCI_PYTHON -m pip list | grep -E '^(jax|jaxlib)|pjrt|plugin' || true)"
+          PKGS_ONE_LINE="$(printf "%s" "$PKGS" | tr '\n' '|' | sed 's/|$//')"
+          WHEELS="$(sha256sum dist/*.whl 2>/dev/null || true)"
+          WHEELS_ONE_LINE="$(printf "%s" "$WHEELS" | tr '\n' '|' | sed 's/|$//')"
 
-          PKGS="$($JAXCI_PYTHON -m pip list | grep -E '^jax|^jaxlib|pjrt|plugin')"
-
-          WHEELS=$(sha256sum dist/*.whl | awk '{print $2 ":" $1}')
-
-          BASE=https://ghcr.io
-          REPO=rocm/jax-base-ubu24.${{ inputs.rocm-tag }}
+          BASE="https://ghcr.io"
+          REPO="rocm/jax-base-ubu24.${{ inputs.rocm-tag }}"
           IMAGE="ghcr.io/${REPO}:latest"
-          SCOPE="repository:${REPO}:pull"
-
-          TOKEN=$(curl -fsSL "$BASE/token?service=ghcr.io&scope=$SCOPE" \
-            | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
-
-          DIGEST=$(curl -fsSL -D - \
-            -H "Authorization: Bearer $TOKEN" \
-            -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
-            "$BASE/v2/$REPO/manifests/latest" -o /dev/null \
-            | grep -i '^Docker-Content-Digest:' | awk '{print $2}')
-
-          WHEELS_JSON=$(sha256sum dist/*.whl 2>/dev/null | awk '
-            { printf "{\"name\":\"%s\",\"sha256\":\"%s\"},", $2, $1 }
-            ' | sed 's/,$//')
-            [ -n "$WHEELS_JSON" ] || WHEELS_JSON=""
+          DIGEST=""
+          TOKEN="$(curl -fsSL "${BASE}/token?service=ghcr.io&scope=repository:${REPO}:pull" \
+            | sed -n 's/.*"token":"\([^"]*\)".*/\1/p' || true)"
+          if [ -n "${TOKEN}" ]; then
+            DIGEST="$(curl -fsSL -D - \
+              -H "Authorization: Bearer ${TOKEN}" \
+              -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
+              "${BASE}/v2/${REPO}/manifests/latest" -o /dev/null \
+              | awk -F': ' 'tolower($1)=="docker-content-digest"{print $2}' \
+              | tr -d $'\r' || true)"
+          fi
 
           VARIANT="py${{ inputs.python }}-${{ inputs.rocm-version }}-${{ inputs.runner }}"
-          PREFIX="test-logs/${{ github.repository }}/${{ github.run_id }}/${{ github.run_attempt }}/${{ inputs.call-id }}/${VARIANT}/"
+          RUN_KEY="${{ github.repository }}/${{ github.run_id }}/${{ github.run_attempt }}"
+          PREFIX="test-logs/${RUN_KEY}/${JOB_KEY}/${VARIANT}/"
 
           mkdir -p logs
           cat > logs/run-manifest.json << EOF
           {
             "schema_version": 1,
-
             "call_id": "${{ inputs.call-id }}",
-
             "github_repository": "${{ github.repository }}",
             "github_workflow": "${{ github.workflow }}",
             "github_job": "${{ github.job }}",
@@ -206,19 +203,33 @@ jobs:
             "github_ref": "${{ github.ref }}",
             "github_ref_name": "${{ github.ref_name }}",
             "github_sha": "${{ github.sha }}",
-
             "runner": "${{ inputs.runner }}",
             "python_version": "${{ inputs.python }}",
             "rocm_version": "${{ inputs.rocm-version }}",
-            "jax_packages": "<PKGS>",
-
-            "logs_path": "${PREFIX}",
-
             "base_image_name": "${IMAGE}",
             "base_image_digest": "${DIGEST}",
-            "wheels": [ $(printf '    "%s",\n' $WHEELS | sed '$ s/,$//') ]
+            "jax_packages_raw": "${PKGS_ONE_LINE}",
+            "wheels_sha_raw": "${WHEELS_ONE_LINE}"
           }
           EOF
+
+          $JAXCI_PYTHON -m pip install -q boto3
+          export S3_BUCKET_NAME="${AMD_S3_BUCKET_NAME}"
+          export AWS_ACCESS_KEY_ID="${AMD_S3_BUCKET_ACCESS_KEY}"
+          export AWS_SECRET_ACCESS_KEY="${AMD_S3_BUCKET_SECRET_KEY}"
+          : "${AWS_ACCESS_KEY_ID:?}"
+          : "${AWS_SECRET_ACCESS_KEY:?}"
+          : "${S3_BUCKET_NAME:?}"
+          $JAXCI_PYTHON - <<PY
+          import boto3, os; s3=boto3.client("s3"); bucket = os.environ["S3_BUCKET_NAME"]
+          # s3.upload_file("logs.tar.gz", bucket, "${PREFIX}"+"logs.tar.gz")
+          s3.upload_file("logs/run-manifest.json", bucket, "${PREFIX}"+"run-manifest.json")
+          # s3.upload_file("logs/pytest_results.json", bucket, "${PREFIX}"+"pytest_results.json")
+          s3.put_object(Bucket=bucket, Key="${PREFIX}"+"_SUCCESS", Body=b"")
+          PY
+      - name: Print JAX version
+        if: always()
+        run: pip list | grep jax
       - name: Capture wheel sha256
         if: always()
         run: sha256sum dist/*.whl | awk '{print $2 ":" $1}'
