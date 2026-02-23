@@ -150,25 +150,73 @@ jobs:
         uses: google-ml-infra/actions/ci_connection@7f5ca0c263a81ed09ea276524c1b9192f1304e3c
         with:
           halt-dispatch-input: ${{ inputs.halt-for-connection }}
-      - name: Collect run manifest info
+      - name: Collect + upload results to S3
         if: always()
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          S3_BUCKET_NAME: ${{ secrets.S3_BUCKET_NAME }}
         run: |
+          set -euo pipefail
+          $JAXCI_PYTHON -m pip install -q boto3
+
+          JAX_PKGS_JSON="$($JAXCI_PYTHON -m pip list --format=json \
+            | jq '[.[] | select(.name|test("^(jax|jaxlib)|pjrt|plugin"))]')"
+
+          PKGS="$($JAXCI_PYTHON -m pip list | grep -E '^jax|^jaxlib|pjrt|plugin')"
+
+          WHEELS=$(sha256sum dist/*.whl | awk '{print $2 ":" $1}')
+
+          BASE=https://ghcr.io
+          REPO=rocm/jax-base-ubu24.${{ inputs.rocm-tag }}
+          IMAGE="ghcr.io/${REPO}:latest"
+          SCOPE="repository:${REPO}:pull"
+
+          TOKEN=$(curl -fsSL "$BASE/token?service=ghcr.io&scope=$SCOPE" \
+            | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
+
+          DIGEST=$(curl -fsSL -D - \
+            -H "Authorization: Bearer $TOKEN" \
+            -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
+            "$BASE/v2/$REPO/manifests/latest" -o /dev/null \
+            | grep -i '^Docker-Content-Digest:' | awk '{print $2}')
+
+          WHEELS_JSON=$(sha256sum dist/*.whl 2>/dev/null | awk '
+            { printf "{\"name\":\"%s\",\"sha256\":\"%s\"},", $2, $1 }
+            ' | sed 's/,$//')
+            [ -n "$WHEELS_JSON" ] || WHEELS_JSON=""
+
+          VARIANT="py${{ inputs.python }}-${{ inputs.rocm-version }}-${{ inputs.runner }}"
+          PREFIX="test-logs/${{ github.repository }}/${{ github.run_id }}/${{ github.run_attempt }}/${{ inputs.call-id }}/${VARIANT}/"
+
           mkdir -p logs
-          cat > logs/run-manifest.json << 'EOF'
+          cat > logs/run-manifest.json << EOF
           {
+            "schema_version": 1,
+
             "call_id": "${{ inputs.call-id }}",
+
+            "github_repository": "${{ github.repository }}",
+            "github_workflow": "${{ github.workflow }}",
+            "github_job": "${{ github.job }}",
             "github_run_id": "${{ github.run_id }}",
             "github_run_attempt": "${{ github.run_attempt }}",
             "github_run_number": "${{ github.run_number }}",
             "github_event_name": "${{ github.event_name }}",
             "github_ref": "${{ github.ref }}",
-            "repo_name": "${{ github.repository }}",
-            "github_workflow": "${{ github.workflow }}",
-            "github_job": "${{ github.job }}",
-            "branch_name": "${{ github.ref_name }}",
-            "runner_label": "${{ inputs.runner }}",
+            "github_ref_name": "${{ github.ref_name }}",
+            "github_sha": "${{ github.sha }}",
+
+            "runner": "${{ inputs.runner }}",
+            "python_version": "${{ inputs.python }}",
             "rocm_version": "${{ inputs.rocm-version }}",
-            "python_version": "${{ inputs.python }}"
+            "jax_packages": "<PKGS>",
+
+            "logs_path": "${PREFIX}",
+
+            "base_image_name": "${IMAGE}",
+            "base_image_digest": "${DIGEST}",
+            "wheels": [ $(printf '    "%s",\n' $WHEELS | sed '$ s/,$//') ]
           }
           EOF
       - name: Capture wheel sha256
