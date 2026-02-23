@@ -116,6 +116,8 @@ echo "Running ROCm tests..."
 # TODO: Verify if log file output should be kept (unique to ROCm)
 export NPROC=32
 "$JAXCI_PYTHON" -m pytest -n $num_processes --tb=short \
+--ignore=tests/mosaic \
+-k "not mosaic" \
 tests \
 --deselect=tests/multi_device_test.py::MultiDeviceTest::test_computation_follows_data \
 --deselect=tests/multiprocess_gpu_test.py::MultiProcessGpuTest::test_distributed_jax_visible_devices \

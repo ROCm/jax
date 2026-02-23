@@ -14,6 +14,13 @@
 
 # ruff: noqa
 
+# Check if running on ROCm - Mosaic GPU is not supported on ROCm.
+try:
+  import jax_rocm_plugin
+  raise ModuleNotFoundError("Mosaic GPU is not supported on ROCm")
+except ImportError:
+  pass  # Not on ROCm, continue with CUDA imports.
+
 try:
   try:
     from jaxlib.mosaic.gpu import _mosaic_gpu_ext  # pytype: disable=import-error
