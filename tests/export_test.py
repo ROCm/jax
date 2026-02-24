@@ -1411,7 +1411,7 @@ class JaxExportTest(jtu.JaxTestCase):
     a = jax.device_put(1, shd)
     f = jax.jit(lambda x: x)
 
-    exported = get_exported(f, platforms=("tpu", "cuda"))(a)
+    exported = get_exported(f, platforms=("tpu", "cuda", "rocm"))(a)
     self.assertEqual(exported.in_avals[0].memory_space, core.MemorySpace.Host)
     self.assertEqual(exported.out_avals[0].memory_space, core.MemorySpace.Host)
     if jtu.device_under_test() in ("tpu", "gpu"):
@@ -1425,7 +1425,7 @@ class JaxExportTest(jtu.JaxTestCase):
     f = jax.jit(lambda x: (x, jnp.ones((2, 2), dtype=np.float32)),
                 out_shardings=(shd, shd))
 
-    exported = get_exported(f, platforms=("tpu", "cuda"))(a)
+    exported = get_exported(f, platforms=("tpu", "cuda", "rocm"))(a)
     self.assertEqual(exported.in_avals[0].memory_space, core.MemorySpace.Host)
     self.assertEqual(exported.out_avals[0].memory_space, core.MemorySpace.Host)
     self.assertEqual(exported.out_avals[1].memory_space, core.MemorySpace.Host)
