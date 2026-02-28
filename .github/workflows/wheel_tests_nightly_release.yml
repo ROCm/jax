@@ -173,6 +173,9 @@ jobs:
       clone_main_xla: 0
 
   run-pytest-rocm:
+    permissions:
+      contents: read
+      actions: read
     uses: ./.github/workflows/pytest_rocm.yml
     secrets: inherit
     strategy:
