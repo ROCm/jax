@@ -130,9 +130,15 @@ JAX_GPU_SOLVER_EXPAND_DEFINITION(absl::StatusOr<int>, PotrfBufferSize);
 JAX_GPU_SOLVER_EXPAND_DEFINITION(absl::Status, Potrf);
 #undef JAX_GPU_SOLVER_Potrf_ARGS
 
+#define JAX_GPU_SOLVER_PotrfBatchedBufferSize_ARGS(Type, ...)             \
+  gpusolverDnHandle_t handle, gpusolverFillMode_t uplo, int n, Type **a, \
+      int lda, int batch
+JAX_GPU_SOLVER_EXPAND_DEFINITION(absl::StatusOr<int>, PotrfBatchedBufferSize);
+#undef JAX_GPU_SOLVER_PotrfBatchedBufferSize_ARGS
+
 #define JAX_GPU_SOLVER_PotrfBatched_ARGS(Type, ...)                       \
   gpusolverDnHandle_t handle, gpusolverFillMode_t uplo, int n, Type **a, \
-      int lda, int *info, int batch
+      int lda, Type *workspace, int lwork, int *info, int batch
 JAX_GPU_SOLVER_EXPAND_DEFINITION(absl::Status, PotrfBatched);
 #undef JAX_GPU_SOLVER_PotrfBatched_ARGS
 
