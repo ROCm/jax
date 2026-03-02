@@ -157,13 +157,43 @@ JAX_GPU_DEFINE_POTRF(gpuComplex, gpusolverDnCpotrf);
 JAX_GPU_DEFINE_POTRF(gpuDoubleComplex, gpusolverDnZpotrf);
 #undef JAX_GPU_DEFINE_POTRF
 
+#ifdef JAX_GPU_CUDA
 #define JAX_GPU_DEFINE_POTRF_BATCHED(Type, Name)                               \
+  template <>                                                                  \
+  absl::StatusOr<int> PotrfBatchedBufferSize<Type>(                            \
+      gpusolverDnHandle_t handle, gpusolverFillMode_t uplo, int n, Type **a,   \
+      int lda, int batch) {                                                    \
+    return 0;                                                                  \
+  }                                                                            \
+                                                                               \
   template <>                                                                  \
   absl::Status PotrfBatched<Type>(gpusolverDnHandle_t handle,                  \
                                   gpusolverFillMode_t uplo, int n, Type **a,   \
-                                  int lda, int *info, int batch) {             \
-    return JAX_AS_STATUS(Name(handle, uplo, n, a, lda, info, batch));         \
+                                  int lda, Type *workspace, int lwork,         \
+                                  int *info, int batch) {                      \
+    return JAX_AS_STATUS(Name(handle, uplo, n, a, lda, info, batch));          \
   }
+#else
+#define JAX_GPU_DEFINE_POTRF_BATCHED(Type, Name)                               \
+  template <>                                                                  \
+  absl::StatusOr<int> PotrfBatchedBufferSize<Type>(                            \
+      gpusolverDnHandle_t handle, gpusolverFillMode_t uplo, int n, Type **a,   \
+      int lda, int batch) {                                                    \
+    int lwork;                                                                 \
+    JAX_RETURN_IF_ERROR(JAX_AS_STATUS(                                         \
+        Name##_bufferSize(handle, uplo, n, a, lda, &lwork, batch)));           \
+    return lwork;                                                              \
+  }                                                                            \
+                                                                               \
+  template <>                                                                  \
+  absl::Status PotrfBatched<Type>(gpusolverDnHandle_t handle,                  \
+                                  gpusolverFillMode_t uplo, int n, Type **a,   \
+                                  int lda, Type *workspace, int lwork,         \
+                                  int *info, int batch) {                      \
+    return JAX_AS_STATUS(                                                      \
+        Name(handle, uplo, n, a, lda, workspace, lwork, info, batch));         \
+  }
+#endif
 
 JAX_GPU_DEFINE_POTRF_BATCHED(float, gpusolverDnSpotrfBatched);
 JAX_GPU_DEFINE_POTRF_BATCHED(double, gpusolverDnDpotrfBatched);

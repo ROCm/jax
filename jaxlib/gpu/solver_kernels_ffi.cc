@@ -450,8 +450,14 @@ ffi::Error PotrfBatchedImpl(int64_t batch, int64_t size, gpuStream_t stream,
                          sizeof(T) * n * n);
   JAX_FFI_RETURN_IF_GPU_ERROR(gpuGetLastError());
 
+  FFI_ASSIGN_OR_RETURN(int lwork,
+                       solver::PotrfBatchedBufferSize<T>(
+                           handle.get(), uplo, n, batch_ptrs, n, batch));
+  FFI_ASSIGN_OR_RETURN(auto workspace,
+                       AllocateWorkspace<T>(scratch, lwork, "batched potrf"));
   FFI_RETURN_IF_ERROR_STATUS(solver::PotrfBatched<T>(
-      handle.get(), uplo, n, batch_ptrs, n, info_data, batch));
+      handle.get(), uplo, n, batch_ptrs, n, workspace, lwork, info_data,
+      batch));
 
   return ffi::Error::Success();
 }
