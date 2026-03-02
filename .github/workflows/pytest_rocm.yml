@@ -93,7 +93,16 @@ on:
         description: "GCS location prefix from where the artifacts should be downloaded"
         default: 'gs://jax-nightly-artifacts/latest'
         type: string
-permissions: {}
+    secrets:
+      AWS_ACCESS_KEY_ID:
+        required: true
+      AWS_SECRET_ACCESS_KEY:
+        required: true
+      S3_BUCKET_NAME:
+        required: true
+permissions:
+  actions: read
+  contents: read
 
 env:
   UV_DEFAULT_INDEX: "https://us-python.pkg.dev/ml-oss-artifacts-published/pypi-mirror/simple"
@@ -148,3 +157,25 @@ jobs:
       - name: Run Pytest ROCm tests
         timeout-minutes: 120
         run: ./ci/run_pytest_rocm.sh
+      - name: Archive test logs
+        if: always()
+        run: |
+          set -euo pipefail
+          tar -czf logs.tar.gz logs
+      - name: Configure AWS Credentials
+        run: |
+          echo "config AWS cred."
+      - name: Upload test-artifacts to AMD S3
+        if: always()
+        env:
+          S3_BUCKET_NAME: ${{ secrets.S3_BUCKET_NAME }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          GITHUB_TOKEN: ${{ github.token }}
+          INPUT_PYTHON: ${{ inputs.python }}
+          INPUT_ROCM_VERSION: ${{ inputs.rocm-version }}
+          INPUT_RUNNER: ${{ inputs.runner }}
+          INPUT_ROCM_TAG: ${{ inputs.rocm-tag }}
+          IS_NIGHTLY: ${{ contains(github.workflow, 'Nightly/Release') && 'nightly' || 'continuous' }}
+        run: |
+          ./ci/upload_rocm_logs.sh
