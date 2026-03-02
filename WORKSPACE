@@ -125,9 +125,9 @@ jax_python_wheel_repository(
     version_source = "//jax:version.py",
 )
 
-load("//third_party/rocm_wheels:workspace.bzl", "rocm_wheels_repository")
 load("@jax_wheel//:wheel.bzl", "WHEEL_VERSION")
 load("@python_version_repo//:py_version.bzl", "HERMETIC_PYTHON_VERSION")
+load("//third_party/rocm_wheels:workspace.bzl", "rocm_wheels_repository")
 
 # Pre-built ROCm wheels from a GitHub release (ROCm/rocm-jax).
 rocm_wheels_repository(
