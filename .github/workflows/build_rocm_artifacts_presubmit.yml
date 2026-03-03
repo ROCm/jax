@@ -1,0 +1,40 @@
+name: CI - Build ROCm Artifacts (Presubmit)
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  id-token: write
+  contents: read
+  actions: read
+
+jobs:
+  build-rocm-artifacts:
+    if: github.event.repository.fork == false
+    uses: ./.github/workflows/build_rocm_artifacts.yml
+    permissions:
+      id-token: write
+      contents: read
+      actions: read
+    strategy:
+        fail-fast: false
+        matrix:
+          runner: ["linux-x86-64-1gpu-amd"]
+          artifact: ["jax-rocm-plugin", "jax-rocm-pjrt"]
+          python: ["3.14"]
+          rocm-version: ["7"]
+    name: "Build ROCm ${{ matrix.artifact }}"
+    with:
+      runner: ${{ matrix.runner }}
+      artifact: ${{ matrix.artifact }}
+      python: ${{ matrix.python }}
+      rocm-version: ${{ matrix.rocm-version }}
+      clone_main_xla: 1
+      upload_artifacts_to_s3: false
