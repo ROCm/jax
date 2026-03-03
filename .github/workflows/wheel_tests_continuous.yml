@@ -36,6 +36,9 @@ on:
   schedule:
     - cron: "0 */3 * * *" # Run once every 3 hours
   workflow_dispatch: # allows triggering the workflow run manually
+  pull_request:
+    paths:
+      - '.github/workflows/wheel_tests_continuous.yml'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
