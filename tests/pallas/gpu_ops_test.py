@@ -178,6 +178,9 @@ class FusedAttentionTest(PallasBaseTest):
     # Navi/RDNA GPUs have 64KB LDS (shared memory), which is insufficient
     # for the attention kernel when head_dim is padded to 128+
     # (the kernel requests up to 98KB).
+    # "Radeon" in device_kind identifies Navi/RDNA consumer GPUs
+    # (e.g. "AMD Radeon RX 9070 XT") vs MI/Instinct data center GPUs
+    # (e.g. "AMD Instinct MI300X") which have larger shared memory.
     if (jtu.is_device_rocm()
         and "Radeon" in jax.local_devices()[0].device_kind
         and pl.next_power_of_2(head_dim) >= 128):
@@ -282,6 +285,9 @@ class FusedAttentionTest(PallasBaseTest):
     # Navi/RDNA GPUs have 64KB LDS (shared memory), which is insufficient
     # for the backward attention kernel when head_dim is padded to 128+
     # (the kernel requests up to 90KB).
+    # "Radeon" in device_kind identifies Navi/RDNA consumer GPUs
+    # (e.g. "AMD Radeon RX 9070 XT") vs MI/Instinct data center GPUs
+    # (e.g. "AMD Instinct MI300X") which have larger shared memory.
     if (jtu.is_device_rocm()
         and "Radeon" in jax.local_devices()[0].device_kind
         and pl.next_power_of_2(head_dim) >= 128):
