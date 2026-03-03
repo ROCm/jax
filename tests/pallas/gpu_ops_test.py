@@ -175,6 +175,14 @@ class FusedAttentionTest(PallasBaseTest):
       use_fwd,
       use_segment_ids,
   ):
+    # Navi/RDNA GPUs have 64KB LDS (shared memory), which is insufficient
+    # for the attention kernel when head_dim is padded to 128+
+    # (the kernel requests up to 98KB).
+    if (jtu.is_device_rocm()
+        and "Radeon" in jax.local_devices()[0].device_kind
+        and pl.next_power_of_2(head_dim) >= 128):
+      self.skipTest("Navi/RDNA GPUs have 64KB LDS, less than kernel demand")
+
     k1, k2, k3 = random.split(random.key(0), 3)
     q = random.normal(
         k1, (batch_size, seq_len, num_heads, head_dim), dtype=jnp.float16
@@ -270,6 +278,14 @@ class FusedAttentionTest(PallasBaseTest):
     if jtu.is_cuda_compute_capability_at_least("8.0"):
       # TODO(b/416306534)
       self.skipTest("Precision issues after CUDA 12.8.1 upgrade")
+
+    # Navi/RDNA GPUs have 64KB LDS (shared memory), which is insufficient
+    # for the backward attention kernel when head_dim is padded to 128+
+    # (the kernel requests up to 90KB).
+    if (jtu.is_device_rocm()
+        and "Radeon" in jax.local_devices()[0].device_kind
+        and pl.next_power_of_2(head_dim) >= 128):
+      self.skipTest("Navi/RDNA GPUs have 64KB LDS, less than kernel demand")
 
     k1, k2, k3 = random.split(random.key(0), 3)
     q = random.normal(
