@@ -233,9 +233,6 @@ jobs:
       run-full-tpu-test-suite: "1"
       libtpu-version-type: ${{ matrix.libtpu-version-type }}
       gcs_download_uri: ${{ needs.build-jaxlib-artifact.outputs.gcs_upload_uri }}
-      build_jaxlib: "wheel"
-      build_jax: "wheel"
-      clone_main_xla: 1
 
   build-rocm-artifacts:
     uses: ./.github/workflows/build_rocm_artifacts.yml

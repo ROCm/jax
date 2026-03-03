@@ -93,15 +93,28 @@ if [[ "${allowed_artifacts[@]}" =~ "${artifact}" ]]; then
     bazelrc_config="${bazelrc_config}_cuda"
   fi
 
+  additional_build_options=()
+  additional_configs=()
   if [[ ("$artifact" == "jax-rocm-plugin") || ("$artifact" == "jax-rocm-pjrt") ]]; then
     rocm_version_flag="--rocm_version=$JAXCI_ROCM_VERSION"
+    bazel_startup_opts="--bazelrc=build/rocm/rocm.bazelrc"
+    bazel_remote_cache=""
+    additional_configs+=(
+        --config=rocm
+        --config=rocm_rbe
+    )
+    additional_build_options+=(
+        --clang_path=/usr/lib/llvm-18/bin/clang
+    )
   fi
 
   # Build the artifact.
   python build/build.py build --wheels="$artifact" \
-    --bazel_options=--config="$bazelrc_config" $bazel_remote_cache \
+    --bazel_startup_options="$bazel_startup_opts"  \
+    --bazel_options="--config=$bazelrc_config ${additional_configs[*]}" $bazel_remote_cache  \
     --python_version=$JAXCI_HERMETIC_PYTHON_VERSION \
     --verbose --detailed_timestamped_log --use_new_wheel_build_rule \
+    ${additional_build_options[*]} \
     $cuda_version_flag \
     $rocm_version_flag \
     --output_path="$JAXCI_OUTPUT_DIR" \
@@ -111,7 +124,7 @@ if [[ "${allowed_artifacts[@]}" =~ "${artifact}" ]]; then
   # tagged wheel.
   if [[ "$JAXCI_ARTIFACT_TYPE" == "release" ]]; then
     python build/build.py build --wheels="$artifact" \
-      --bazel_options=--config="$bazelrc_config" $bazel_remote_cache \
+      --bazel_options="--config=$bazelrc_config ${additional_configs[*]}" $bazel_remote_cache\
       --python_version=$JAXCI_HERMETIC_PYTHON_VERSION \
       --verbose --detailed_timestamped_log --use_new_wheel_build_rule \
       $cuda_version_flag \
