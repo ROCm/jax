@@ -33,7 +33,7 @@ source ci/envs/default.env
 # Set up the build environment.
 source "ci/utilities/setup_build_environment.sh"
 
-allowed_artifacts=("jax" "jaxlib" "jax-cuda-plugin" "jax-cuda-pjrt")
+allowed_artifacts=("jax" "jaxlib" "jax-cuda-plugin" "jax-cuda-pjrt" "jax-rocm-plugin" "jax-rocm-pjrt")
 
 os=$(uname -s | awk '{print tolower($0)}')
 arch=$(uname -m)
@@ -86,9 +86,15 @@ if [[ "${allowed_artifacts[@]}" =~ "${artifact}" ]]; then
     fi
   fi
 
+  cuda_version_flag=""
+  rocm_version_flag=""
   # Use the "_cuda" configs when building the CUDA artifacts.
   if [[ ("$artifact" == "jax-cuda-plugin") || ("$artifact" == "jax-cuda-pjrt") ]]; then
     bazelrc_config="${bazelrc_config}_cuda"
+  fi
+
+  if [[ ("$artifact" == "jax-rocm-plugin") || ("$artifact" == "jax-rocm-pjrt") ]]; then
+    rocm_version_flag="--rocm_version=$JAXCI_ROCM_VERSION"
   fi
 
   # Build the artifact.
@@ -96,6 +102,8 @@ if [[ "${allowed_artifacts[@]}" =~ "${artifact}" ]]; then
     --bazel_options=--config="$bazelrc_config" $bazel_remote_cache \
     --python_version=$JAXCI_HERMETIC_PYTHON_VERSION \
     --verbose --detailed_timestamped_log --use_new_wheel_build_rule \
+    $cuda_version_flag \
+    $rocm_version_flag \
     --output_path="$JAXCI_OUTPUT_DIR" \
     $artifact_tag_flags
 
@@ -106,6 +114,9 @@ if [[ "${allowed_artifacts[@]}" =~ "${artifact}" ]]; then
       --bazel_options=--config="$bazelrc_config" $bazel_remote_cache \
       --python_version=$JAXCI_HERMETIC_PYTHON_VERSION \
       --verbose --detailed_timestamped_log --use_new_wheel_build_rule \
+      $cuda_version_flag \
+      $rocm_version_flag \
+      --verbose --detailed_timestamped_log \
       --output_path="$JAXCI_OUTPUT_DIR" \
       $artifact_tag_flags --bazel_options=--repo_env=ML_WHEEL_VERSION_SUFFIX="$JAXCI_WHEEL_RC_VERSION"
   fi
