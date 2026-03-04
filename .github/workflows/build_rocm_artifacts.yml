@@ -98,7 +98,7 @@ jobs:
         shell: bash
     runs-on: ${{ inputs.runner }}
     container:
-      image: "rocm/tensorflow-build@sha256:30e7fcfad87b74a4b916565a6156f4d8d01a2f5a4e06d0d0e6c37926a1507d72"
+      image: "ghcr.io/rocm/jax-manylinux_2_28-rocm-7.2.0:latest"
       volumes:
         - /data:/data
       options: >-
@@ -121,6 +121,10 @@ jobs:
       - uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
         with:
           persist-credentials: false
+      - name: Install Bazelisk
+        run: |
+          curl -fSsL -o /usr/local/bin/bazel https://github.com/bazelbuild/bazelisk/releases/latest/download/bazelisk-linux-amd64
+          chmod +x /usr/local/bin/bazel
       - name: ROCm Info
         run: rocminfo
       # Halt for testing
