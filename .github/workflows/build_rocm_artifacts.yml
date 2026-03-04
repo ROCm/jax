@@ -110,7 +110,7 @@ jobs:
 
     env:
       JAXCI_HERMETIC_PYTHON_VERSION: "${{ inputs.python }}"
-      JAXCI_OUTPUT_DIR: "${{ runner.temp }}/dist"
+      JAXCI_OUTPUT_DIR: "${{ github.workspace }}/dist"
 
     name: "${{ inputs.artifact }}, py ${{ inputs.python }}, ROCm ${{ inputs.rocm-version }}"
 
@@ -128,6 +128,8 @@ jobs:
         uses: google-ml-infra/actions/ci_connection@7f5ca0c263a81ed09ea276524c1b9192f1304e3c
         with:
           halt-dispatch-input: ${{ inputs.halt-for-connection }}
+      - name: Create dist dir
+        run: mkdir -p $JAXCI_OUTPUT_DIR/
       - name: Build ${{ inputs.artifact }}
         timeout-minutes: 120
         run: |
