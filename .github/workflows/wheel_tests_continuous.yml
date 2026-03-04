@@ -300,6 +300,7 @@ jobs:
 
   build-rocm-artifacts:
     uses: ./.github/workflows/build_rocm_artifacts.yml
+    secrets: inherit
     permissions:
       id-token: write
       contents: read

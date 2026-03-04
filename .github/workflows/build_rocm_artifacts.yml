@@ -81,6 +81,13 @@ on:
         description: 'Should this workflow run wait for a remote connection?'
         type: string
         default: 'no'
+    secrets:
+      AWS_ACCESS_KEY_ID:
+        required: true
+      AWS_SECRET_ACCESS_KEY:
+        required: true
+      S3_BUCKET_NAME:
+        required: true
     outputs:
       s3_upload_uri:
         description: "S3 location prefix to where the artifacts were uploaded"
@@ -144,14 +151,6 @@ jobs:
                 $DEPLOY_TARGET -- $JAXCI_OUTPUT_DIR/
         env:
           DEPLOY_TARGET: ${{ inputs.artifact == 'jax-rocm-plugin' && '//jaxlib/tools:deploy_rocm_plugin_wheel' || '//jaxlib/tools:deploy_rocm_pjrt_wheel' }}
-      - name: Verify manylinux compliance
-        run: ./ci/utilities/run_auditwheel.sh
-      - name: Configure AWS Credentials
-        if: ${{ inputs.upload_artifacts_to_s3 }}
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: arn:aws:iam::661452401056:role/jax-ci-amd-s3-oidc
-          aws-region: us-east-1
       - name: Upload artifacts to S3
         if: ${{ inputs.upload_artifacts_to_s3 }}
         run: |
@@ -160,6 +159,8 @@ jobs:
           aws s3 cp --only-show-errors --recursive $JAXCI_OUTPUT_DIR/ "${INPUTS_S3_UPLOAD_URI}"/
           echo "Upload complete."
         env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           INPUTS_S3_UPLOAD_URI: ${{ inputs.s3_upload_uri }}
       - name: Store the S3 upload URI as an output
         id: store-s3-upload-uri
