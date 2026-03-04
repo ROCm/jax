@@ -98,6 +98,8 @@ class MultiProcessGpuTest(jtu.JaxTestCase):
     """Test jax_visible_devices works in distributed settings."""
     if not jtu.test_device_matches(['gpu']):
       raise unittest.SkipTest('Tests only for GPU.')
+    if jax.device_count() < 4:
+      raise unittest.SkipTest('Test requires at least 4 GPUs.')
 
     port = portpicker.pick_unused_port()
     num_gpus = 4
