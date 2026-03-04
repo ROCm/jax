@@ -132,6 +132,12 @@ jobs:
         run: |
           curl -fSsL -o /usr/local/bin/bazel https://github.com/bazelbuild/bazelisk/releases/latest/download/bazelisk-linux-amd64
           chmod +x /usr/local/bin/bazel
+      - name: Install AWS CLI
+        run: |
+          curl -fSsL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip
+          unzip -q /tmp/awscliv2.zip -d /tmp
+          /tmp/aws/install
+          rm -rf /tmp/awscliv2.zip /tmp/aws
       - name: ROCm Info
         run: rocminfo
       # Halt for testing
