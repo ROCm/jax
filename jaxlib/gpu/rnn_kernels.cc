@@ -172,6 +172,9 @@ DoRnnComputeWorkspaceReserveSpaceSizes(int input_size, int hidden_size,
   JAX_RETURN_IF_ERROR(
       JAX_AS_STATUS(gpudnnDestroyRNNDataDescriptor(input_data_desc)));
   JAX_RETURN_IF_ERROR(JAX_AS_STATUS(gpudnnDestroyRNNDescriptor(rnn_desc)));
+#ifdef JAX_GPU_HIP
+  JAX_RETURN_IF_ERROR(JAX_AS_STATUS(gpuFree(dropout_states_dev)));
+#endif
 
   // Round up to nearest multiples of 4 so we can return them as f32 arrays.
   workSpaceSize += (workSpaceSize % 4);
@@ -351,6 +354,10 @@ static absl::Status DnnRNNForward_(gpuStream_t stream, void** buffers,
   JAX_RETURN_IF_ERROR(
       JAX_AS_STATUS(gpudnnDestroyDropoutDescriptor(dropout_desc)));
   JAX_RETURN_IF_ERROR(JAX_AS_STATUS(gpudnnDestroyRNNDescriptor(rnn_desc)));
+#ifdef JAX_GPU_HIP
+  JAX_RETURN_IF_ERROR(JAX_AS_STATUS(gpuFree(dropout_states_dev)));
+  JAX_RETURN_IF_ERROR(JAX_AS_STATUS(gpudnnDestroyTensorDescriptor(input_tensor_desc)));
+#endif
 
   return absl::OkStatus();
 }
@@ -536,6 +543,10 @@ static absl::Status DnnRNNBackward_(gpuStream_t stream, void** buffers,
   JAX_RETURN_IF_ERROR(
       JAX_AS_STATUS(gpudnnDestroyDropoutDescriptor(dropout_desc)));
   JAX_RETURN_IF_ERROR(JAX_AS_STATUS(gpudnnDestroyRNNDescriptor(rnn_desc)));
+#ifdef JAX_GPU_HIP
+  JAX_RETURN_IF_ERROR(JAX_AS_STATUS(gpuFree(dropout_states_dev)));
+  JAX_RETURN_IF_ERROR(JAX_AS_STATUS(gpudnnDestroyTensorDescriptor(input_tensor_desc)));
+#endif
 
   return absl::OkStatus();
 }
