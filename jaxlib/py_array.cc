@@ -427,7 +427,8 @@ nb::object MakeShapedArrayCached(const ShapedArrayCacheKey& key) {
   static auto* lru_list = new CacheT::LRUList(4096);
   static auto* cache = new CacheT(lru_list);
 
-  const nb::object& shaped_array = xla::SafeStaticInit<nb::object>([]() {
+  static xla::SafeStatic<nb::object> shaped_array_init;
+  const nb::object& shaped_array = shaped_array_init.Get([]() {
     nb::object jax_core;
     try {
       jax_core = nb::module_::import_("jax.core");
@@ -1962,7 +1963,7 @@ absl::Status PyHostValue::CopyStringArrayToHostAsync(
   auto transfer_guard_formatter = [ifrt_array] {
     return absl::StrCat(
         "shape=(", absl::StrJoin(ifrt_array->shape().dims(), ","),
-        "), dtype=", ifrt_array->dtype().DebugString(), ", device=",
+        "), dtype=", ifrt_array->dtype(), ", device=",
         ifrt_array->sharding().devices()->devices().front()->DebugString());
   };
   TF_RETURN_IF_ERROR(
@@ -2009,7 +2010,7 @@ absl::Status PyHostValue::CopyToHostAsync(
   auto transfer_guard_formatter = [ifrt_array] {
     return absl::StrCat(
         "shape=(", absl::StrJoin(ifrt_array->shape().dims(), ","),
-        "), dtype=", ifrt_array->dtype().DebugString(), ", device=",
+        "), dtype=", ifrt_array->dtype(), ", device=",
         ifrt_array->sharding().devices()->devices().front()->DebugString());
   };
   TF_RETURN_IF_ERROR(

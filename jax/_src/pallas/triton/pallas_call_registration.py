@@ -78,7 +78,7 @@ def pallas_call_lowering(
     triton_params = triton_core.CompilerParams()
   else:
     assert isinstance(compiler_params, triton_core.CompilerParams)
-    triton_params = compiler_params  # type: ignore[assignment]
+    triton_params = compiler_params
 
   num_warps = 4 if triton_params.num_warps is None else triton_params.num_warps
   num_stages = triton_params.num_stages
@@ -191,7 +191,7 @@ def pallas_call_lowering(
   # TODO(b/392558289): Migrate to ``jax.ffi``.
   return mlir.custom_call(
       call_target_name="triton_kernel_call",
-      result_types=mlir.flatten_ir_values(
+      result_types=mlir.flatten_ir_types(
           map(mlir.aval_to_ir_type, ctx.avals_out)
       ),
       operands=in_nodes,

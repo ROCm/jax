@@ -75,7 +75,7 @@ on:
         type: boolean
       s3_upload_uri:
         description: "S3 location prefix to where the artifacts should be uploaded"
-        default: 's3://jax-ci-amd/rocm-wheels'
+        default: 's3://amd-jax-ci/rocm-wheels'
         type: string
       halt-for-connection:
         description: 'Should this workflow run wait for a remote connection?'

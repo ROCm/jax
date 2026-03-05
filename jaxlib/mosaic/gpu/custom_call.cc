@@ -208,9 +208,9 @@ mlir::FailureOr<mlir::OpPassManager> GetPassPipeline(
   absl::call_once(register_passes_flag, [&compilation_provider, &cc]() {
     mosaic::gpu::EnsureLLVMNVPTXTargetIsRegistered();
     EnsureNativeLLVMisInitialized();
-    mlir::registerCanonicalizer();
-    mlir::registerCSE();
-    mlir::registerStripDebugInfo();
+    mlir::registerCanonicalizerPass();
+    mlir::registerCSEPass();
+    mlir::registerStripDebugInfoPass();
     mlir::registerConvertNVGPUToNVVMPass();
     mlir::registerConvertVectorToSCF();
     mlir::registerSCFToControlFlowPass();
@@ -381,7 +381,11 @@ GetAssemblyToBinaryCompilationProvider() {
         nvjitlink_mode =
             se::cuda::CompilationProviderOptions::NvJitLinkMode::kAuto;
     constexpr bool enable_llvm_module_compilation_parallelism = false;
+#ifdef PLATFORM_GOOGLE
+    constexpr bool enable_driver_compilation = true;
+#else
     constexpr bool enable_driver_compilation = false;
+#endif
     bool enable_libnvptxcompiler = se::IsLibNvPtxCompilerSupported();
 
     se::cuda::CompilationProviderOptions opts(
@@ -475,12 +479,12 @@ absl::StatusOr<std::pair<std::string, std::string>> GetHostAndInitFuncNames(
 struct CompiledKernel {
   CompiledKernel(std::unique_ptr<llvm::orc::LLJIT> lljit,
                  MosaicHostFunc* host_launch, MosaicInitFunc* init,
-                 bool is_comm_used, std::string object_file,
+                 bool is_nvshmem_used, std::string object_file,
                  std::string host_func_name, std::string init_func_name)
       : lljit(std::move(lljit)),
         host_launch(host_launch),
         init(init),
-        is_comm_used(is_comm_used),
+        is_nvshmem_used(is_nvshmem_used),
         object_file(std::move(object_file)),
         host_func_name(std::move(host_func_name)),
         init_func_name(std::move(init_func_name)) {}
@@ -493,7 +497,7 @@ struct CompiledKernel {
   std::unique_ptr<llvm::orc::LLJIT> lljit;
   MosaicHostFunc* host_launch = nullptr;
   MosaicInitFunc* init = nullptr;
-  bool is_comm_used = false;
+  bool is_nvshmem_used = false;
   // The following fields are used for de/serialization of CompiledKernel.
   std::string object_file;
   std::string host_func_name;
@@ -501,7 +505,7 @@ struct CompiledKernel {
 };
 
 absl::Status RunMlirPasses(mlir::ModuleOp module, se::CudaComputeCapability cc,
-                           bool is_comm_used,
+                           bool is_nvshmem_used,
                            const mosaic::gpu::DumpOptions& dump_opts) {
   TF_ASSIGN_OR_RETURN(se::cuda::CompilationProvider * compilation_provider,
                       GetAssemblyToBinaryCompilationProvider());
@@ -516,7 +520,7 @@ absl::Status RunMlirPasses(mlir::ModuleOp module, se::CudaComputeCapability cc,
   TF_ASSIGN_OR_RETURN(std::string llvm_ptx_isa,
                       GetPtxIsaVersion(*compilation_provider));
   std::string nvshmem_path = "";
-  if (is_comm_used) {
+  if (is_nvshmem_used) {
     TF_ASSIGN_OR_RETURN(nvshmem_path, get_nvshmem_llvm_lib_path());
   }
   // nvbug/5809460: spurious LLVM/MLIR errors with tcgen05+sm_103a; disable
@@ -598,7 +602,7 @@ absl::StatusOr<std::unique_ptr<llvm::MemoryBuffer>> CompileModuleToObject(
 
 absl::StatusOr<std::unique_ptr<CompiledKernel>> CreateAndInitJIT(
     std::unique_ptr<llvm::MemoryBuffer> object_file, std::string host_func_name,
-    std::string init_func_name, bool is_comm_used) {
+    std::string init_func_name, bool is_nvshmem_used) {
   EnsureNativeLLVMisInitialized();
   std::string object_file_str = object_file->getBuffer().str();
   auto lljit_builder = llvm::orc::LLJITBuilder();
@@ -716,7 +720,7 @@ absl::StatusOr<std::unique_ptr<CompiledKernel>> CreateAndInitJIT(
   VLOG(5) << "Successfully JIT-linked Mosaic GPU kernel";
   return std::make_unique<CompiledKernel>(
       std::move(lljit), host_sym->toPtr<MosaicHostFunc*>(),
-      init_sym->toPtr<MosaicInitFunc*>(), is_comm_used,
+      init_sym->toPtr<MosaicInitFunc*>(), is_nvshmem_used,
       std::move(object_file_str), std::move(host_func_name),
       std::move(init_func_name));
 }
@@ -782,10 +786,10 @@ absl::StatusOr<std::unique_ptr<CompiledKernel>> Compile(
   xla::llvm_ir::LLVMCommandLineOptionsLock llvm_lock(llvm_cl_options);
   mosaic::gpu::EnsureLLVMNVPTXTargetIsRegistered();
 
-  bool is_comm_used = is_nvshmem_used(*module);
+  bool use_nvshmem = is_nvshmem_used(*module);
   mosaic::gpu::DumpOptions dump_opts =
       mosaic::gpu::GetOrSetDumpOptionsForModule(*module);
-  TF_RETURN_IF_ERROR(RunMlirPasses(*module, cc, is_comm_used, dump_opts));
+  TF_RETURN_IF_ERROR(RunMlirPasses(*module, cc, use_nvshmem, dump_opts));
 
   TF_ASSIGN_OR_RETURN(auto object_file,
                       CompileModuleToObject(*module, dump_opts));
@@ -802,7 +806,7 @@ absl::StatusOr<std::unique_ptr<CompiledKernel>> Compile(
 
   return CreateAndInitJIT(
       std::move(object_file), std::move(host_and_init_func_names.first),
-      std::move(host_and_init_func_names.second), is_comm_used);
+      std::move(host_and_init_func_names.second), use_nvshmem);
 }
 
 struct KernelCache {
@@ -822,22 +826,23 @@ absl::StatusOr<CompiledKernel*> GetOrCreateKernel(
         factory) {
   auto& cache = GetKernelCache();
   {
-    absl::MutexLock lock(&cache.mutex);
+    absl::MutexLock lock(cache.mutex);
     auto it = cache.kernels.find(kernel_hash);
     if (it != cache.kernels.end()) {
       return it->second.get();
     }
   }
-  // Release the lock while compiling the kernel.
+  // Release the lock while compiling the kernel. It is possible that multiple
+  // threads compile the same kernel concurrently. In that case, we will discard
+  // all but the first result.
   TF_ASSIGN_OR_RETURN(auto kernel, factory());
-  absl::MutexLock lock(&cache.mutex);
-  auto [iter, inserted] =
-      cache.kernels.insert_or_assign(kernel_hash, std::move(kernel));
+  absl::MutexLock lock(cache.mutex);
+  auto [iter, _] = cache.kernels.try_emplace(kernel_hash, std::move(kernel));
   return iter->second.get();
 }
 
 absl::StatusOr<void*> InitKernel(const CompiledKernel& kernel) {
-  if (kernel.is_comm_used &&
+  if (kernel.is_nvshmem_used &&
       !NvshmemApi::Default(/*assert_ok=*/false).is_loaded()) {
     return absl::InternalError(
         "Failed to load the NVSHMEM library. Make sure it is installed (e.g. "
@@ -864,16 +869,13 @@ absl::StatusOr<void*> CachedInit(const CompiledKernel* absl_nonnull kernel) {
   CUDA_RETURN_IF_ERROR(cuCtxGetCurrent(&ctx));
   CacheKey key(kernel, reinterpret_cast<uintptr_t>(ctx));
 
-  {
-    absl::MutexLock lock(&cache->mutex);
-    auto it = cache->contexts.find(key);
-    if (it != cache->contexts.end()) {
-      VLOG(5) << "Found Mosaic GPU kernel in cache";
-      return it->second;
-    }
+  absl::MutexLock lock(cache->mutex);
+  auto it = cache->contexts.find(key);
+  if (it != cache->contexts.end()) {
+    VLOG(5) << "Found Mosaic GPU kernel in cache";
+    return it->second;
   }
   TF_ASSIGN_OR_RETURN(void* context, InitKernel(*kernel));
-  absl::MutexLock lock(&cache->mutex);
   cache->contexts.insert_or_assign(key, context);
   return context;
 }
@@ -931,7 +933,7 @@ absl::StatusOr<std::string> CustomCallResources::Serialize(
   }
   kernel_proto.set_version(1);
   kernel_proto.set_object_file(kernel->object_file);
-  kernel_proto.set_is_comm_used(kernel->is_comm_used);
+  kernel_proto.set_is_nvshmem_used(kernel->is_nvshmem_used);
   kernel_proto.set_kernel_hash(resources.hash.data(), sizeof(KernelHash));
   kernel_proto.set_host_func_name(kernel->host_func_name);
   kernel_proto.set_init_func_name(kernel->init_func_name);
@@ -968,7 +970,7 @@ CustomCallResources::Deserialize(absl::string_view data) {
                                         kernel_proto.object_file(), "kernel"),
                                     std::move(host_func_name),
                                     std::move(init_func_name),
-                                    kernel_proto.is_comm_used());
+                                    kernel_proto.is_nvshmem_used());
           }));
   return resources;
 }
@@ -1213,7 +1215,7 @@ absl::Status MosaicGpuInitialize(
         &barrier_signal_buffer_address, barrier_signal_buffer_address.size()));
   }
 
-  if (device_state.metadata_handle.address().is_null()) {
+  if (device_state.barrier_signal_value_buffer_handle.address().is_null()) {
     device_state.barrier_signal_value_buffer_handle = se::DeviceAddressHandle{
         collective_params->executor,
         collective_params->executor->Allocate(
@@ -1333,7 +1335,7 @@ absl::Status MosaicGpuExecute(
         device_state.barrier_signal_value_buffer_handle.address()));
     VLOG(6) << "[" << current_rank
             << "] Finished multi-GPU barrier with key: " << clique_key;
-  } else if (kernel->is_comm_used) {
+  } else if (kernel->is_nvshmem_used) {
     NvshmemApi::Default().barrier_all_on_stream(cuda_stream);
   }
 

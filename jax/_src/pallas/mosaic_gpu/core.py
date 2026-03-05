@@ -1078,7 +1078,7 @@ class BlockSpec(pallas_core.BlockSpec):
     )
     block_inner_aval = bm.block_aval.inner_aval
     for t in self.transforms:
-      block_inner_aval = t.transform_type(block_inner_aval)  # type: ignore[arg-type]
+      block_inner_aval = t.transform_type(block_inner_aval)
     return bm.replace(
         transformed_block_aval=bm.block_aval.update(
             inner_aval=block_inner_aval
@@ -1447,7 +1447,7 @@ class ParameterizedLayout(SomeLayout):
   def to_mgpu(self, *args, **kwargs) -> mgpu.FragmentedLayout:
     if args or kwargs:
       raise ValueError(f"Can't instantiate {self} with arguments.")
-    return self.layout_cls.to_mgpu(*self.args, **self.kwargs)
+    return self.layout_cls.to_mgpu(*self.args, **self.kwargs)  # pyrefly: ignore[bad-return]
 
 
 @dataclasses.dataclass(frozen=True)
@@ -1492,7 +1492,7 @@ class Layout(SomeLayout, enum.Enum):
   def __call__(self, *args, **kwargs) -> ParameterizedLayout:
     return ParameterizedLayout(self, args, kwargs)
 
-  def to_mgpu(self, *args, **kwargs) -> mgpu.FragmentedLayout:  # pyrefly: ignore[bad-override]
+  def to_mgpu(self, *args, **kwargs) -> mgpu.FragmentedLayout:  # pyrefly: ignore[bad-override, bad-return]
     def check_no_args():
       if args or kwargs:
         raise ValueError(f"Can't instantiate {self} with arguments.")
@@ -1547,14 +1547,6 @@ class Layout(SomeLayout, enum.Enum):
         )
       case Layout.TMA_GATHER_INDICES:
         return mgpu.TMA_GATHER_INDICES_LAYOUT
-
-
-# TODO(apaszke): Adjust the users and remove these backfills.
-Layout.WGMMA_ROW = Layout.WGMMA.reduce(1)
-Layout.WGMMA_COL = Layout.WGMMA.reduce(0)
-Layout.TCGEN05_ROW = Layout.TCGEN05.reduce(1)
-Layout.TCGEN05_COL = Layout.TCGEN05.reduce(0)
-Layout.TCGEN05_TMEM_NATIVE_ROW = Layout.TCGEN05_TMEM_NATIVE.reduce(1)
 
 
 class TMEMLayout(enum.Enum):

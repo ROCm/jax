@@ -10284,12 +10284,6 @@ class ShardingInTypesTest(jtu.JaxTestCase):
   )
   @jtu.with_explicit_mesh((2, 2), ('x', 'y'))
   def test_reduce_sum_unreduced_inp_multi_mesh(self, axes, out_s, eq_out_s, mesh):
-    if jaxlib_extension_version < 404:
-      self.skipTest('Requires jaxlib_extension_version >= 404')
-    if ifrt_version < 49:
-      self.skipTest('Requires ifrt_version >= 49')
-    if not jtu.is_cloud_tpu_at_least(2026, 2, 11):
-      self.skipTest('Requires a newer libtpu')
 
     inp1 = jax.device_put(np.arange(16).reshape(8, 2), P('x', 'y'))
     inp2 = jax.device_put(np.arange(8).reshape(2, 4), P('y', None))
@@ -10306,12 +10300,6 @@ class ShardingInTypesTest(jtu.JaxTestCase):
 
   @jtu.with_explicit_mesh((2,), 'x')
   def test_split_reduced_concat_unreduced(self, mesh):
-    if jaxlib_extension_version < 404:
-      self.skipTest('Requires jaxlib_extension_version >= 404')
-    if ifrt_version < 49:
-      self.skipTest('Requires ifrt_version >= 49')
-    if not jtu.is_cloud_tpu_at_least(2026, 2, 11):
-      self.skipTest('Requires a newer libtpu')
 
     x = jax.device_put(np.arange(8.).reshape(2, 4), P('x'))
     w = jax.device_put(np.arange(64.).reshape(4, 16), P(reduced={'x'}))
@@ -10574,6 +10562,19 @@ class ShardingInTypesTest(jtu.JaxTestCase):
         core.ShardingTypeError,
         "RHS should be reduced along the same axes LHS is unreduced on"):
       jax.jit(lambda x: x * 2)(arr)
+
+  @jtu.with_explicit_mesh((2,), 'x')
+  def test_unreduced_add_jaxvals(self, mesh):
+    arr = jax.reshard(np.ones((2, 2)), P(reduced={'x'}))
+    arr2 = jax.device_put(np.ones((2, 2)), P())
+
+    @jax.jit
+    def f(x):
+      return (x + x).sum()
+
+    out = jax.jit(jax.grad(f))(arr)
+    out2 = jax.jit(jax.grad(f))(arr2)
+    self.assertArraysEqual(reshard(out, P()), out2)
 
 
 @jtu.pytest_mark_if_available('multiaccelerator')

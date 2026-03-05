@@ -299,7 +299,7 @@ def einsum(
       for d in np.shape(op) if not core.is_constant_dim(d)
   }
   if not non_constant_dim_types:
-    contract_path = opt_einsum.contract_path
+    contract_path: Any = opt_einsum.contract_path
   else:
     ty = next(iter(non_constant_dim_types))
     contract_path = _poly_einsum_handlers.get(ty, _default_poly_einsum_handler)
@@ -339,7 +339,7 @@ def einsum(
 
 # Enable other modules to override einsum_contact_path.
 # Indexed by the type of the non constant dimension
-_poly_einsum_handlers = {}  # type: ignore
+_poly_einsum_handlers = {}
 
 def _default_poly_einsum_handler(*operands, **kwargs):
   dummy = collections.namedtuple('dummy', ['shape', 'dtype'])
@@ -419,8 +419,11 @@ def einsum_path(
   .. _opt_einsum: https://github.com/dgasmith/opt_einsum
   """
   if isinstance(optimize, bool):
-    optimize = 'optimal' if optimize else Unoptimized()
-  return opt_einsum.contract_path(subscripts, *operands, optimize=optimize)
+    optimize2: Any = 'optimal' if optimize else Unoptimized()
+  else:
+    optimize2 = optimize
+  # pyrefly: ignore[no-matching-overload]
+  return opt_einsum.contract_path(subscripts, *operands, optimize=optimize2)
 
 def _removechars(s, chars):
   return s.translate(str.maketrans(dict.fromkeys(chars)))
@@ -569,7 +572,7 @@ def _einsum(
         out_sharding = (_get_inverse_sharding(out_sharding, names, result_names)
                         if out_sharding is not None and names != result_names
                         else out_sharding)
-        dot_out_sharding = ({} if out_sharding is None else  # type: ignore
+        dot_out_sharding = ({} if out_sharding is None else
                             {'out_sharding': out_sharding})
         operand = _dot_general(lhs, rhs, dimension_numbers, precision,
                                 preferred_element_type=preferred_element_type,

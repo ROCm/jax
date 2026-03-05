@@ -64,9 +64,6 @@ from jax._src.lax import windowed_reductions as lax_windowed_reductions
 from jax._src.numpy import linalg as jnp_linalg
 from jax._src import random as jax_random
 
-# mypy generates a lot of false positive due to re-assigned variables.
-# mypy: disable-error-code="assignment, no-redef"
-
 # The code in this file relies on the values of some flags that are defined by
 # jtu. Note that the following can not always be moved to a test file since
 # then the test file has to import jtu first (to define the flags) which is not
@@ -2483,7 +2480,7 @@ def _make_reduce_harness(name, *,
                          dtype=np.float32):  # The dtype of first operand
   def reducer(*args):
     init_val = np.array(init_value, dtype=dtype)
-    init_values = [init_val]
+    init_values: list[np.ndarray] = [init_val]
     if nr_operands == 2:
       init_values.append(np.array(0, dtype=np.int32))
     return lax.reduce(args[0:nr_operands], tuple(init_values),

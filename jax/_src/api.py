@@ -675,7 +675,7 @@ def fwd_and_bwd(
     f = lu.wrap_init(fun, params=kwargs, debug_info=dbg)
     f_partial, dyn_args = argnums_partial(
         f, argnums, args, require_static_args_hashable=False)
-    return _vjp(f_partial, *dyn_args, has_aux=has_aux)  # type: ignore
+    return _vjp(f_partial, *dyn_args, has_aux=has_aux)
   def bwd(f_vjp, outgrad):
     g = f_vjp(outgrad)
     g = g[0] if isinstance(argnums, int) else g
@@ -1160,7 +1160,7 @@ def vmap(fun: F,
     # rather than raising an error. https://github.com/jax-ml/jax/issues/2367
     in_axes = tuple(in_axes)
 
-  from jax._src import hijax  # type: ignore
+  from jax._src import hijax  # pytype: disable=import-error
   if not (in_axes is None or type(in_axes) in {int, tuple, *batching.spec_types}
           or isinstance(in_axes, hijax.MappingSpec)):
     raise TypeError("vmap in_axes must be an int, None, or a tuple of entries corresponding "
@@ -1845,8 +1845,8 @@ def _cpp_pmap(
           in_handler=in_handler,
           out_handler=out_handler,
           out_pytree_def=out_pytree_def,
-          input_devices=in_handler.local_devices,
-          input_indices=in_handler.input_indices,
+          input_devices=in_handler.local_devices,  # pyrefly: ignore[bad-argument-type]
+          input_indices=in_handler.input_indices,  # pyrefly: ignore[bad-argument-type]
           input_array_shardings=in_handler.in_shardings,
           out_avals=out_handler.out_avals,
           out_array_shardings=out_array_shardings,
@@ -2087,6 +2087,7 @@ def linearize(fun: Callable, *primals, has_aux: bool = False
                                (in_tree, out_tree), out_pvals), consts)
   if has_aux:
     [aux] = maybe_aux
+    assert aux_tree is not None
     return out_primal_py, lifted_jvp, tree_unflatten(aux_tree, aux)
   else:
     [] = maybe_aux
@@ -2219,8 +2220,8 @@ def _vjp(fun, *primals, has_aux=False):
   out_known = [pval.is_known() for pval in out_pvals]
   id_map = {id(x): i for i, x in enumerate(primals_flat)}
   used, opaque_residuals = set(), []
-  spec = [used.add(id(r)) or RSpec(id_map[id(r)], True) if id(r) in id_map else  # type: ignore
-          RSpec(opaque_residuals.append(r) or (len(opaque_residuals) - 1), False)  # type: ignore
+  spec = [used.add(id(r)) or RSpec(id_map[id(r)], True) if id(r) in id_map else
+          RSpec(opaque_residuals.append(r) or (len(opaque_residuals) - 1), False)
           for r in residuals]
   args_res = tuptree_map(lambda x: x if id(x) in used else NotNeeded(),
                          in_tree, primals_flat)
@@ -2321,7 +2322,7 @@ def _vjp_check_ct_avals(cts, primal_avals):
   # TODO(mattjj): improve this error  by flattening with keys in the first place
   for ct, aval in zip(cts, primal_avals):
     ct_aval = typeof(ct)
-    ct_aval_expected = aval.to_cotangent_aval()
+    ct_aval_expected = aval.to_ct_aval()
     if (not core.typecompat(ct_aval, ct_aval_expected) and
         not _temporary_dtype_exception(ct_aval, ct_aval_expected)):
       raise ValueError(
@@ -2351,7 +2352,7 @@ class VJP:
   out_tree: PyTreeDef
   args_res: list[Any]
   opaque_residuals: list[Any]
-  jaxpr = property(lambda self: self.fun.args[2])  # type: ignore
+  jaxpr = property(lambda self: self.fun.args[2])  # pytype: disable=attribute-error
 
   def __call__(self, out_ct, *extra_args):
     if extra_args:

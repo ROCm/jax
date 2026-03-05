@@ -83,6 +83,11 @@ class custom_transpose:
 
   @traceback_util.api_boundary
   def __call__(self, out_types, res_arg, lin_arg):
+    if self.transpose is None:
+      raise ValueError(
+          "Missing a transpose function. Use @def_transpose to define one."
+      )
+
     _, res_tree = tree_flatten(res_arg)
     _, lin_tree = tree_flatten(lin_arg)
     args_flat, in_tree = tree_flatten((res_arg, lin_arg))
@@ -170,7 +175,7 @@ class CustomTransposePrimitive(core.Primitive):
   def bind(self, *args, **params):
     return self._true_bind(*args, **params)
 
-  def bind_with_trace(self, trace, call_args, params):
+  def bind_with_trace(self, trace, call_args, params, /):
     call, tracers = call_args[0], call_args[1:]
     return trace.process_custom_transpose(self, call, tracers, **params)
 

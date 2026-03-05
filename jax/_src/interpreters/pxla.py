@@ -476,7 +476,7 @@ class MapTrace(core.Trace):
     else:
       return MapTracer(self, val, {})
 
-  def process_primitive(self, primitive, tracers, params):
+  def process_primitive(self, primitive, tracers, params, /):
     from jax._src.lax import parallel  # pytype: disable=import-error
     if primitive is parallel.axis_index_p:
       return self.process_axis_index(**params)  # pytype: disable=missing-parameter
@@ -500,10 +500,10 @@ class MapTrace(core.Trace):
       return [MapTracer(self, val, out_shard_axes) for val in outvals]
     return MapTracer(self, outvals, out_shard_axes)
 
-  def process_call(self, call_primitive, fun, tracers, params):
+  def process_call(self, call_primitive, fun, tracers, params, /):
     raise NotImplementedError
 
-  def process_map(self, map_primitive, fun, tracers, params):
+  def process_map(self, map_primitive, fun, tracers, params, /):
     if params['devices'] is not None:
       raise ValueError("Nested pmap with explicit devices argument.")
     if not config.disable_jit.value:
@@ -528,7 +528,7 @@ class MapTrace(core.Trace):
                            for v, s, dst in zip(out, outaxes, out_axes_thunk()))
     return map(partial(MapTracer, self), out, outaxes)
 
-  def process_custom_jvp_call(self, prim, fun, jvp, tracers, *, symbolic_zeros):
+  def process_custom_jvp_call(self, prim, fun, jvp, tracers, /, *, symbolic_zeros):
     if symbolic_zeros:
       msg = ("custom_jvp with symbolic_zeros=True not supported with eager pmap. "
              "Please open an issue at https://github.com/jax-ml/jax/issues !")
@@ -537,7 +537,7 @@ class MapTrace(core.Trace):
     with core.set_current_trace(self):
       return fun.call_wrapped(*tracers)
 
-  def process_custom_vjp_call(self, primitive, fun, fwd, bwd, tracers,
+  def process_custom_vjp_call(self, primitive, fun, fwd, bwd, tracers, /, *,
                               out_trees, symbolic_zeros):
     if symbolic_zeros:
       msg = ("custom_vjp with symbolic_zeros=True not supported with eager pmap. "
@@ -575,8 +575,8 @@ def _match_annot(axis_name: core.AxisName, axis_size: int, val: Any,
     if src == dst:
       outval = val
     elif type(src) == type(dst) == int:
-      outval = batching.moveaxis(val, src, dst)
-      shard_axis_out = _moveaxis(np.ndim(val), shard_axis_src, src, dst)
+      outval = batching.moveaxis(val, src, dst)  # pyrefly: ignore[bad-argument-type]  # pyrefly#2530
+      shard_axis_out = _moveaxis(np.ndim(val), shard_axis_src, src, dst)  # pyrefly: ignore[bad-argument-type]  # pyrefly#2530
     elif src is None and dst is not None:
       outval = batching.broadcast(val, axis_size, dst, None)
       shard_axis_out = {n: d + (dst <= d) for n, d in shard_axis_out.items()}
@@ -1414,7 +1414,7 @@ def _pmap_partial_eval_custom_params_updater(
 def _pmap_partial_eval_custom_res_maker(params_known, aval):
   return core.unmapped_aval(params_known['axis_size'], 0, aval)
 
-def _pmap_dce_rule(used_outputs, eqn):
+def _pmap_dce_rule(used_outputs, eqn: core.JaxprEqn):
   # just like pe.dce_jaxpr_call_rule, except handles in_axes / out_axes
   if not any(used_outputs) and not pe.has_effects(eqn):
     return [False] * len(eqn.invars), None
@@ -1872,7 +1872,7 @@ class SemanticallyEqualShardings:
     gspmd_shardings = [
         s if (isinstance(s, (UnspecifiedValue, AUTO)) or
               (isinstance(s, NamedSharding) and isinstance(s.mesh, AbstractMesh)))
-        else to_gspmd_sharding(s, a.ndim)  # pytype: disable=attribute-error
+        else to_gspmd_sharding(s, a.ndim)  # type: ignore[missing-attribute]
         for s, a in zip(shardings, avals)]
     self._gspmd_shardings = gspmd_shardings
     self.shardings = shardings
@@ -2179,7 +2179,7 @@ def _concretize_abstract_out_shardings(shardings, avals, device_assignment,
   if device_assignment is None:
     return shardings
 
-  out = []
+  out: list[UnspecifiedValue | JSharding] = []
   for s, a, mem_kind in zip(shardings, avals, out_mem_kinds):
     if isinstance(s, UnspecifiedValue) and isinstance(a, core.ShapedArray):
       if a.sharding.mesh.empty:
@@ -2236,8 +2236,7 @@ def lower_sharding_computation(
   number of out_avals might not be known at that time and
   lower_sharding_computation calculates the number of out_avals so it can apply
   the singleton UNSPECIFIED to all out_avals."""
-  auto_spmd_lowering = check_if_any_auto(
-      it.chain.from_iterable([in_shardings, out_shardings]))
+  auto_spmd_lowering = check_if_any_auto(it.chain(in_shardings, out_shardings))
 
   all_args_info = AllArgsInfo(closed_jaxpr.in_avals, closed_jaxpr.jaxpr._debug_info)
 
@@ -2583,6 +2582,7 @@ def get_out_shardings_from_executable(
     return [sharding_impls.GSPMDSharding.get_replicated(device_list, memory_kind=mk)
             for mk in omk]
 
+  out_op_shardings: Sequence[xc.OpSharding]
   _, out_op_shardings = get_op_sharding_from_executable(xla_executable)
   if not out_op_shardings:
     return None
@@ -2671,7 +2671,7 @@ _orig_out_sharding_handlers[SingleDeviceSharding] = _gspmd_to_single_device_shar
 
 def _get_out_sharding_from_orig_sharding(
     out_shardings, out_avals, orig_in_s, orig_aval):
-  out = []
+  out: list[JSharding] = []
   orig_handler = _orig_out_sharding_handlers[type(orig_in_s)]
   for o, out_aval in safe_zip(out_shardings, out_avals):
     if (isinstance(o, sharding_impls.GSPMDSharding) and
@@ -2913,7 +2913,7 @@ def _maybe_get_and_check_out_shardings(
           dtypes.issubdtype(aval.dtype, dtypes.extended)):
         xla_s = sharding_impls.logical_sharding(aval.shape, aval.dtype, xla_s)
       try:
-        new_out_shardings.append(_gspmd_to_named_sharding(xla_s, aval, orig))  # pytype: disable=wrong-arg-types
+        new_out_shardings.append(_gspmd_to_named_sharding(xla_s, aval, orig))  # type: ignore[arg-type]
       except:
         new_out_shardings.append(xla_s)
     else:
@@ -3054,7 +3054,7 @@ class UnloadedMeshExecutable:
 
     mesh = None
     if auto_spmd_lowering:
-      for i in it.chain.from_iterable([in_shardings, out_shardings]):
+      for i in it.chain(in_shardings, out_shardings):  # pyrefly: ignore[bad-argument-type]
         if isinstance(i, AUTO):
           mesh = i.mesh
           break
@@ -3232,12 +3232,12 @@ class MeshExecutable(stages.Executable):
     return self.xla_executable
 
   def call(self, *args):
-    args_after_dce = [a for i, a in enumerate(args) if i in self._kept_var_idx]
+    args_after_dce = tuple(a for i, a in enumerate(args) if i in self._kept_var_idx)
     if (self._all_args_info is not None and
         self._all_args_info.debug_info.arg_names is not None):
-      arg_names_after_dce = [
+      arg_names_after_dce = tuple(
           n for i, n in enumerate(self._all_args_info.debug_info.arg_names)
-          if i in self._kept_var_idx]
+          if i in self._kept_var_idx)
     else:
       arg_names_after_dce = ("",) * len(args_after_dce)
 
@@ -3281,6 +3281,7 @@ class MeshExecutable(stages.Executable):
         use_fastpath = (all(isinstance(x, xc.ArrayImpl) for x in out_flat)
                         and not self._mut)
       else:
+        out_tree_dispatch = None
         use_fastpath = False
 
       if use_fastpath:

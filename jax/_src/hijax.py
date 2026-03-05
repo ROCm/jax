@@ -83,6 +83,7 @@ class HiPrimitive(core.Primitive):
   def transpose(self, *args, **params):
     assert False, "must override"
 
+AxisName = Any
 
 class HiType(core.AbstractValue):
   is_high = True
@@ -105,7 +106,7 @@ class HiType(core.AbstractValue):
   # autodiff interface
   def to_tangent_aval(self) -> HiType:
     assert False, "must override"
-  def to_cotangent_aval(self) -> HiType:
+  def to_ct_aval(self) -> HiType:
     return self.to_tangent_aval()
   # the next two are required if this type is itself a tangent type
   def vspace_zero(self) -> HiVal:
@@ -124,11 +125,15 @@ class HiType(core.AbstractValue):
     assert False, "must override"
 
   # shard_map interface
-  def shard(self, mesh, manual_axes: frozenset, check_vma: bool, spec: HipSpec
+  def shard(self, mesh, manual_axes: frozenset, check_vma: bool, spec: HiPspec
             ) -> HiType:
     assert False, "must override"
-  def unshard(self, mesh, check_vma: bool, spec: HipSpec) -> HiType:
+  def unshard(self, mesh, check_vma: bool, spec: HiPspec) -> HiType:
     assert False, "must override"
+  def nospec(self, mesh, check_vma: bool, all_names: tuple[AxisName, ...]
+             ) -> HiPspec:
+    assert False, "must override"
+
 
 class MutableHiType(core.AbstractValue):
   is_high = True
@@ -161,7 +166,7 @@ class MutableHiType(core.AbstractValue):
 
   # Subclasses should override if the cotangent type is a function of primal
   # type. For example, CT unreduced = reduced and vice-versa.
-  def to_cotangent_aval(self) -> HiType:
+  def to_ct_aval(self) -> HiType:
     return self.to_tangent_aval()
 
 def register_hitype(val_cls, typeof_fn) -> None:
@@ -297,18 +302,18 @@ effects.custom_derivatives_allowed_effects.add_type(BoxEffect)
 class NewBox(HiPrimitive):
   def is_high(self, *, treedef) -> bool: return True  # type: ignore
 
-  def abstract_eval(self, *, treedef):  # pyrefly: ignore[bad-override]
+  def abstract_eval(self, *, treedef):
     leaves, treedef = tree_flatten(None)
     qdd = BoxTypeState(tuple(leaves), treedef)
     return core.AvalQDD(BoxTy(), qdd), {box_effect}
 
-  def to_lojax(_, *, treedef):  # pyrefly: ignore[bad-override]
+  def to_lojax(_, *, treedef):
     return Box._new(None)
 
   def jvp(_, primals, tangents, *, treedef):  # pyrefly: ignore[bad-override]
     assert False  # TODO
 
-  def transpose(_, *args, treedef):  # pyrefly: ignore[bad-override]
+  def transpose(_, *args, treedef):
     assert False  # TODO
 new_box_p = NewBox('new_box')
 
@@ -317,11 +322,11 @@ class BoxSet(HiPrimitive):
 
   def is_high(self, *leaf_avals, treedef) -> bool: return True  # type: ignore
 
-  def abstract_eval(self, box_ty, *leaf_avals, treedef):  # pyrefly: ignore[bad-override]
+  def abstract_eval(self, box_ty, *leaf_avals, treedef):
     box_ty.mutable_qdd.update(BoxTypeState(leaf_avals, treedef))
     return [], {box_effect}  # TODO better typechecking...
 
-  def to_lojax(_, box, *leaves, treedef):  # pyrefly: ignore[bad-override]
+  def to_lojax(_, box, *leaves, treedef):
     box._val = tree_unflatten(treedef, leaves)
     return []
 
@@ -335,7 +340,7 @@ class BoxSet(HiPrimitive):
     box_set_p.bind(box_dot, *val_dots, treedef=treedef)
     return [], []
 
-  def transpose(_, *args, treedef):  # pyrefly: ignore[bad-override]
+  def transpose(_, *args, treedef):
     assert False  # TODO
 box_set_p = BoxSet('box_set')
 
@@ -343,10 +348,10 @@ box_set_p = BoxSet('box_set')
 class BoxGet(HiPrimitive):
   multiple_results = True
 
-  def abstract_eval(self, box_ty, *, avals):  # pyrefly: ignore[bad-override]
+  def abstract_eval(self, box_ty, *, avals):
     return avals, {box_effect}
 
-  def to_lojax(_, box, *, avals):  # pyrefly: ignore[bad-override]
+  def to_lojax(_, box, *, avals):
     return tree_leaves(box._val)
 
   def jvp(_, primals, tangents, *, avals):  # pyrefly: ignore[bad-override]
@@ -356,7 +361,7 @@ class BoxGet(HiPrimitive):
       box_get_p.bind(box_dot, avals=tuple(a.to_tangent_aval() for a in avals))
     )
 
-  def transpose(_, *args):  # pyrefly: ignore[bad-override]
+  def transpose(_, *args):
     assert False  # TODO
 box_get_p = BoxGet('box_get')
 
@@ -413,6 +418,11 @@ class VJPHiPrimitive:
   def linearized(self, residuals, *tangents):
     raise NotImplementedError(f"for linearize support, subclass {type(self)} "
                               "must implement `lin` and `linearized`")
+
+  # optional transpose rule, for primitives that are linear in some inputs
+  def transpose(self, out_ct, *maybe_accums):
+    raise NotImplementedError(f"for transpose support, subclass {type(self)} "
+                              "must implement `transpose`")
 
   # vmap interface
   def batch(self, axis_data, args, dims):
@@ -510,13 +520,8 @@ class VmapOf(VJPHiPrimitive):
     return tree_map(partial(unmap_zero, self.axis_data), self.in_dims, out, is_leaf=lambda x: x is None)  # type: ignore
 
   def batch_dim_rule(self, axis_data, in_dims):
-
-    def fix_dim(dim, prev_dim):
-      if dim is None:
-        return None
-      return dim if prev_dim is None else (dim - (prev_dim < dim))
-
-    in_dims_ = tree_map(fix_dim, in_dims, self.in_dims, is_leaf=lambda x: x is None)
+    fix = lambda d, d_: d if (d is None or d_ is None) else d - (d_ < d)  # type: ignore
+    in_dims_ = tree_map(fix, in_dims, self.in_dims, is_leaf=lambda x: x is None)  # type: ignore
     out_dim = self.prim.batch_dim_rule(axis_data, in_dims_)  # type: ignore
     return tree_map(lambda d, d_: d + (d_ < d), out_dim, self.out_dim)  # type: ignore
 
@@ -618,6 +623,13 @@ def _call_hi_primitive_jvp(primals, tangents, *, _prim):
   out_tangents_flat = _prim.out_tree.flatten_up_to(out_tangents)
   return out_primals_flat, out_tangents_flat
 ad.primitive_jvps[call_hi_primitive_p] = _call_hi_primitive_jvp
+
+def _call_hi_primitive_transpose(cts_flat, *primals_flat, _prim):
+  cts = tree_unflatten(_prim.out_tree, cts_flat)
+  primals = tree_unflatten(_prim.in_tree, primals_flat)
+  none = _prim.transpose(cts, *primals)
+  assert none is None
+ad.fancy_transposes[call_hi_primitive_p] = _call_hi_primitive_transpose
 
 def _call_hi_primitive_dce(used_outs_flat, eqn):
   _prim = eqn.params['_prim']
@@ -757,7 +769,7 @@ def _vjp_bwd_aval_mismatch_err(path, primal_aval, ct):
     return
   if isinstance(primal_aval, AbstractRef):
     primal_aval = primal_aval.inner_aval
-  expected = primal_aval.to_cotangent_aval()
+  expected = primal_aval.to_ct_aval()
   ct_aval = ct.aval if isinstance(ct, ad_util.SymbolicZero) else typeof(ct)
   if (not core.typematch(expected, ct_aval) and
       not _temporary_dtype_exception(expected, ct_aval) and
@@ -769,7 +781,7 @@ def _vjp_bwd_aval_mismatch_err(path, primal_aval, ct):
 
 def _replace_none(primal_in_aval, maybe_ct):
   if maybe_ct is None:
-    return ad_util.Zero(primal_in_aval.to_cotangent_aval())
+    return ad_util.Zero(primal_in_aval.to_ct_aval())
   else:
     return maybe_ct
 
@@ -849,5 +861,7 @@ class Static:
   val: Any
 
 class MappingSpec: pass
-class HipSpec:
-  def to_lo(self): assert False, "must override"
+class HiPspec:
+  def to_lo(self) -> HiPspec: assert False, "must override"
+  def to_tangent_spec(self) -> HiPspec: assert False, "must override"
+  def to_ct_spec(self) -> HiPspec: assert False, "must override"

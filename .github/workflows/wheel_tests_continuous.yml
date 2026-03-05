@@ -320,7 +320,7 @@ jobs:
       rocm-version: ${{ matrix.rocm-version }}
       clone_main_xla: 1
       upload_artifacts_to_s3: true
-      s3_upload_uri: 's3://jax-ci-amd/rocm-wheels/${{ github.workflow }}/${{ github.run_number }}/${{ github.run_attempt }}'
+      s3_upload_uri: 's3://amd-jax-ci/rocm-wheels/wheel-tests-continuous/${{ github.run_number }}/${{ github.run_attempt }}'
 
   run-pytest-rocm:
     if: ${{ !cancelled() }}

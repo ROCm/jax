@@ -59,34 +59,38 @@ class MemoryRef(pallas_core.MemoryRef):
   def get_ref_aval(self) -> state.TransformedRef | state.AbstractRef:
     # TODO(sharadmv): Clean this up. ShapedArrayWithMemorySpace fails when we
     # try to apply JAX ops to it.
-    return AbstractRef(self.inner_aval, self.memory_space, self.tiling)
+    return AbstractRef(self.inner_aval, self.memory_space, tiling=self.tiling)
 
 
 class AbstractRef(state.AbstractRef):
   """An AbstractRef for SparseCore."""
 
-  tiling: Tiling | None = None
+  tiling: Tiling | None
 
   def __init__(
       self,
       aval: jax_core.AbstractValue,
       memory_space: tpu_core.MemorySpace,
-      tiling: Tiling | None,
+      *,
+      kind: Any | None = None,
+      tiling: Tiling | None = None,
   ):
-    super().__init__(aval, memory_space)
+    super().__init__(aval, memory_space, kind)
 
     self.tiling = tiling
 
-  def update(  # type: ignore[override]
+  def update(
       self,
       inner_aval: Any | None = None,
       memory_space: Any | None = None,
+      kind: Any | None = None,
       tiling: Tiling | None = None,
   ) -> AbstractRef:
     return AbstractRef(
         inner_aval if inner_aval is not None else self.inner_aval,
         memory_space if memory_space is not None else self.memory_space,
-        tiling if tiling is not None else self.tiling,
+        kind=kind if kind is not None else self.kind,
+        tiling=tiling if tiling is not None else self.tiling,
     )
 
 
@@ -169,7 +173,7 @@ class ScalarSubcoreMesh:
 
   @property
   def shape(self):
-    return collections.OrderedDict(core=self.num_cores)
+    return collections.OrderedDict({self.axis_name: self.num_cores})
 
   @property
   def dimension_semantics(self) -> Sequence[str]:
@@ -206,13 +210,13 @@ def _scalar_subcore_mesh_discharge_rule(
     compiler_params = tpu_core.CompilerParams()
   if compiler_params.dimension_semantics is not None:
     raise ValueError("ScalarSubcoreMesh does not support dimension_semantics=")
-  sa_avals = [a for a in in_avals if isinstance(a, jax_core.ShapedArray)]
-  if sa_avals:
-    raise NotImplementedError(
-        f"Cannot close over values in core_map: {sa_avals}"
-    )
-
-  return pallas_core.default_mesh_discharge_rule(
+  jaxpr, in_avals, out_avals, args, is_scalar_const = tpu_core.pass_scalars_as_refs(
+      jaxpr, args, in_avals, out_avals, mesh,
+      # TODO(sharadmv): Delete this once we can pass into SMEM directly on
+      # SparseCore.
+      copy_to_smem=True,
+  )
+  refs_out, out = pallas_core.default_mesh_discharge_rule(
       in_avals,
       out_avals,
       *args,
@@ -225,6 +229,11 @@ def _scalar_subcore_mesh_discharge_rule(
       name=name,
       metadata=metadata,
   )
+  refs_out = [
+      a if not is_scalar else None
+      for is_scalar, a in zip(is_scalar_const, refs_out)
+  ]
+  return refs_out, out
 
 
 pallas_core._core_map_mesh_rules[ScalarSubcoreMesh] = (
@@ -272,8 +281,10 @@ class VectorSubcoreMesh:
 
   @property
   def shape(self):
-    return collections.OrderedDict(
-        core=self.num_cores, subcore=self.num_subcores)
+    return collections.OrderedDict({
+        self.core_axis_name: self.num_cores,
+        self.subcore_axis_name: self.num_subcores,
+    })
 
   @property
   def dimension_semantics(self) -> Sequence[str]:

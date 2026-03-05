@@ -82,7 +82,6 @@ import jax.numpy as jnp
 import numpy as np
 
 # TODO(sharadmv): enable type checking
-# mypy: ignore-errors
 
 NDIndexer = indexing.NDIndexer
 TPUMemorySpace = tpu_core.MemorySpace
@@ -153,8 +152,8 @@ def _maybe_physicalize_block_shape(aval, block_shape):
 class LoweringDynamicShapeEnv:
 
   def __init__(self):
-    self.dim_expr_to_placeholder: dict[shape_poly._DimExpr, int] = {}
-    self.placeholder_to_dim_expr: dict[int, shape_poly._DimExpr] = {}
+    self.dim_expr_to_placeholder: dict[shape_poly._DimExpr, Any] = {}
+    self.placeholder_to_dim_expr: dict[Any, shape_poly._DimExpr] = {}
 
   def to_placeholder(self, dim_expr: Any) -> ir.Value:
     if jax_core.is_constant_dim(dim_expr):
@@ -341,7 +340,7 @@ def _dtype_to_ir_type(dtype: DTypeLike,
     dtype = BOOL_MEMREF_TYPE
   # TODO(justinfu): Remove after mosaic supports unsigned types.
   # This conversion makes mosaic interpret all unsigned types as signed types.
-  type =  mlir.dtype_to_ir_type(jnp.dtype(dtype))
+  type = mlir.dtype_to_ir_type(jnp.dtype(dtype))
   if isinstance(type, ir.IntegerType):
     return ir.IntegerType.get_signless(type.width)
   else:
@@ -464,7 +463,7 @@ def _canonicalize_dimension_semantic(
     dimension_semantic: tpu_core.DimensionSemantics,
 ) -> tpu_core.LiteralDimensionSemantics:
   if isinstance(dimension_semantic, tpu_core.GridDimensionSemantics):
-    return dimension_semantic.value
+    return cast(tpu_core.LiteralDimensionSemantics, dimension_semantic.value)
   return dimension_semantic
 
 
@@ -651,7 +650,7 @@ class MosaicGridMapping:
         # pyrefly: ignore[bad-argument-type]  # pyrefly#2385
         map(
             ir.Attribute.parse,
-            map(_get_semantics, self._dimension_semantics),  # pyrefly: ignore[no-matching-overload]  # pyrefly#2385
+            map(_get_semantics, self._dimension_semantics),
         )
     )
 
@@ -820,7 +819,7 @@ def lower_jaxpr_into_module(
 
     def dynamic_shape_replacement_fn(
         shape: jax_core.Shape,
-    ) -> tuple[int, ...]:
+    ) -> tuple[Any, ...]:
       assert _mosaic_lowering_dynamic_shape_env is not None
       return tuple(
           _mosaic_lowering_dynamic_shape_env.to_placeholder(dim_expr)
@@ -1006,7 +1005,7 @@ def lower_jaxpr_into_module(
     args_dimvars = shape_poly.all_dim_vars(invars)
 
     # This is dimexpr var -> placeholder value for when we jit the dim expr
-    env: dict[str, int] = {}
+    env: dict[str, Any] = {}
     for aval in args_dimvars:
       env[aval] = _mosaic_lowering_dynamic_shape_env.to_placeholder(aval)
 
@@ -1432,7 +1431,7 @@ def _maybe_cast_to_index(cast_to_index, x):
 
 
 def _index_to_start_size_stride(
-    idx: indexing.Slice | int | ir.Value, cast_to_index: bool
+    idx: Any, cast_to_index: bool
 ) -> tuple[ir.Value, int | ir.Value, int, bool]:
   assert not isinstance(idx, slice)
   if isinstance(idx, indexing.Slice):
@@ -1452,7 +1451,7 @@ def _index_to_start_size_stride(
     size = 1
     stride = 1
     squeeze = True
-  return start, size, stride, squeeze
+  return start, size, stride, squeeze  # pyrefly: ignore[bad-return]
 
 
 def _indexer_to_start_size_stride(
@@ -1833,7 +1832,7 @@ def _prng_key_load_lowering_rule(ctx: LoweringRuleContext, *args_flat, args_tree
 
 def _maybe_cast_load_to_bool(
     ctx: LoweringRuleContext, out_aval, val: ir.Value
-) -> tuple[ir.Value, jnp.dtype]:
+) -> ir.Value:
   """Casts a memref load value to bool if the requested value is a bool.
 
   Mosaic does not support boolean-type memrefs, since booleans
@@ -1845,7 +1844,7 @@ def _maybe_cast_load_to_bool(
     val: The input value.
 
   Returns:
-    The loaded value, and the JAX dtype of the input value.
+    The casted value.
   """
   if out_aval.dtype != jnp.bool_:
     return val
@@ -2229,6 +2228,14 @@ def _dot_general_lowering_rule(
     preferred_element_type,
     **_,
 ):
+  for aval in ctx.avals_in:
+    if jnp.issubdtype(aval.dtype, jnp.unsignedinteger):
+      raise NotImplementedError(
+          f"Unsigned integer dtype {aval.dtype} is not supported for"
+          " dot_general (matmul) on the Pallas Mosaic TPU backend because"
+          " dot_general interprets all integer inputs as signed. Consider"
+          " casting to a signed type before the dot operation."
+      )
   (lhs_dims, rhs_dims), _ = dimension_numbers
   (aval_out,) = ctx.avals_out
   out_type = ctx.aval_to_ir_type(aval_out)

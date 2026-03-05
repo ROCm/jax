@@ -14,7 +14,6 @@
 
 """JAX bindings for Mosaic."""
 
-# mypy: ignore-errors
 from __future__ import annotations
 
 import base64
@@ -197,7 +196,8 @@ class CustomCallBackendConfig:
         self.lowered_module_asm_version is None
         or self.lowered_module_asm_version > version
     )
-    with mlir.make_ir_context() as ctx, ir.Location.unknown():
+    ctx = mlir.make_ir_context()
+    with ctx, ir.Location.unknown():
       ctx.allow_unregistered_dialects = True
       module = ir.Module.parse(self.lowered_module_asm)
       pipeline = PassManager.parse(
@@ -397,9 +397,10 @@ def _tpu_custom_call_lowering(
   if all(core.is_constant_shape(aval_out.shape) for aval_out in ctx.avals_out):
     result_shapes = None
   else:
-    result_shapes = [
+    result_shapes = mlir.flatten_ir_values(
         mlir.shape_tensor(mlir.eval_dynamic_shape(ctx, aval_out.shape))
-        for aval_out in ctx.avals_out]
+        for aval_out in ctx.avals_out
+    )
   extra_attributes: dict[str, ir.Attribute] | None = None
   # Add kernel_name and kernel_metadata as attributes to the custom call op.
   # This is because we do not want to pollute the backend_config with this
@@ -408,7 +409,11 @@ def _tpu_custom_call_lowering(
     extra_attributes = dict(kernel_name=ir.StringAttr.get(kernel_name))
   # If the IR version we originally generated the ASM string with is not the
   # same as the one we should have used, we need to downgrade the ASM string.
-  if (ir_version := get_ir_version(ctx)) != config.lowered_module_asm_version:
+  ir_version = get_ir_version(ctx)
+  if (
+      ir_version is not None and
+      ir_version != config.lowered_module_asm_version
+  ):
     config = config.downgrade_lowered_module_asm(ir_version)
   call = mlir.custom_call(
       "tpu_custom_call",
@@ -445,7 +450,7 @@ def _lower_mosaic_module_to_asm(
     *,
     ir_version: int | None = None,
 ) -> tuple[bytes, tuple[bool, bool]]:
-  has_communication, has_custom_barrier = tpu.private_has_communication(  # pyrefly: ignore[missing-attribute]
+  has_communication, has_custom_barrier = tpu.private_has_communication(
       module.operation
   )
   # We'll mutate the module, so clone it

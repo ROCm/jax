@@ -184,9 +184,7 @@ def partition_list(bs: Sequence[bool], l: Sequence[T]) -> tuple[list[T], list[T]
     lists[b].append(x)
   return lists
 
-def merge_lists(bs: Sequence[bool],
-                l0: Sequence[T1],
-                l1: Sequence[T2]
+def merge_lists(bs: Sequence[bool], l0: Sequence[T1], l1: Sequence[T2]
                 ) -> list[T1 | T2]:
   """Merge the elements of two lists based on a mask."""
   assert sum(bs) == len(l1) and len(bs) - sum(bs) == len(l0)
@@ -322,9 +320,9 @@ def weakref_lru_cache(
   return _weakref_lru_cache(f, **kwargs)
 
 def _weakref_lru_cache(f, maxsize, trace_context_in_key, explain):
-  cached_f = lib_weakref_lru_cache.weakref_lru_cache(  # type: ignore
-      config.trace_context if trace_context_in_key else _ignore, f, maxsize,  # type: ignore
-      explain = lambda: explain if config.explain_cache_misses.value else None)  # type: ignore
+  cached_f = lib_weakref_lru_cache.weakref_lru_cache(
+      config.trace_context if trace_context_in_key else _ignore, f, maxsize,
+      explain = lambda: explain if config.explain_cache_misses.value else None)
   register_cache(cached_f, str(f))
   return cached_f
 
