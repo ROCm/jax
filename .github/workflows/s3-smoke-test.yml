@@ -1,0 +1,39 @@
+name: s3-smoke-test
+
+on:
+  push:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  s3-upload:
+    name: S3 smoke upload
+    runs-on: linux-x86-64-1gpu-amd
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::661452401056:role/jax-ci-amd-s3-oidc
+          aws-region: us-east-1
+
+      - name: Send a test file to S3
+        run: |
+          set -euo pipefail
+          python3 -m venv venv
+          source venv/bin/activate
+          pip install boto3 --break-system-packages
+          cat > test.txt <<'EOF'
+          hello from downstream
+          EOF
+          python - <<'PY'
+          import os
+          import boto3
+          bucket = "jax-ci-amd"
+          key = "test.txt"
+          boto3.client("s3").upload_file("test.txt", bucket, key)
+          PY
