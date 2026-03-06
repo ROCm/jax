@@ -143,8 +143,11 @@ class PallasTest(jtu.JaxTestCase, metaclass=PallasTestMetaclass):
     super().setUp()
     self.enter_context(mgpu.core.artificial_shared_memory_limit(artificial_shared_memory_limit))
 
+  def is_wg_semantics(self):
+    return self.LOWERING_SEMANTICS == plgpu.LoweringSemantics.Warpgroup
+
   def skip_if_wg_semantics(self):
-    if self.LOWERING_SEMANTICS == plgpu.LoweringSemantics.Warpgroup:
+    if self.is_wg_semantics():
       self.skipTest("Not supported under WG semantics")
 
   def kernel(self, *args, **kwargs):
@@ -175,7 +178,7 @@ class PallasTest(jtu.JaxTestCase, metaclass=PallasTestMetaclass):
   def default_transforms(
       self, *, swizzle: int = 128, dtype: jnp.dtype
   ) -> Sequence[plgpu.Transform]:
-    if self.LOWERING_SEMANTICS == plgpu.LoweringSemantics.Warpgroup:
+    if self.is_wg_semantics():
       return ()
     swizzle_elems = 8 * swizzle // dtypes.itemsize_bits(dtype)
     return (
@@ -598,7 +601,7 @@ class PallasCallTest(PallasTest, jtu.CudaArchSpecificTest):
         plgpu.SwizzleTransform(128),
     )
 
-    if self.LOWERING_SEMANTICS == plgpu.LoweringSemantics.Warpgroup:
+    if self.is_wg_semantics():
       pallas_call_transforms = ()
     else:
       pallas_call_transforms = transforms
@@ -1444,7 +1447,7 @@ class PallasCallTest(PallasTest, jtu.CudaArchSpecificTest):
     )
     def kernel(x_ref, o_ref):
       del o_ref
-      x = plgpu.layout_cast(x_ref[...], plgpu.Layout.WGMMA_ROW)
+      x = plgpu.layout_cast(x_ref[...], plgpu.Layout.WGMMA.reduce(1))
       plgpu.print_layout("x: {}", x)
 
     x = jnp.arange(math.prod(shape), dtype=jnp.bfloat16).reshape(shape)
@@ -1854,7 +1857,7 @@ class PallasCallTest(PallasTest, jtu.CudaArchSpecificTest):
 
         # We deliberately do a cast here to trigger a layout mismatch.
         return plgpu.layout_cast(
-            jnp.zeros(o_ref.shape, o_ref.dtype), plgpu.Layout.WGMMA_ROW
+            jnp.zeros(o_ref.shape, o_ref.dtype), plgpu.Layout.WGMMA.reduce(1)
         )
       # Cast explicitly to cause the mismatch, otherwise layout inference will
       # succeed at constructing a working program.
@@ -1863,7 +1866,7 @@ class PallasCallTest(PallasTest, jtu.CudaArchSpecificTest):
       )
       _ = jax.lax.while_loop(cond, body, strided_input)
 
-    if self.LOWERING_SEMANTICS == plgpu.LoweringSemantics.Warpgroup:
+    if self.is_wg_semantics():
       with self.assertRaisesRegex(
           ValueError, "Failed to infer a possible set of layouts",
       ):
@@ -2265,7 +2268,7 @@ class PallasCallTest(PallasTest, jtu.CudaArchSpecificTest):
       [aliased_ref] = ref_union
       aliased_ref[...] = x_ref[...]
       plgpu.commit_smem()
-      load_ref = lambda r: plgpu.load(r, (), layout=plgpu.Layout.TCGEN05_ROW)
+      load_ref = lambda r: plgpu.load(r, (), layout=plgpu.Layout.TCGEN05.reduce(1))
       # This is a regression test for b/423697560, where we used to fail to
       # transform the dtype correctly when processing an aliased ref.
       o_smem[...] = load_ref(aliased_ref) + load_ref(y_ref)
@@ -3585,7 +3588,7 @@ class PallasCallSm90ATest(PallasSm90ATest):
 
   @parameterized.product(
       src_memory_space=[plgpu.SMEM, plgpu.GMEM],
-      layout=[plgpu.Layout.WGMMA_ROW, plgpu.Layout.WGMMA_COL],
+      layout=[plgpu.Layout.WGMMA.reduce(1), plgpu.Layout.WGMMA.reduce(0)],
       m=[64, 128, 192],
   )
   def test_load_to_wgmma_row_col_layout_with_indexing(self, src_memory_space, layout, m):
@@ -3607,12 +3610,12 @@ class PallasCallSm90ATest(PallasSm90ATest):
 
   @parameterized.product(
       src_memory_space=[plgpu.SMEM],
-      layout=[plgpu.Layout.WGMMA_ROW, plgpu.Layout.WGMMA_COL],
+      layout=[plgpu.Layout.WGMMA.reduce(1), plgpu.Layout.WGMMA.reduce(0)],
   )
   def test_load_row_input_to_wgmma_with_transforms(self, src_memory_space, layout):
     m, k, n = 64, 128, 192
     key1, key2 = jax.random.split(jax.random.key(42), 2)
-    if layout == plgpu.Layout.WGMMA_ROW:
+    if layout == plgpu.Layout.WGMMA.reduce(1):
       input_shape = (m,)
       broadcast_dim = 0
       expand_dim = 1

@@ -32,8 +32,9 @@ T = TypeVar('T')
 map = safe_map
 
 def add_jaxvals(x: ArrayLike, y: ArrayLike) -> Array:
+  from jax._src.hijax import HiType  # pytype: disable=import-error
   ty = typeof(x)
-  if hasattr(ty, 'vspace_add'):  # TODO(mattjj,dougalm): revise away hasattr
+  if isinstance(ty, HiType):
     return ty.vspace_add(x, y)
   x, y = core.standard_insert_pvary(x, y)
   return add_jaxvals_p.bind(x, y)
@@ -52,8 +53,9 @@ def add_abstract(x, y):
   return x
 
 def zeros_like_aval(aval: core.AbstractValue) -> Array:
-  if hasattr(aval, 'vspace_zero'):  # TODO(mattjj,dougalm): revise away hasattr
-    return aval.vspace_zero()
+  from jax._src.hijax import HiType  # pytype: disable=import-error
+  if isinstance(aval, HiType):
+    return aval.vspace_zero()  # pytype: disable=attribute-error
   return aval_zeros_likers[type(aval)](aval)
 aval_zeros_likers: dict[type, Callable[[Any], Array]] = {}
 
@@ -81,7 +83,7 @@ def p2tz(primal_value):
   return Zero(typeof(primal_value).to_tangent_aval())
 
 def p2cz(primal_value):
-  return Zero(typeof(primal_value).to_cotangent_aval())
+  return Zero(typeof(primal_value).to_ct_aval())
 
 
 def _stop_gradient_impl(x: T) -> T:

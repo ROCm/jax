@@ -1636,7 +1636,8 @@ def _convert_element_type(
     if new_dtype == old_dtype:
       if sharding is None:
         return operand
-      if isinstance(operand, core.Tracer) and operand.aval.sharding == sharding:
+      if (isinstance(operand, core.Tracer) and
+          operand.aval.sharding == sharding):  # pyrefly: ignore[missing-attribute]
         return operand
     if sharding is not None or weak_type:
       raise NotImplementedError
@@ -3584,7 +3585,7 @@ def full_like(x: ArrayLike | DuckTypedArray,
     return dtype._rules.full(fill_shape, fill_value, dtype)  # type: ignore[union-attr]
 
   if sharding is None and shape is None and isinstance(x, core.Tracer):
-    sharding = x.aval.sharding
+    sharding = x.aval.sharding  # pyrefly: ignore[missing-attribute]
   else:
     # If `x` has a sharding but no `_committed` attribute
     # (in case of ShapeDtypeStruct), default it to True.
@@ -4618,9 +4619,9 @@ def _add_transpose(t, x, y):
   # api_test.py's CustomJVPTest.test_jaxpr_zeros.
   # assert ad.is_undefined_primal(x) and ad.is_undefined_primal(y)
   x_aval = x.aval if ad.is_undefined_primal(x) else core.typeof(x)
-  x_aval = x_aval.to_cotangent_aval()
+  x_aval = x_aval.to_ct_aval()
   y_aval = y.aval if ad.is_undefined_primal(y) else core.typeof(y)
-  y_aval = y_aval.to_cotangent_aval()
+  y_aval = y_aval.to_ct_aval()
   if type(t) is ad_util.Zero:
     return [ad_util.Zero(x_aval), ad_util.Zero(y_aval)]
   else:
@@ -4720,8 +4721,8 @@ ad.defjvp(mul_p,
           lambda ydot, x, y: mul(x, ydot))
 ad.defbilinear(
     mul_p,
-    lambda ct, x, y: _unbroadcast(x.aval.to_cotangent_aval(), mul(ct, y)),
-    lambda ct, x, y: _unbroadcast(y.aval.to_cotangent_aval(), mul(x, ct)))
+    lambda ct, x, y: _unbroadcast(x.aval.to_ct_aval(), mul(ct, y)),
+    lambda ct, x, y: _unbroadcast(y.aval.to_ct_aval(), mul(x, ct)))
 mlir.register_lowering(mul_p, partial(_nary_lower_hlo, hlo.multiply))
 
 def _div_transpose_rule(cotangent, x, y):
@@ -4895,7 +4896,7 @@ def _convert_element_type_transpose_rule(ct, operand, *, new_dtype, weak_type,
   assert ad.is_undefined_primal(operand)
   old_dtype = operand.aval.dtype
   old_weak_type = dtypes.is_weakly_typed(operand)
-  operand_ct_aval = operand.aval.to_cotangent_aval()
+  operand_ct_aval = operand.aval.to_ct_aval()
   if type(ct) is ad_util.Zero:
     return [ad_util.Zero(operand_ct_aval)]
   elif core.primal_dtype_to_tangent_dtype(old_dtype) == dtypes.float0:
@@ -5447,7 +5448,7 @@ def _dot_general_transpose_lhs(g, x, y, *, dimension_numbers, precision,
   x_contract_sorted_by_y = list(np.take(x_contract, np.argsort(y_contract)))
   unsorted_axes = list(x_batch) + x_kept + x_contract_sorted_by_y
   out_axes = np.argsort(unsorted_axes)
-  xs = x.aval.to_cotangent_aval().sharding
+  xs = x.aval.to_ct_aval().sharding
   inverse_spec = tuple(xs.spec[o] for o in unsorted_axes)
   ds = xs.update(spec=xs.spec.update(partitions=inverse_spec))
   dot_general_out = dot_general(g, y, dims, precision=precision,
@@ -6436,7 +6437,7 @@ def _broadcast_in_dim_typecheck_rule(
 
 def _broadcast_in_dim_transpose_rule(ct, operand,
                                      shape, broadcast_dimensions, sharding):
-  ct_aval = operand.aval.to_cotangent_aval()
+  ct_aval = operand.aval.to_ct_aval()
   if type(ct) is ad_util.Zero:
     return [ad_util.Zero(ct_aval)]
   if not isinstance(operand, ad.UndefinedPrimal):
@@ -6738,7 +6739,7 @@ def _concatenate_transpose_rule(ct, *operands, dimension):
   operand_shapes = [o.aval.shape if ad.is_undefined_primal(o) else o.shape
                     for o in operands]
   if type(ct) is ad_util.Zero:
-    return [ad_util.Zero(o.aval.to_cotangent_aval())
+    return [ad_util.Zero(o.aval.to_ct_aval())
             if ad.is_undefined_primal(o) else None for o in operands]
   else:
     return split(ct, tuple(shape[dimension] for shape in operand_shapes),
@@ -6797,7 +6798,7 @@ def _split_weak_type_rule(operand, *, sizes, axis):
 def _split_transpose_rule(cotangents, operand, *, sizes, axis):
   assert ad.is_undefined_primal(operand)
   if all(type(t) is ad_util.Zero for t in cotangents):
-    return [ad_util.Zero(operand.aval.to_cotangent_aval())]
+    return [ad_util.Zero(operand.aval.to_ct_aval())]
   cotangents = [ct.instantiate() if type(ct) is ad_util.Zero else ct
                 for ct in cotangents]
   return [concatenate(cotangents, dimension=axis)]
@@ -7217,7 +7218,7 @@ def _reshape_dtype_rule(operand, *, new_sizes, dimensions, sharding):
 
 def _reshape_transpose_rule(ct, operand, *, new_sizes, dimensions, sharding):
   assert ad.is_undefined_primal(operand)
-  op_ct_aval = operand.aval.to_cotangent_aval()
+  op_ct_aval = operand.aval.to_ct_aval()
   if dimensions is None:
     return [reshape(ct, op_ct_aval.shape, out_sharding=op_ct_aval.sharding)]
   else:
@@ -7692,7 +7693,7 @@ def _reduce_sum_transpose_rule(cotangent, operand, *, axes, out_sharding):
   broadcast_dimensions = tuple(np.delete(np.arange(len(input_shape)), axes))
   result = broadcast_in_dim(
       cotangent, input_shape, broadcast_dimensions,
-      out_sharding=operand.aval.to_cotangent_aval().sharding)
+      out_sharding=operand.aval.to_ct_aval().sharding)
   assert result.shape == input_shape
   return [result]
 
@@ -8228,9 +8229,12 @@ def _top_k_lower(ctx, operand, k, axis):
     out_values_aval, out_indices_aval, = ctx.avals_out
     results = mlir.custom_call(
         "stablehlo.dynamic_top_k",
-        result_types=[mlir.aval_to_ir_type(out_values_aval),
-        mlir.aval_to_ir_type(out_indices_aval)],
-        operands=[operand, k_value]).results
+        result_types=mlir.flatten_ir_types([
+            mlir.aval_to_ir_type(out_values_aval),
+            mlir.aval_to_ir_type(out_indices_aval)
+        ]),
+        operands=[operand, k_value],
+    ).results
 
   # Move last dimension back into place
   if perm is not None:
@@ -8419,10 +8423,13 @@ def _rng_bit_generator_lowering(
       mlir.eval_dynamic_shape(ctx, out_vals_aval.shape))
     out_key, out_vals = mlir.custom_call(
         "stablehlo.dynamic_rng_bit_generator",
-        result_types=[key.type,
-                      mlir.aval_to_ir_type(core.ShapedArray(shape, rbg_dtype))],
-        operands=[key, output_shape],
-        extra_attributes=dict(rng_algorithm=algorithm_attr)).results
+        result_types=mlir.flatten_ir_types([
+            key.type,
+            mlir.aval_to_ir_type(core.ShapedArray(shape, rbg_dtype))
+        ]),
+        operands=mlir.flatten_ir_values([key, output_shape]),
+        extra_attributes=dict(rng_algorithm=algorithm_attr),
+    ).results
   else:
     out_key, out_vals = hlo.RngBitGeneratorOp(
         key.type,

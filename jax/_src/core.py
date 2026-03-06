@@ -196,7 +196,7 @@ class Jaxpr:
       self, source_info=source_info, print_shapes=print_shapes,
       custom_pp_eqn_rules=custom_pp_eqn_rules, name_stack=name_stack,
       print_effects=print_effects)
-    return doc.format(**kwargs)
+    return doc.format(**kwargs)  # pyrefly: ignore[missing-attribute]
 
   def _repr_pretty_(self, p, cycle):
     return p.text(self.pretty_print(use_color=True))
@@ -653,7 +653,7 @@ class Primitive:
     finally:
       trace_ctx.set_trace(prev_trace)
 
-  def bind_with_trace(self, trace, args, params):
+  def bind_with_trace(self, trace, args, params, /):
     # TODO(mattjj,dougalm): remove this block?
     try: in_type = map(typeof, args)
     except: pass  # try lojax error message
@@ -785,7 +785,7 @@ class Trace(Generic[TracerType]):
     self._weakref = weakref.ref(self)
     self.requires_low = True
 
-  def process_primitive(self, primitive, tracers, params):
+  def process_primitive(self, primitive, tracers, params, /):
     raise NotImplementedError("must override")
 
   def invalidate(self):
@@ -797,29 +797,29 @@ class Trace(Generic[TracerType]):
   def __repr__(self):
     return f'{self.__class__.__name__}'
 
-  def process_call(self, call_primitive, f, tracers, params):
+  def process_call(self, call_primitive, f, tracers, params, /):
     msg = (f"{type(self)} must override process_call to handle call-like "
            "primitives")
     raise NotImplementedError(msg)
 
-  def process_map(self, map_primitive, f, tracers, params):
+  def process_map(self, map_primitive, f, tracers, params, /):
     msg = (f"{type(self)} must override process_map to handle map-like "
            "primitives")
     raise NotImplementedError(msg)
 
-  def process_custom_jvp_call(self, primitive, fun, jvp, tracers, *,
+  def process_custom_jvp_call(self, primitive, fun, jvp, tracers, /, *,
                               symbolic_zeros):
     msg = (f"{type(self)} must override process_custom_jvp_call "
            "to handle custom_jvp primitives")
     raise NotImplementedError(msg)
 
   def process_custom_transpose(self, prim: Primitive,
-                               call: lu.WrappedFun, tracers, **params):
+                               call: lu.WrappedFun, tracers, /, **params):
     msg = (f"{type(self)} must override process_custom_transpose "
            "to handle custom_transpose_call primitives")
     raise NotImplementedError(msg)
 
-  def process_custom_vjp_call(self, primitive, fun, fwd, bwd, tracers,
+  def process_custom_vjp_call(self, primitive, fun, fwd, bwd, tracers, /, *,
                               out_trees, symbolic_zeros):
     msg = (f"{type(self)} must override process_custom_vjp_call "
            "to handle custom_vjp primitives")
@@ -958,12 +958,16 @@ class Tracer(TracerBase, metaclass=TracerMeta):
     raise NotImplementedError("must override: ", type(self))
 
   def __iter__(self):
+    if not hasattr(self.aval, "_iter"):
+      raise TypeError(f"Value of type {type(self)} is not iterable.")
     return iter(self.aval._iter(self))
 
   def __reversed__(self):
     return iter(self[::-1])
 
   def __len__(self):
+    if not hasattr(self.aval, "_len"):
+      raise TypeError(f"Value of type {type(self)} has no length.")
     return self.aval._len(self)
 
   def to_concrete_value(self):
@@ -1003,10 +1007,12 @@ class Tracer(TracerBase, metaclass=TracerMeta):
 
   @property
   def at(self):
+    if not hasattr(self.aval, "at"):
+      raise TypeError(f"Value of type {type(self)} does not support at().")
     return self.aval.at.fget(self)
 
   @property
-  def aval(self):
+  def aval(self) -> AbstractValue:
     raise NotImplementedError("must override")
 
   def get_referent(self) -> Any:
@@ -1015,34 +1021,48 @@ class Tracer(TracerBase, metaclass=TracerMeta):
   def __bool__(self):
     if is_concrete(self): return bool(self.to_concrete_value())  # pytype: disable=wrong-arg-types
     check_bool_conversion(self)
+    if not hasattr(self.aval, "_bool"):
+      raise TypeError(f"Value of type {type(self)} is not convertible to boolean.")
     return self.aval._bool(self)
 
   def __int__(self):
     if is_concrete(self): return int(self.to_concrete_value())  # pytype: disable=wrong-arg-types
     check_scalar_conversion(self)
+    if not hasattr(self.aval, "_int"):
+      raise TypeError(f"Value of type {type(self)} is not convertible to integer.")
     return self.aval._int(self)
 
   def __float__(self):
     check_scalar_conversion(self)
+    if not hasattr(self.aval, "_float"):
+      raise TypeError(f"Value of type {type(self)} is not convertible to float.")
     return self.aval._float(self)
 
   def __complex__(self):
     check_scalar_conversion(self)
+    if not hasattr(self.aval, "_complex"):
+      raise TypeError(f"Value of type {type(self)} is not convertible to complex.")
     return self.aval._complex(self)
 
   def __hex__(self):
     if is_concrete(self): return hex(self.to_concrete_value())  # pytype: disable=wrong-arg-types
     check_integer_conversion(self)
+    if not hasattr(self.aval, "_hex"):
+      raise TypeError(f"Value of type {type(self)} is not convertible to hex.")
     return self.aval._hex(self)
 
   def __oct__(self):
     if is_concrete(self): return oct(self.to_concrete_value())  # pytype: disable=wrong-arg-types
     check_integer_conversion(self)
+    if not hasattr(self.aval, "_oct"):
+      raise TypeError(f"Value of type {type(self)} is not convertible to oct.")
     return self.aval._oct(self)
 
   def __index__(self):
     if is_concrete(self): return operator.index(self.to_concrete_value())  # pytype: disable=wrong-arg-types
     check_integer_conversion(self)
+    if not hasattr(self.aval, "_index"):
+      raise TypeError(f"Value of type {type(self)} is not convertible to integer index.")
     return self.aval._index(self)
 
   # raises a useful error on attempts to pickle a Tracer.
@@ -1052,14 +1072,27 @@ class Tracer(TracerBase, metaclass=TracerMeta):
              "indicate an attempt to serialize/pickle a traced value."))
 
   # raises the better error message from ShapedArray
-  def __setitem__(self, idx, val): return self.aval._setitem(self, idx, val)
+  def __setitem__(self, key, value):
+    if not hasattr(self.aval, "_setitem"):
+      raise TypeError(f"Value of type {type(self)} is not indexable.")
+    return self.aval._setitem(self, key, value)
 
   # NumPy also only looks up special methods on classes.
-  def __array_module__(self, types): return self.aval._array_module(self, types)
+  def __array_module__(self, types):
+    if not hasattr(self.aval, "_array_module"):
+      raise TypeError(f"Value of type {type(self)} is not compatible with the Array API.")
+    return self.aval._array_module(self, types)
 
   def __getattr__(self, name):
     # if the aval property raises an AttributeError, gets caught here
     assert not config.enable_checks.value or name != "aval"
+
+    # These must raise AttributeError in the base class for backward compatibility.
+    # TODO(jakevdp): can we change this and make them raise NotImplementedError instead?
+    if name in ["block_until_ready", "copy_to_host_async"]:
+      raise AttributeError(
+        f"The '{name}' method is not available on {self._error_repr()}."
+        f"{self._origin_msg()}")
 
     if name == 'sharding':
       raise AttributeError(
@@ -1100,7 +1133,7 @@ class Tracer(TracerBase, metaclass=TracerMeta):
     return base
 
   def __repr__(self):
-    return self._pretty_print(verbose=False).format()
+    return self._pretty_print(verbose=False).format()  # pyrefly: ignore[missing-attribute]
 
   def _contents(self):
     try:
@@ -1115,20 +1148,6 @@ class Tracer(TracerBase, metaclass=TracerMeta):
   def addressable_data(self, index):
     raise ConcretizationTypeError(self,
       f"The addressable_data() method was called on {self._error_repr()}."
-      f"{self._origin_msg()}")
-
-  @property
-  def block_until_ready(self):
-    # Raise AttributeError for backward compatibility with hasattr() and getattr() checks.
-    raise AttributeError(
-      f"The 'block_until_ready' method is not available on {self._error_repr()}."
-      f"{self._origin_msg()}")
-
-  @property
-  def copy_to_host_async(self):
-    # Raise AttributeError for backward compatibility with hasattr() and getattr() checks.
-    raise AttributeError(
-      f"The 'copy_to_host_async' method is not available on {self._error_repr()}."
       f"{self._origin_msg()}")
 
   def delete(self):
@@ -1196,7 +1215,7 @@ def check_eval_args(args):
 
 class EvalTrace(Trace):
 
-  def process_primitive(self, primitive, args, params):
+  def process_primitive(self, primitive, args, params, /):
     if config.debug_key_reuse.value:
       # Import here to avoid circular imports
       from jax.experimental.key_reuse._core import call_impl_with_key_reuse_checks  # pytype: disable=import-error
@@ -1207,7 +1226,7 @@ class EvalTrace(Trace):
       check_eval_args(args)
       return primitive.impl(*args, **params)
 
-  def process_call(self, primitive, f, tracers, params):
+  def process_call(self, primitive, f, tracers, params, /):
     if config.debug_key_reuse.value:
       # Import here to avoid circular imports
       from jax.experimental.key_reuse._core import call_impl_with_key_reuse_checks  # pytype: disable=import-error
@@ -1216,15 +1235,15 @@ class EvalTrace(Trace):
       return primitive.impl(f, *tracers, **params)
   process_map = process_call
 
-  def process_custom_transpose(self, primitive, call, tracers, **_):
+  def process_custom_transpose(self, primitive, call, tracers, /, **_):
     del primitive, _
     return call.call_wrapped(*tracers)
 
-  def process_custom_jvp_call(self, primitive, fun, jvp, tracers, **_):
+  def process_custom_jvp_call(self, primitive, fun, jvp, tracers, /, **_):
     del primitive, jvp, _  # Unused.
     return fun.call_wrapped(*tracers)
 
-  def process_custom_vjp_call(self, primitive, fun, fwd, bwd, tracers, **_):  # pytype: disable=signature-mismatch
+  def process_custom_vjp_call(self, primitive, fun, fwd, bwd, tracers, /, **_):
     del primitive, fwd, bwd, _  # Unused.
     return fun.call_wrapped(*tracers)
 
@@ -1680,7 +1699,7 @@ class AbstractValue:
   def to_tangent_aval(self) -> AbstractValue:
     raise NotImplementedError("must override")
 
-  def to_cotangent_aval(self) -> AbstractValue:
+  def to_ct_aval(self) -> AbstractValue:
     raise NotImplementedError("must override")
 
   # TODO(dougalm): deprecate this alias
@@ -1733,6 +1752,10 @@ class AbstractValue:
   def unshard(self, mesh, check_vma, spec):
     return unshard_aval(mesh, check_vma, spec, self)
 
+  def vspace_add(self, x, y):
+    from jax._src.ad_util import add_jaxvals  # type: ignore
+    return add_jaxvals(x, y)
+
 InputType = tuple[AbstractValue, ...]
 OutputType = tuple[AbstractValue, ...]
 
@@ -1751,7 +1774,7 @@ def valid_jaxtype(x) -> bool:
       return True
 
 
-def mem_kind_to_space(mem_kind: str) -> MemorySpace:
+def mem_kind_to_space(mem_kind: str | None) -> MemorySpace:
   if mem_kind == 'pinned_host':
     return MemorySpace.Host
   return MemorySpace.Device
@@ -2301,7 +2324,7 @@ class ShapedArray(AbstractValue):
         self.weak_type, sharding=self.sharding, vma=self.vma,
         memory_space=self.memory_space)
 
-  def to_cotangent_aval(self):
+  def to_ct_aval(self):
     dtype = primal_dtype_to_tangent_dtype(self.dtype)
     sharding = primal_sharding_to_cotangent_sharding(self.sharding)
     return ShapedArray(
@@ -2324,6 +2347,11 @@ class ShapedArray(AbstractValue):
 
   def update_weak_type(self, weak_type):
     return self.update(weak_type=weak_type)
+
+  def nospec(self, mesh, check_vma, all_names) -> P:
+    # TODO(mattjj, yashkatariya): should use newly all_names in check_vma path?
+    all_names = order_wrt_mesh(mesh, self.vma) if check_vma else all_names
+    return P(all_names) if all_names else P()
 
   _bool    = concretization_function_error(bool)
   _int     = concretization_function_error(int, True)
@@ -2391,11 +2419,8 @@ def primal_dtype_to_tangent_dtype(primal_dtype):
   else:
     return primal_dtype
 
-def primal_spec_to_cotangent_spec(spec):
-  return P(*spec, unreduced=spec.reduced, reduced=spec.unreduced)
-
 def primal_sharding_to_cotangent_sharding(sharding):
-  return sharding.update(spec=primal_spec_to_cotangent_spec(sharding.spec))
+  return sharding.update(spec=sharding.spec.to_ct_spec())
 
 ############################## pvary #################################
 
@@ -2558,7 +2583,7 @@ class Ref(metaclass=RefMeta):
   def at(self): raise NotImplementedError()  # TODO(mattjj)
 
 class ArrayRefImpl:
-  _aval: ShapedArray
+  _aval: AbstractValue
   _buf: Array  # mutable field
 
   def __init__(self, aval, buf):
@@ -2711,7 +2736,7 @@ accum_grad_in_ref_p.def_impl(lambda x: x)  # type: ignore
 class AbstractToken(AbstractValue):
   def str_short(self, short_dtypes=False, mesh_axis_types=False): return 'Tok'
   def to_tangent_aval(self): return self
-  def to_cotangent_aval(self): return self
+  def to_ct_aval(self): return self
 abstract_token: AbstractToken = AbstractToken()
 
 # Singleton shaped array used by all abstract tokens when shape/dtype is needed.
@@ -2997,7 +3022,7 @@ class CallPrimitive(Primitive):
   def bind(self, *args, **params):
     return self._true_bind(*args, **params)
 
-  def bind_with_trace(self, trace, fun_and_args, params):
+  def bind_with_trace(self, trace, fun_and_args, params, /):
     fun = fun_and_args[0]
     args = fun_and_args[1:]
     return trace.process_call(self, fun, args, params)
@@ -3040,7 +3065,7 @@ class MapPrimitive(Primitive):
   def bind(self, *args, **params):
     return self._true_bind(*args, **params)
 
-  def bind_with_trace(self, trace, fun_and_args, params):
+  def bind_with_trace(self, trace, fun_and_args, params, /):
     fun: lu.WrappedFun = fun_and_args[0]
     args = fun_and_args[1:]
     assert len(params['in_axes']) == len(args)
@@ -4035,6 +4060,7 @@ class OpaqueTraceState:
 
 def get_opaque_trace_state(convention=None):
   del convention
+  assert trace_ctx.trace is not None
   return OpaqueTraceState(trace_ctx.trace._weakref)
 
 def nonempty_axis_env() -> bool:

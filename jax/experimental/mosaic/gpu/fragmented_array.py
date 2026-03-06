@@ -21,7 +21,7 @@ import dataclasses
 import functools
 import itertools
 import math
-from typing import Any, Protocol, TypeAlias, TypeVar, cast, overload, runtime_checkable
+from typing import Any, Literal, Protocol, TypeAlias, TypeVar, cast, overload, runtime_checkable
 
 import jax
 import jax.experimental.mosaic.gpu as mgpu
@@ -479,12 +479,16 @@ class WGStridedFragLayout:
       return None
     bw = bitwidth // 8
     assert 8 % bw == 0 and 8 // bw != 0, bw
-    if math.prod(shaped_ty.shape) % WARPGROUP_SIZE != 0:
+    size = math.prod(shaped_ty.shape)
+    if size % WARPGROUP_SIZE != 0:
       return None
-    max_vec_size = np.prod(shaped_ty.shape) // WARPGROUP_SIZE
-    return cls(
-        shape=tuple(shaped_ty.shape), vec_size=min(8 // bw, max_vec_size)
-    )
+    max_vec_size = size // WARPGROUP_SIZE
+    vec_size = min(8 // bw, max_vec_size)
+    while vec_size > 0 and size % (vec_size * WARPGROUP_SIZE) != 0:
+      vec_size //= 2
+    if vec_size == 0:
+      return None
+    return cls(shape=tuple(shaped_ty.shape), vec_size=vec_size)
 
   def registers_element_type(self, t: ir.Type) -> ir.Type:
     return ir.VectorType.get((self.vec_size,), t)
@@ -2764,52 +2768,15 @@ class FragmentedArray:
     )
 
   def broadcast(self, shape) -> FragmentedArray:
+    new_layout: FragmentedLayout
     if isinstance(self.layout, WGStridedFragLayout):
-      src_shape, dst_shape = self.layout.shape, shape
-      if len(src_shape) > len(dst_shape):
-        raise ValueError(
-            f"Shape length mismatch. Expected len({src_shape}) <= len({dst_shape})"
-        )
-      if not all(s == 1 or s == d for s, d in zip(src_shape[::-1], dst_shape[::-1])):
-        raise ValueError(
-            "Can broadcast if all source dimensions match trailing target"
-            " dimensions by being equal or set to 1. Broadcasting from"
-            f" {src_shape} to {dst_shape}"
-        )
-      rank_diff = len(dst_shape) - len(src_shape)
-      src_shape = tuple([1] * rank_diff + list(src_shape))
-
-      assert len(src_shape) == len(dst_shape), (src_shape, dst_shape)
-      len_suffix = next(
-          (i for i in range(len(src_shape)) if src_shape[~i] != dst_shape[~i]),
-          len(src_shape)
-      )
-      if len_suffix > 0 and all(x == 1 for x in src_shape[:-len_suffix]):
-        return FragmentedArray(
-            _registers=np.tile(self.registers, np.prod(dst_shape[:-len_suffix])),
-            _layout=WGStridedFragLayout(shape, self.layout.vec_size),
-            _is_signed=self.is_signed,
-        )
-
-      raise NotImplementedError(
-          "Only major-most broadcast for WGStridedFragLayout is implemented."
-          f" Broadcasting from: {src_shape}, to: {dst_shape}."
-      )
-
-    if not isinstance(self.layout, WGSplatFragLayout):
+      new_layout = WGStridedFragLayout(shape, self.layout.vec_size)
+    elif isinstance(self.layout, WGSplatFragLayout):
+      new_layout = WGSplatFragLayout(shape)
+    else:
       raise NotImplementedError(self.layout)
-
-    if self.shape == shape:
-      return self
-
-    if not self.layout.can_broadcast_to(shape):
-      raise ValueError(f"Can't broadcast {self.shape} to {shape}")
-
-    return FragmentedArray(
-        _registers=self.registers,
-        _layout=WGSplatFragLayout(shape),
-        _is_signed=self.is_signed,
-    )
+    dims = range(len(shape) - len(self.shape), len(shape))
+    return self.broadcast_in_dim(shape, dims, new_layout)
 
   def reshape(self, shape: tuple[int, ...]) -> FragmentedArray:
     if self.shape == shape:
@@ -2866,7 +2833,7 @@ class FragmentedArray:
       self, shape, source_dimensions, layout: FragmentedLayout
   ) -> FragmentedArray:
     for i, target_dim in enumerate(source_dimensions):
-      if self.shape[i] != shape[target_dim]:
+      if self.shape[i] != shape[target_dim] and self.shape[i] != 1:
         raise ValueError(
             f"Dimension {i} has size {self.shape[i]} in source shape and"
             f" {shape[target_dim]} in shape after broadcast"
@@ -2876,19 +2843,44 @@ class FragmentedArray:
         self.registers.item(), shape, layout, is_signed=self.is_signed
       )
     if isinstance(self.layout, WGStridedFragLayout) and isinstance(layout, WGStridedFragLayout):
-      new_dims = set(range(len(shape))) - set(source_dimensions)
-      vec_match = self.layout.vec_size == layout.vec_size
-      broadcast_dim_match = new_dims == set(range(len(new_dims)))
-      assert layout.shape == shape, (layout.shape, shape)
-      if vec_match and broadcast_dim_match:
-        return FragmentedArray(
-            _registers=np.tile(
-                self.registers,
-                np.prod(shape[:len(new_dims)]),
-            ),
-            _layout=layout,
-            _is_signed=self.is_signed,
+      if self.layout.vec_size != layout.vec_size:
+        raise NotImplementedError(
+            "vector size must match for broadcast of WGStridedFragLayout"
         )
+      # Check if input maps exactly to the end (prevents transpose & trailing
+      # dims).
+      if list(source_dimensions) != list(
+          range(len(shape) - len(self.shape), len(shape))
+      ):
+        raise NotImplementedError(
+            "Broadcast of trailing dimensions is not supported for"
+            " WGStridedFragLayout"
+        )
+      # Identify input indices that are expanded vs. those that are preserved
+      # Expansion: input is 1, output is > 1.
+      # Preserved: input is > 1.
+      exp_indices, pre_indices = [], []
+      for i, dim in enumerate(self.shape):
+        if dim == 1 and shape[source_dimensions[i]] > 1:
+          exp_indices.append(i)
+        if dim > 1:
+          pre_indices.append(i)
+      # If both exist, all expansions must happen before all preserved
+      # dimensions.
+      if exp_indices and pre_indices and max(exp_indices) >= min(pre_indices):
+        raise NotImplementedError(
+            "Broadcast of trailing dimensions is not supported for"
+            " WGStridedFragLayout"
+        )
+      assert layout.shape == shape, (layout.shape, shape)
+      return FragmentedArray(
+          _registers=np.tile(
+              self.registers,
+              np.prod(shape) // np.prod(self.shape),
+          ),
+          _layout=layout,
+          _is_signed=self.is_signed,
+      )
     if not isinstance(self.layout, TiledLayout) or not isinstance(layout, TiledLayout):
       raise NotImplementedError(self.layout, layout)
     if any(d1 >= d2 for d1, d2 in zip(source_dimensions, source_dimensions[1:])):
@@ -3017,7 +3009,12 @@ class FragmentedArray:
       utils.debug_print(fmt_str, *idx, val, uniform=False)
 
   def store_untiled(
-      self, ref: ir.Value | utils.MultimemRef, *, swizzle: int = 16, optimized: bool = True
+      self,
+      ref: ir.Value | utils.MultimemRef,
+      *,
+      swizzle: int = 16,
+      optimized: bool = True,
+      atomic: Literal["add"] | None = None,
   ) -> None:
     if not isinstance(ref.type, ir.MemRefType):
       raise ValueError(ref)
@@ -3025,12 +3022,18 @@ class FragmentedArray:
       case WGSplatFragLayout():
         if isinstance(ref, utils.MultimemRef):
           raise NotImplementedError("Splat layout does not support multimem")
+        if atomic is not None:
+          raise NotImplementedError(
+              "Atomic stores not supported for splat layout"
+          )
         # All values are the same so swizzle does not affect anything here.
         self._store_untiled_splat(ref)
       case WGStridedFragLayout():
         if swizzle != 16:
           raise ValueError("Only TiledLayouts support swizzling")
         assert isinstance(self.layout, WGStridedFragLayout)
+        if atomic is not None:
+          raise NotImplementedError("Atomic stores not supported for warpgroup strided layouts")
         for get, _update, ref, idx in self.transfer_strided(ref, self.layout.vec_size):
           if isinstance(ref, utils.MultimemRef):
             ref.store(get(self.registers), idx)
@@ -3039,7 +3042,7 @@ class FragmentedArray:
       case TiledLayout():
         ref_shape = ir.MemRefType(ref.type).shape
         ref = utils.memref_reshape(ref, (*(1 for _ in ref_shape), *ref_shape))
-        self.store_tiled(ref, swizzle=swizzle, optimized=optimized)
+        self.store_tiled(ref, swizzle=swizzle, optimized=optimized, atomic=atomic)
       case _:
         raise NotImplementedError(self.layout)
 
@@ -3189,10 +3192,64 @@ class FragmentedArray:
       swizzle: int | None,
       optimized: bool = True,
       tiling_rank: int | None = None,
+      atomic: Literal["add"] | None = None,
   ):
     if not isinstance(self.layout, TiledLayout):
       raise NotImplementedError(self.layout)
     layout, shape = self.layout, self.shape
+    if atomic is not None:
+      if isinstance(ref, utils.MultimemRef):
+        raise NotImplementedError("Multimem refs do not support atomic stores")
+      if any(isinstance(d, Replicated) for d in layout.warp_dims + layout.lane_dims):
+        raise NotImplementedError(
+            "Atomic stores not supported for layouts with replicated dims"
+        )
+      is_smem = utils.is_smem_ref(ref)
+      scope = "cta" if is_smem else "gpu"
+      space = ".shared::cta" if is_smem else ""
+      ptr_constraint = "r" if is_smem else "l"
+      stores = self.transfer_tiled(
+          ref, swizzle, layout, shape, optimized, ref_tiling_rank=tiling_rank
+      )
+      i32 = ir.IntegerType.get_signless(32)
+      element_type = self.mlir_dtype
+      element_bitwidth = utils.bitwidth(element_type)
+      if isinstance(element_type, ir.F32Type):
+        ptx_type = "f32"
+      elif isinstance(element_type, ir.IntegerType) and element_bitwidth == 32:
+        ptx_type = "s32" if self.is_signed else "u32"
+      elif isinstance(element_type, ir.F16Type):
+        ptx_type = "noftz.f16x2"
+      elif isinstance(element_type, ir.BF16Type):
+        ptx_type = "noftz.bf16x2"
+      else:
+        raise NotImplementedError(
+            f"Unsupported element type for atomic stores: {element_type}"
+        )
+      for get, _update, _idx, base_ptr in stores:
+        vreg = get(self.registers)
+        [vec_len] = vreg.type.shape
+        if element_bitwidth == 16:
+          if vec_len % 2 != 0:
+            raise NotImplementedError(
+                f"f16/bf16 atomic stores require even vector length,"
+                f" got {vec_len}"
+            )
+        vreg = utils.bitcast(vreg, ir.VectorType.get(
+            (vec_len * element_bitwidth // 32,), i32,
+        ))
+        [i32_vec_len] = vreg.type.shape
+        for i in range(i32_vec_len):
+          reg = llvm.extractelement(vreg, arith.constant(i32, i))
+          ptr = utils.getelementptr(base_ptr, [i], i32)
+          llvm.inline_asm(
+              ir.Type.parse("!llvm.void"),
+              [ptr, reg],
+              f"red{space}.relaxed.{scope}.{atomic}.{ptx_type} [$0], $1;",
+              f"{ptr_constraint},r",
+              has_side_effects=True,
+          )
+      return
     # Note that the loop below will "race" for layouts that replicate data.
     # However, in that case all of the racing writes store the same data, which
     # is ok in the CUDA memory model.

@@ -178,7 +178,7 @@ def lower_pipelined_jaxpr_into_module(
   if dimension_semantics is None:
     dimension_semantics = ("arbitrary",) * len(grid)  # type: ignore
   dimension_semantics: Sequence[tpu_core.LiteralDimensionSemantics] = tuple(  # pyrefly: ignore[redefinition]  # pytype: disable=annotation-type-mismatch
-      map(tc_lowering._canonicalize_dimension_semantic, dimension_semantics)  # type: ignore[arg-type]
+      map(tc_lowering._canonicalize_dimension_semantic, dimension_semantics)
   )
 
   is_semaphore = []
@@ -257,7 +257,7 @@ def lower_pipelined_jaxpr_into_module(
     )
     pipeline.emit_pipeline(
         body_fn,
-        grid=sequential_grid,
+        grid=sequential_grid,  # pyrefly: ignore[bad-argument-type]
         in_specs=map(make_block_spec, in_block_mappings),
         out_specs=map(make_block_spec, out_block_mappings),
         tiling=tiling,
@@ -345,7 +345,6 @@ def lower_pipelined_jaxpr_into_module(
         kernel_type=kernel_type,
         mesh=mesh,
     )
-  return module
 
 
 def lower_jaxpr_into_module(
@@ -359,7 +358,7 @@ def lower_jaxpr_into_module(
     kernel_type: tpu_core.CoreType,
     mesh: mesh_lib.Mesh | None = None,
     dynamic_shape_replacement_enabled: bool = False,
-) -> ir.Module:
+):
   """Lowers a Jaxpr to a Mosaic SparseCore module."""
   if dynamic_shape_replacement_enabled:
     raise NotImplementedError(
@@ -1024,7 +1023,7 @@ def _extract_indirect_offsets_from_indexer(
 
 
 def _extract_indirect_offsets(
-    transforms: Sequence[ir.Value], expected_shape: tuple[int, ...]
+    transforms: Sequence[state.Transform], expected_shape: tuple[int, ...]
 ) -> tuple[ir.Value | None, Sequence[state.Transform]]:
   for i, indexer in enumerate(transforms):
     if not isinstance(indexer, indexing.NDIndexer):
@@ -1118,7 +1117,7 @@ def _jaxpr_call_lowering_rule(
       program_ids[axis] = user_grid_indices[axis]
   new_lowering_ctx = dataclasses.replace(
       ctx.lowering_context,
-      block_shapes=tuple(ref_block_shapes),  # type: ignore
+      block_shapes=tuple(ref_block_shapes),
       user_grid_indices=program_ids,
   )
   return tc_lowering.jaxpr_subcomp(new_lowering_ctx, jaxpr, *args)

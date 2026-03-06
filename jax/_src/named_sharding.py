@@ -18,7 +18,7 @@ from collections.abc import Sequence
 import collections
 import dataclasses
 import functools
-from typing import Any, Union
+from typing import Any, Union, overload
 
 from jax._src.util import use_cpp_class, cache, use_cpp_method
 from jax._src.lib import xla_client as xc
@@ -204,7 +204,7 @@ class NamedSharding(JSharding.Sharding):
       raise ValueError('is_fully_addressable is not implemented for '
                        '`jax.sharding.AbstractMesh`.')
     # return False if addressable_device_list is empty.
-    return self._internal_device_list.is_fully_addressable  # type: ignore
+    return self._internal_device_list.is_fully_addressable
 
   @property
   def _is_concrete(self) -> bool:
@@ -228,7 +228,7 @@ class NamedSharding(JSharding.Sharding):
     array_mapping = get_array_mapping(self.spec)
     mesh_shape = self.mesh.shape
     num_partitions = 1
-    for name in array_mapping:  # type: ignore
+    for name in array_mapping:
       num_partitions *= mesh_shape[name]
     return num_partitions == 1
 
@@ -285,6 +285,18 @@ def flatten_spec(spec):
       out.append(s)
   return out
 
+
+@overload
+def get_array_mapping(axis_resources: PartitionSpec) -> ArrayMapping:
+  ...
+
+@overload
+def get_array_mapping(axis_resources: AUTO) -> AUTO:
+  ...
+
+@overload
+def get_array_mapping(axis_resources: UnspecifiedValue) -> UnspecifiedValue:
+  ...
 
 def get_array_mapping(
     axis_resources: PartitionSpec | AUTO | UnspecifiedValue
@@ -404,7 +416,7 @@ def named_sharding_to_xla_hlo_sharding(
 
   replicated_mesh_axes = []
   for i, (axis_name, axis_val) in enumerate(mesh_shape.items()):
-    if axis_name not in array_mapping:  # type: ignore
+    if axis_name not in array_mapping:
       replicated_mesh_axes.append((i, axis_val))
 
   if len(replicated_mesh_axes) == len(mesh_shape) and not special_axes:
@@ -412,7 +424,7 @@ def named_sharding_to_xla_hlo_sharding(
 
   mesh_permutation = []
   new_mesh_shape = [1] * num_dimensions
-  for name, pos in sorted(array_mapping.items(), key=lambda x: x[1]):  # type: ignore
+  for name, pos in sorted(array_mapping.items(), key=lambda x: x[1]):
     new_mesh_shape[pos] *= mesh_shape[name]
     mesh_permutation.append(mesh_axis_pos[name])
 
@@ -468,11 +480,11 @@ def array_mapping_to_axis_resources(array_mapping: ArrayMapping):
     reverse_map[index].append(axis)
     if index > max_index:
       max_index = index
-  partitions = []
+  partitions: list[MeshAxisName | None] = []
   for i in range(max_index + 1):
     axis = reverse_map[i]
     if axis:
-      partitions.append(axis[0] if len(axis) == 1 else tuple(axis))
+      partitions.append(axis[0] if len(axis) == 1 else tuple(axis))  # pytype: disable=container-type-mismatch
     else:
       partitions.append(None)
   return PartitionSpec(*partitions)

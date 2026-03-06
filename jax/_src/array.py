@@ -334,7 +334,7 @@ class ArrayImpl(basearray.Array):
     else:
       return repr(self)
 
-  def __getitem__(self, idx):
+  def __getitem__(self, idx):  # pyrefly: ignore[bad-param-name-override]
     from jax._src.lax import lax  # pytype: disable=import-error
     from jax._src.numpy import indexing  # pytype: disable=import-error
     self._check_if_deleted()
@@ -360,7 +360,7 @@ class ArrayImpl(basearray.Array):
         dims = tuple(i for i, x in enumerate(cidx) if isinstance(x, int))
         # Squeeze on committed arrays to avoid data movement to shard 0.
         out = lax.squeeze(out, dimensions=dims)
-
+        assert isinstance(out, ArrayImpl)
         return ArrayImpl(
             out.aval, sharding, [out], committed=False, _skip_checks=True)
 
@@ -372,7 +372,7 @@ class ArrayImpl(basearray.Array):
     else:
       assert self.is_fully_replicated or self.is_fully_addressable
       if dispatch.is_single_device_sharding(self.sharding) or self.is_fully_replicated:
-        return (sl for chunk in self._chunk_iter(100) for sl in chunk._unstack())
+        return (sl for chunk in self._chunk_iter(100) for sl in chunk._unstack())  # pyrefly: ignore[missing-attribute]
       elif isinstance(self.sharding, PmapSharding):
         return (self[i] for i in range(self.shape[0]))
       else:
@@ -433,10 +433,10 @@ class ArrayImpl(basearray.Array):
     """
     return self.sharding.is_fully_addressable
 
-  def __array__(self, dtype=None, context=None, copy=None):
+  def __array__(self, dtype=None, context=None, copy=None):  # pyrefly: ignore[bad-override]
     # copy argument is supported by np.asarray starting in numpy 2.0
     kwds = {} if copy is None else {'copy': copy}
-    return np.asarray(self._value, dtype=dtype, **kwds)
+    return np.asarray(self._value, dtype=dtype, **kwds)  # pyrefly: ignore[no-matching-overload]
 
   def __dlpack__(self, *, stream: int | Any | None = None,
                  max_version: tuple[int, int] | None = None,
@@ -464,10 +464,10 @@ class ArrayImpl(basearray.Array):
 
     from jax._src.dlpack import DLDeviceType  # pytype: disable=import-error  # pylint: disable=g-import-not-at-top
 
-    if self.platform() == "cpu":
+    if self.platform() == "cpu":  # pyrefly: ignore[missing-attribute]
       return DLDeviceType.kDLCPU, 0
 
-    elif self.platform() == "gpu":
+    elif self.platform() == "gpu":  # pyrefly: ignore[missing-attribute]
       platform_version = _get_device(self).client.platform_version
       if "cuda" in platform_version:
         dl_device_type = DLDeviceType.kDLCUDA
@@ -533,7 +533,7 @@ class ArrayImpl(basearray.Array):
   def addressable_data(self, index: int) -> ArrayImpl:
     self._check_if_deleted()
     if self.is_fully_replicated:
-      return self._fully_replicated_shard()
+      return self._fully_replicated_shard()  # pyrefly: ignore[missing-attribute]
     return self._arrays[index]
 
   @functools.cached_property
@@ -550,7 +550,7 @@ class ArrayImpl(basearray.Array):
     if self.is_deleted():
       return Format(None, self.sharding)
     try:
-      return Format(Layout.from_pjrt_layout(self._pjrt_layout),
+      return Format(Layout.from_pjrt_layout(self._pjrt_layout),  # pyrefly: ignore[missing-attribute]
                     self.sharding)
     except _jax.JaxRuntimeError as e:
       msg, *_ = e.args
@@ -586,7 +586,7 @@ class ArrayImpl(basearray.Array):
       return
     for buf in self._arrays:
       buf.delete()
-    self._arrays = None
+    self._arrays = None  # pyrefly: ignore[bad-assignment]
     self._npy_value = None
 
   @use_cpp_method()
@@ -760,11 +760,12 @@ def make_array_from_callback(
     raise TypeError(
         "`Layout.AUTO` cannot be used in place of a device-local"
         f" layout when calling `jax.make_array_from_callback`. Got {sharding}")
-  sharding = sharding.sharding if isinstance(sharding, Format) else sharding
-  if not isinstance(sharding, Sharding):
+  processed_sharding = sharding.sharding if isinstance(sharding, Format) else sharding
+  if not isinstance(processed_sharding, Sharding):
     raise TypeError(
-        f"sharding should be an instance of `jax.sharding`. Got {sharding} of"
-        f" type {type(sharding)}")
+        f"sharding should be an instance of `jax.sharding`. Got {processed_sharding} of"
+        f" type {type(processed_sharding)}")
+  sharding = processed_sharding
 
   def get_data(
       index: Index | None,
@@ -789,7 +790,7 @@ def make_array_from_callback(
     return r
 
   if sharding.is_fully_replicated:
-    devices = list(sharding._internal_device_list.addressable_device_list)  # type: ignore
+    devices = list(sharding._internal_device_list.addressable_device_list)
     # Only compute data once.
     per_device_values = [get_data((slice(None),) * len(shape))] * len(devices)
   else:
@@ -830,7 +831,7 @@ def make_array_from_callback(
     )
 
   if dll is not None:
-    devices = [Format(dll, SingleDeviceSharding(d)) for d in devices]  # type: ignore
+    devices = [Format(dll, SingleDeviceSharding(d)) for d in devices]
     # pxla.batched_device_put doesn't support Layout... Take the slow route
     arrays = api.device_put(per_device_values, devices)
     return ArrayImpl(aval, sharding, arrays, committed=True)
@@ -1102,11 +1103,11 @@ def make_array_from_single_device_arrays(
   if dtypes.issubdtype(aval.dtype, dtypes.extended):
     return aval.dtype._rules.make_sharded_array(aval, sharding, arrays,
                                                 committed=True)
-  arrays = list(arrays) if isinstance(arrays, tuple) else arrays
+  arrays = list(arrays) if isinstance(arrays, tuple) else arrays  # pyrefly: ignore[no-matching-overload]  # pyrefly#2607
   # TODO(phawkins): ideally the cast() could be checked.
   try:
     return ArrayImpl(aval, sharding, cast(Sequence[ArrayImpl], arrays),
-                    committed=True)
+                     committed=True)
   except TypeError:
     if not isinstance(arrays, list):
       raise TypeError("jax.make_array_from_single_device_arrays `arrays` "
@@ -1155,7 +1156,7 @@ def as_slice_indices(arr: Any, idx: Index) -> tuple[
   removed_dims: list[int] = []
 
   tuple_idx = idx if isinstance(idx, tuple) else (idx,)
-  for dim, sub_idx in enumerate(tuple_idx):
+  for dim, sub_idx in enumerate(tuple_idx):  # pyrefly: ignore[bad-argument-type]
     if isinstance(sub_idx, int):
       start_indices[dim] = sub_idx
       limit_indices[dim] = sub_idx + 1
@@ -1333,5 +1334,5 @@ def _token_global_result_handler(global_aval, out_sharding, committed):
       core.get_token_aval(), out_sharding, committed)
   def wrapper(array):
     return core.Token(array)
-  return array_handler.wrap(wrapper)  # type: ignore
+  return array_handler.wrap(wrapper)
 pxla.global_result_handlers[core.AbstractToken] = _token_global_result_handler

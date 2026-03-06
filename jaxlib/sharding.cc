@@ -28,6 +28,7 @@ limitations under the License.
 
 #include "absl/base/casts.h"
 #include "absl/hash/hash.h"
+#include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
@@ -169,11 +170,11 @@ NamedSharding::NamedSharding(nb::object mesh, nb_class_ptr<PartitionSpec> spec,
   // TODO(phawkins): this leaks a reference to the check_pspec function.
   // A better way to fix this would be to move PartitionSpec and this check into
   // C++.
-  auto init_fn = []() {
+  static xla::SafeStatic<nb::object> check_pspec_init;
+  nb::object& check_pspec = check_pspec_init.Get([]() {
     nb::module_ si = nb::module_::import_("jax._src.named_sharding");
     return std::make_unique<nb::object>(si.attr("check_pspec"));
-  };
-  nb::object& check_pspec = xla::SafeStaticInit<nb::object>(init_fn);
+  });
   check_pspec(mesh_, spec_);
 }
 

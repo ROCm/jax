@@ -16,6 +16,7 @@
 
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("@rules_cc//cc:cc_test.bzl", "cc_test")
+load("@rules_python//python:py_binary.bzl", "py_binary")
 load(
     "//jaxlib:jax.bzl",
     "cc_proto_library",
@@ -280,10 +281,13 @@ nanobind_pywrap_extension(
     srcs = ["weakref_lru_cache.cc"],
     pytype_srcs = ["weakref_lru_cache.pyi"],
     deps = [
+        ":nb_class_ptr",
         ":reentrant_hash_map",
         "@com_google_absl//absl/algorithm:container",
         "@com_google_absl//absl/base:core_headers",
         "@com_google_absl//absl/cleanup",
+        "@com_google_absl//absl/container:flat_hash_map",
+        "@com_google_absl//absl/container:flat_hash_set",
         "@com_google_absl//absl/container:inlined_vector",
         "@com_google_absl//absl/hash",
         "@com_google_absl//absl/log:check",
@@ -333,6 +337,7 @@ nanobind_pywrap_extension(
         "//jaxlib/mlir:ir",
     ],
     enable_stub_generation = True,
+    postprocess_stubgen = "//jaxlib:backport_stubs",
     pytype_deps = py_deps(["numpy"]),
     pytype_srcs = glob(["_jax/*.pyi"]),
     stub_replacement_patterns = {
@@ -445,6 +450,11 @@ nanobind_pywrap_extension(
     }),
 )
 
+py_binary(
+    name = "backport_stubs",
+    srcs = ["backport_stubs.py"],
+)
+
 cc_library(
     name = "pprof_profile_builder",
     srcs = ["pprof_profile_builder.cc"],
@@ -543,7 +553,6 @@ cc_library(
         "@com_google_absl//absl/base:core_headers",
         "@com_google_absl//absl/container:flat_hash_set",
         "@com_google_absl//absl/log:check",
-        "@com_google_absl//absl/status",
         "@com_google_absl//absl/synchronization",
         "@com_google_absl//absl/types:span",
         "@nanobind",
@@ -869,6 +878,7 @@ cc_library(
         "@xla//xla/pjrt:lru_cache",
         "@xla//xla/python:nb_helpers",
         "@xla//xla/python:nb_numpy",
+        "@xla//xla/python:safe_static_init",
         "@xla//xla/python/ifrt",
         "@xla//xla/python/ifrt:user_context",
         "@xla//xla/tsl/concurrency:ref_count",
@@ -1446,6 +1456,7 @@ cc_library(
         "@com_google_absl//absl/container:inlined_vector",
         "@com_google_absl//absl/hash",
         "@com_google_absl//absl/log",
+        "@com_google_absl//absl/log:check",
         "@com_google_absl//absl/strings",
         "@com_google_absl//absl/strings:str_format",
         "@com_google_absl//absl/types:span",

@@ -140,7 +140,7 @@ def force_tpu_interpret_mode(params: InterpretParams = InterpretParams()):
     config.pallas_tpu_interpret_mode_context_manager.set_local(prev)
 
 def set_tpu_interpret_mode(params: InterpretParams = InterpretParams()):
-  config.pallas_tpu_interpret_mode_context_manager.set_global(params)  # type: ignore[arg-type]
+  config.pallas_tpu_interpret_mode_context_manager.set_global(params)
 
 
 # TODO(jburnim): Do we want to support multiple instances of SharedMemory?
@@ -212,6 +212,7 @@ def _initialize_shared_memory(
           clean_up_barrier=threading.Barrier(
               num_devices, action=_clear_shared_memory
           ),
+          logging_mode=interpret_params.logging_mode,
       )
   assert _shared_memory.num_cores == num_cores
 
@@ -303,6 +304,7 @@ def _allocate_buffer(
     local_core_id: Array | None,
     memory_space: Array,
     val: Array,
+    source_info: source_info_util.SourceInfo | None = None,
 ):
   """Allocates a memory buffer on the device with id `device_id` and core with id `local_core_id`.
 
@@ -316,6 +318,7 @@ def _allocate_buffer(
       buffer in. If the corresponding memory space is "any" (i.e. HBM), at most
       one buffer will be allocated and it will belong to (local) core id 0.
     val: Array of values to initialize the allocated buffer with.
+    source_info: Information about the source code location of the allocation.
 
   Returns:
     Integer id for the allocated buffer.
@@ -356,7 +359,14 @@ def _allocate_buffer(
         val = val.copy()
 
     shared_memory.allocate_buffer(
-        key, ref_count=ref_count, value=np.array(val)
+        key,
+        ref_count=ref_count,
+        value=np.array(val),
+        logging_info=interpret_utils.LoggingInfo(
+            device_id=device_id,
+            local_core_id=lci,
+            source_info=source_info,
+        ),
     )
     local_core_id_to_buffer_id[lci] = buffer_id
 
@@ -375,7 +385,9 @@ def _local_core_id_or_zero_if_hbm(local_core_id: int, memory_space: str) -> int:
   return local_core_id
 
 
-def _deallocate_buffer(device_id, local_core_id, memory_space, buffer_id):
+def _deallocate_buffer(
+    device_id, local_core_id, memory_space, buffer_id, source_info=None
+):
   device_id = int(device_id)
   local_core_id = int(local_core_id)
   memory_space = TPU_MEMORY_SPACE_NAMES[int(memory_space)]
@@ -385,7 +397,14 @@ def _deallocate_buffer(device_id, local_core_id, memory_space, buffer_id):
 
   shared_memory = _get_shared_memory()
   key = (memory_space, buffer_id, device_id, local_core_id)
-  shared_memory.deallocate_buffer(key)
+  shared_memory.deallocate_buffer(
+      key,
+      logging_info=interpret_utils.LoggingInfo(
+          device_id=device_id,
+          local_core_id=local_core_id,
+          source_info=source_info,
+      ),
+  )
 
 
 def _allocate_semaphores(
@@ -532,7 +551,14 @@ def get(
   key = (memory_space, buffer_id, device_id, local_core_id_for_buffer)
   read_range = interpret_utils.to_range(transforms)
   ret, (shape, dtype), clock_ = shared_memory.get_buffer_content(
-      key, read_range, global_core_id
+      key,
+      read_range,
+      global_core_id,
+      logging_info=interpret_utils.LoggingInfo(
+          device_id=device_id,
+          local_core_id=local_core_id,
+          source_info=source_info,
+      ),
   )
   clock = clock if clock is not None else clock_
 
@@ -657,7 +683,15 @@ def store(
   key = (memory_space, buffer_id, device_id, local_core_id_for_buffer)
   write_range = interpret_utils.to_range(transforms)
   in_bounds, (shape, _), clock_ = shared_memory.store_buffer_content(
-      key, write_range, val, global_core_id
+      key,
+      write_range,
+      val,
+      global_core_id,
+      logging_info=interpret_utils.LoggingInfo(
+          device_id=device_id,
+          local_core_id=local_core_id,
+          source_info=source_info,
+      ),
   )
   clock = clock if clock is not None else clock_
 
@@ -728,7 +762,16 @@ def swap(
   key = (memory_space, buffer_id, device_id, local_core_id_for_buffer)
   read_write_range = interpret_utils.to_range(transforms)
   ret, (shape, _), clock = shared_memory.swap_buffer_content(
-      key, read_write_range, val, mask, global_core_id
+      key,
+      read_write_range,
+      val,
+      mask,
+      global_core_id,
+      logging_info=interpret_utils.LoggingInfo(
+          device_id=device_id,
+          local_core_id=local_core_id,
+          source_info=source_info,
+      ),
   )
 
   if ret is None:
@@ -847,7 +890,12 @@ class DMA:
       # Signal the send semaphore.
       if self.src_sem is not None:
         self.src_sem.signal(
-            self.data_size, self.src_global_core_id, clock=self.clock
+            self.data_size, self.src_global_core_id, clock=self.clock,
+            logging_info=interpret_utils.LoggingInfo(
+                device_id=self.src_device_id,
+                local_core_id=self.src_local_core_id,
+                source_info=self.source_info,
+            ),
         )
 
       self.state = DmaState.READ
@@ -887,7 +935,12 @@ class DMA:
         vc.inc_vector_clock(self.clock, self.virtual_device_id)
 
       self.dst_sem.signal(
-          self.data_size, self.dst_global_core_id, clock=self.clock
+          self.data_size, self.dst_global_core_id, clock=self.clock,
+          logging_info=interpret_utils.LoggingInfo(
+              device_id=self.dst_device_id,
+              local_core_id=self.dst_local_core_id,
+              source_info=self.source_info,
+          ),
       )
 
       self.data = None
@@ -993,7 +1046,7 @@ def dma_start(
   dma.execute_read_and_write()
 
 
-def dma_wait(device_id, local_core_id, sem_id, size):
+def dma_wait(device_id, local_core_id, sem_id, size, source_info=None):
   shared_memory = _get_shared_memory()
 
   device_id = int(device_id)
@@ -1007,7 +1060,15 @@ def dma_wait(device_id, local_core_id, sem_id, size):
       [sem_id], global_core_id
   )
   assert sem is not None
-  sem.wait(size, global_core_id, has_tasks=True)
+  sem.wait(
+      size,
+      global_core_id,
+      has_tasks=True,
+      logging_info=interpret_utils.LoggingInfo(
+          device_id=device_id, local_core_id=local_core_id,
+          source_info=source_info,
+      ),
+  )
 
 
 def semaphore_signal(
@@ -1017,6 +1078,7 @@ def semaphore_signal(
     inc,
     target_device_id,
     target_local_core_id,
+    source_info=None,
 ):
   shared_memory = _get_shared_memory()
 
@@ -1042,10 +1104,15 @@ def semaphore_signal(
       inc,
       shared_memory.get_global_core_id(target_device_id, target_local_core_id),
       clock,
+      logging_info=interpret_utils.LoggingInfo(
+          device_id=device_id,
+          local_core_id=local_core_id,
+          source_info=source_info,
+      ),
   )
 
 
-def semaphore_wait(device_id, local_core_id, sem_id, value):
+def semaphore_wait(device_id, local_core_id, sem_id, value, source_info=None):
   shared_memory = _get_shared_memory()
 
   device_id = int(device_id)
@@ -1058,7 +1125,15 @@ def semaphore_wait(device_id, local_core_id, sem_id, value):
       [sem_id], global_core_id
   )
   assert sem is not None
-  sem.wait(value, global_core_id)
+  sem.wait(
+      value,
+      global_core_id,
+      logging_info=interpret_utils.LoggingInfo(
+          device_id=device_id,
+          local_core_id=local_core_id,
+          source_info=source_info,
+      ),
+  )
 
 
 _SEMAPHORE = mosaic_core.MemorySpace.SEMAPHORE
@@ -1271,7 +1346,9 @@ def _interpret_jaxpr(
               memory_space = _forward_any_to_hbm(v.aval.memory_space)
             allocs.append(
                 callback.io_callback(
-                    _allocate_buffer,
+                    functools.partial(
+                        _allocate_buffer, source_info=eqn.source_info
+                    ),
                     jax.ShapeDtypeStruct((), jnp.int16),
                     device_id,
                     local_core_id,
@@ -1297,7 +1374,9 @@ def _interpret_jaxpr(
             pass
           else:
             callback.io_callback(
-                _deallocate_buffer,
+                functools.partial(
+                    _deallocate_buffer, source_info=eqn.source_info
+                ),
                 None,
                 device_id,
                 local_core_id,
@@ -1423,7 +1502,7 @@ def _interpret_jaxpr(
         read_shape = src_ref_aval.shape
         read_dtype = src_ref_aval.dtype
         callback.io_callback(
-            dma_wait,
+            functools.partial(dma_wait, source_info=eqn.source_info),
             (),
             device_id,
             local_core_id,
@@ -1449,7 +1528,7 @@ def _interpret_jaxpr(
             target_device_id, eqn.params['device_id_type'], axis_sizes,
             axis_indices)
         callback.io_callback(
-            semaphore_signal,
+            functools.partial(semaphore_signal, source_info=eqn.source_info),
             (),
             device_id,
             local_core_id,
@@ -1476,12 +1555,6 @@ def _interpret_jaxpr(
             ordered=True,
         )
         out = []
-
-      elif prim is primitives.atomic_rmw_p:
-        raise NotImplementedError('atomic_rmw_p')
-
-      elif prim is primitives.atomic_cas_p:
-        raise NotImplementedError('atomic_cas_p')
 
       else:
         if interpret_params.skip_floating_point_ops and all(
@@ -1714,7 +1787,7 @@ def interpret_pallas_call(
     mosaic_params = mosaic_core.CompilerParams()
   else:
     assert isinstance(compiler_params, mosaic_core.CompilerParams)
-    mosaic_params = compiler_params  # type: ignore[assignment]
+    mosaic_params = compiler_params
   del compiler_params
 
   args = [remove_memory_space_p.bind(a) for a in args]
@@ -1845,15 +1918,15 @@ def interpret_pallas_call(
     is_input = i < grid_mapping.num_inputs
     is_output = (output_idx >= 0) and (output_idx < grid_mapping.num_outputs)
     aval = var.aval
-    memory_space = _forward_any_to_hbm(aval.memory_space)
+    memory_space = _forward_any_to_hbm(aval.memory_space)  # pyrefly: ignore[missing-attribute]
     if memory_space is _SEMAPHORE:
       kernel_buffer_ids.append(
           callback.io_callback(
               _allocate_semaphores,
-              jax.ShapeDtypeStruct(aval.shape, jnp.int16),
+              jax.ShapeDtypeStruct(aval.shape, jnp.int16),  # pyrefly: ignore[missing-attribute]
               device_id,
               None,  # local_core_id
-              aval.shape,
+              aval.shape,  # pyrefly: ignore[missing-attribute]
               ordered=True,
           )
       )
@@ -1877,7 +1950,7 @@ def interpret_pallas_call(
               None,  # local_core_id,
               TPU_MEMORY_SPACE_IDXS[memory_space],
               interpret_params.get_uninitialized_array(
-                  var.aval.shape, var.aval.dtype
+                  var.aval.shape, var.aval.dtype  # pyrefly: ignore[missing-attribute]
               ),
               ordered=True,
           )
@@ -2156,7 +2229,7 @@ def interpret_pallas_call(
           assert len(next_start_indices[num_inputs + j].shape) == 1
           transform = indexing.NDIndexer(
               indices=tuple(
-                  indexing.ds(st, sz) if not iid else st  # type: ignore[misc]
+                  indexing.ds(st, sz) if not iid else st  # pyrefly: ignore[bad-argument-type]
                   for st, sz, iid in zip(
                       cur_start_indices[num_inputs + j],
                       block_shapes[num_inputs + j],

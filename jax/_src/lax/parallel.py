@@ -50,8 +50,8 @@ from jax._src.util import (canonicalize_axis, moveaxis, safe_map, safe_zip,
                            unzip2)
 import numpy as np
 
-unsafe_map, map = map, safe_map  # type: ignore
-unsafe_zip, zip = zip, safe_zip  # type: ignore
+unsafe_map, map = map, safe_map
+unsafe_zip, zip = zip, safe_zip
 
 
 ### parallel traceables
@@ -1477,7 +1477,7 @@ def _ragged_all_to_all_lowering(
   if not all(split_count == len(g) for g in replica_groups):
     raise ValueError('Replica groups must be equally sized')
 
-  ragged_all_to_all_attrs = {
+  ragged_all_to_all_attrs: dict[str, ir.Attribute] = {
       "replica_groups": _replica_groups_hlo(replica_groups)
   }
   is_spmd = isinstance(

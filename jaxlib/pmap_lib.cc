@@ -296,10 +296,12 @@ class PmapFunction {
                                   size_t nargs, PyObject* kwnames);
 
   nb::object PythonSignature() {
-    const nb::module_& inspect = xla::SafeStaticInit<nb::module_>([]() {
-      return std::make_unique<nb::module_>(nb::module_::import_("inspect"));
+    static xla::SafeStatic<nb::object> signature_fn_init;
+    const nb::object& signature_fn = signature_fn_init.Get([]() {
+      return std::make_unique<nb::object>(
+          nb::module_::import_("inspect").attr("signature"));
     });
-    return inspect.attr("signature")(fun_);
+    return signature_fn(fun_);
   }
 
   int cache_size() {

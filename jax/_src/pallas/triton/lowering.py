@@ -56,7 +56,6 @@ import jax.numpy as jnp
 import numpy as np
 
 # TODO(sharadmv): Enable type checking.
-# mypy: ignore-errors
 # pytype: skip-file
 
 _T = TypeVar("_T")
@@ -183,7 +182,7 @@ def _bcast(
     x_aval: jax_core.ShapedArray,
     y_aval: jax_core.ShapedArray,
     out_aval: jax_core.ShapedArray,
-) -> ir.Value:
+) -> tuple[ir.Value, ir.Value]:
   if isinstance(
       x, (np.ndarray, np.number, int, float, literals.TypedNdArray)
   ):
@@ -250,7 +249,7 @@ def _process_grid_to_3d_grid(grid_mapping: GridMapping):
   prog_id_dims = launch_grid[num_collapse:]
 
   if len(collapse_dims) == 0:
-    prog_ids = [None] * len(prog_id_dims)
+    prog_ids: list[ir.Value | None] = [None] * len(prog_id_dims)
     for i in range(len(prog_id_dims)):
       prog_ids[launch_grid_to_pallas_grid[i]] = _program_id(i, prog_id_dims)
 
@@ -261,7 +260,7 @@ def _process_grid_to_3d_grid(grid_mapping: GridMapping):
   assert new_grid[0] < 2**31 - 1, \
           "Cannot fix pallas kernel launch grid within CUDA limits"
 
-  out_indices = [None] * len(grid_mapping.grid)
+  out_indices: list[ir.Value | None] = [None] * len(grid_mapping.grid)
 
   grid0 = _program_id(0, new_grid)
   for i, s in enumerate(collapse_dims):
@@ -416,7 +415,7 @@ def lower_jaxpr_to_triton_ir(
     rule_ctx = LoweringRuleContext(ctx, avals_in, avals_out, eqn_block_infos)  # pyrefly: ignore[bad-argument-type]  # pyrefly#2385
     try:
       with source_info_util.user_context(eqn.source_info.traceback), loc:
-        outvals = rule(rule_ctx, *invals, **eqn.params)
+        outvals: Any = rule(rule_ctx, *invals, **eqn.params)
     except LoweringError:
       raise  # We only add the extra info to the innermost exception.
     except Exception as e:
@@ -503,72 +502,6 @@ def _atomic_rmw(
   )
 
 
-@register_lowering(primitives.atomic_rmw_p)
-def _atomic_lowering_rule(
-    ctx: LoweringRuleContext,
-    *args_flat,
-    args_tree,
-    atomic_type: primitives.AtomicOpType,
-):
-  block_info, *_ = ctx.block_infos
-  assert block_info is not None
-  ptr, indexers, val, mask = args_tree.unflatten(args_flat)
-  *_, value_aval, mask_aval = args_tree.unflatten(ctx.avals_in)
-  indexers = list(indexers)
-  if not indexers or not isinstance(indexers[-1], indexing.NDIndexer):
-    ref_aval = state.transform_type(indexers, ctx.avals_in[0])
-    assert isinstance(ref_aval, state.AbstractRef)
-    indexers.append(NDIndexer.make_trivial_indexer(ref_aval.shape))
-  if len(indexers) != 1:
-    raise NotImplementedError("Only single indexer is supported.")
-  idx = indexers[0]
-  ptr = _compute_pointers_from_indices(ptr, block_info, idx)
-  val = _ensure_ir_value(val, value_aval)
-  if mask is not None:
-    mask = _ensure_ir_value(mask, mask_aval)
-  if atomic_type == primitives.AtomicOpType.XCHG:
-    op = tt_dialect.RMWOp.XCHG
-  elif atomic_type == primitives.AtomicOpType.ADD:
-    if isinstance(val.type, ir.IntegerType):
-      op = tt_dialect.RMWOp.ADD
-    else:
-      op = tt_dialect.RMWOp.FADD
-  elif atomic_type == primitives.AtomicOpType.MIN:
-    op = tt_dialect.RMWOp.MIN
-  elif atomic_type == primitives.AtomicOpType.MAX:
-    op = tt_dialect.RMWOp.MAX
-  elif atomic_type == primitives.AtomicOpType.AND:
-    op = tt_dialect.RMWOp.AND
-  elif atomic_type == primitives.AtomicOpType.OR:
-    op = tt_dialect.RMWOp.OR
-  elif atomic_type == primitives.AtomicOpType.XOR:
-    op = tt_dialect.RMWOp.XOR
-  else:
-    raise NotImplementedError(f"unsupported atomic operation: {atomic_type}")
-  return _atomic_rmw(op, ptr, val, mask=mask)
-
-
-@register_lowering(primitives.atomic_cas_p)
-def _atomic_cas_lowering_rule(ctx: LoweringRuleContext, ptr, cmp, val):
-  _, cmp_aval, val_aval = ctx.avals_in
-  if isinstance(ptr.type, ir.RankedTensorType):
-    ptr_type = ir.RankedTensorType(ptr.type)
-    element_type = tt_dialect.PointerType(ptr_type.element_type)
-    result_type = ir.RankedTensorType.get(
-        ptr_type.shape, element_type.pointee_type, ptr_type.encoding
-    )
-  else:
-    result_type = tt_dialect.PointerType(ptr.type).pointee_type
-  return tt_dialect.atomic_cas(
-      result_type,
-      ptr,
-      _ensure_ir_value(cmp, cmp_aval),
-      _ensure_ir_value(val, val_aval),
-      sem=tt_dialect.MemSemantic.ACQUIRE_RELEASE,
-      scope=tt_dialect.MemSyncScope.GPU,
-  )
-
-
 def _associative_scan_lowering(body, ctx: LoweringRuleContext, args, axes):
   flat_args = tree_util.tree_leaves(args)
   (axis,) = axes
@@ -635,7 +568,7 @@ class _Extern:
         for aval, arg_type in zip(avals, self.arg_types)
     )
 
-  def lower(self, ctx: LoweringRuleContext, *args: Sequence[ir.Value]):
+  def lower(self, ctx: LoweringRuleContext, *args: ir.Value):
     [out_aval] = ctx.avals_out
     bcast_args = []
     for aval, arg, arg_type in zip(ctx.avals_in, args, self.arg_types):
@@ -670,7 +603,7 @@ class _Fallback:
         for aval, arg_class in zip(avals, self.arg_classes)
     )
 
-  def lower(self, ctx: LoweringRuleContext, *args: Sequence[ir.Value]):
+  def lower(self, ctx: LoweringRuleContext, *args: ir.Value):
     [out_aval] = ctx.avals_out
     bcast_args = []
     for aval, arg in zip(ctx.avals_in, args):
@@ -1381,7 +1314,7 @@ def debug_print_lowering_rule(
 
 def _set_attr(v: ir.Value, name: str, attr: ir.Attribute) -> None:
   if not isinstance(v, ir.BlockArgument):
-    v.owner.attributes[name] = attr
+    v.owner.attributes[name] = attr  # pyrefly: ignore[missing-attribute]
     return
 
   arg = ir.BlockArgument(v)
@@ -1406,18 +1339,6 @@ def _multiple_of_rule(ctx: LoweringRuleContext, x, values: Sequence[int]):
   return x
 
 
-@register_lowering(primitives.max_contiguous_p)
-def _max_contiguous_rule(ctx: LoweringRuleContext, x, values: Sequence[int]):
-  [x_aval] = ctx.avals_in
-  assert len(x_aval.shape) == len(values)
-  _set_attr(
-      x,
-      "tt.contiguity",
-      ir.DenseIntElementsAttr.get(np.asarray(values, dtype=np.int32)),
-  )
-  return x
-
-
 @register_lowering(sp.broadcast_to_p)
 def _broadcast_to_rule(ctx: LoweringRuleContext, x, shape: Sequence[int]):
   (x_aval,) = ctx.avals_in
@@ -1433,7 +1354,7 @@ def _integer_pow_rule(ctx: LoweringRuleContext, x, *, y: int):
   if is_reciprocal:
     y = -y
 
-  acc = None
+  acc: ir.Value | None = None
   while y > 0:
     y, mod = divmod(y, 2)
     if mod:
@@ -1554,7 +1475,7 @@ def _make_range(start: int, end: int) -> ir.Value:
   )
 
 
-def _full(t: ir.Type, v: Any) -> ir.Type:
+def _full(t: ir.Type, v: Any) -> ir.Value:
   element_type = _element_type(t)
   if isinstance(element_type, ir.IntegerType):
     result = arith_dialect.constant(element_type, int(v))
@@ -1921,9 +1842,11 @@ def _compute_offsets_from_indices(
 
     if isinstance(index, primitives.Slice):
       if index.is_dynamic_start or (index.stride != 1):
-        start = index.start
         if not index.is_dynamic_start:
-          start = _ir_constant(start, offset_eltype)
+          start = _ir_constant(index.start, offset_eltype)
+        else:
+          assert isinstance(index.start, ir.Value)
+          start = index.start
         start = _ir_cast(start, offset_eltype, signed=False)
 
         iota = _ir_cast(
@@ -2273,7 +2196,7 @@ def _masked_swap_lowering_rule(
       other = _bcast_to(value, shape)
 
   old_value = _load(ptr, mask=mask, other=other)
-  _store(ptr, value, mask=mask, eviction_policy=eviction_policy)
+  _store(ptr, value, mask=mask, eviction_policy=eviction_policy)  # pyrefly: ignore[bad-argument-type]
   return old_value
 
 
@@ -2323,6 +2246,14 @@ def _dot_general_lowering(
     precision,
     preferred_element_type,
 ):
+  for aval in ctx.avals_in:
+    if jnp.issubdtype(aval.dtype, jnp.unsignedinteger):
+      raise NotImplementedError(
+          f"Unsigned integer dtype {aval.dtype} is not supported for"
+          " dot_general (matmul) on the Pallas Triton GPU backend because"
+          " dot_general interprets all integer inputs as signed. Consider"
+          " casting to a signed type before the dot operation."
+      )
   del preferred_element_type, out_sharding  # Unused.
   ((a_contract_dim,), (b_contract_dim,)), batch_dims = dimension_numbers
   assert batch_dims == ((), ())
@@ -2605,11 +2536,11 @@ def _lower_jaxpr_to_for_loop(
   if step != 1:
     raise NotImplementedError
   if bound_type is None or bound_type.width == 32:
-    step = _i32_constant(step)
+    step_val = _i32_constant(step)
   else:
-    step = _i64_constant(step)
+    step_val = _i64_constant(step)
 
-  for_op = scf_dialect.ForOp(lower_bound, upper_bound, step, args)
+  for_op = scf_dialect.ForOp(lower_bound, upper_bound, step_val, args)
   with ir.InsertionPoint.at_block_begin(for_op.body):
     loop_index = for_op.induction_variable
     for_body_args = [for_op.body.arguments[i + 1] for i, _ in enumerate(args)]

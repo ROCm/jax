@@ -44,7 +44,6 @@ from jax._src.core import (
     ClosedJaxpr, new_jaxpr_eqn, Var, DropVar, Atom, JaxprEqn, Primitive,
     mapped_aval, unmapped_aval, get_referent, JaxprEqnContext, typeof)
 from jax._src.lib import _jax
-from jax._src.lib import jaxlib_extension_version
 from jax._src.source_info_util import SourceInfo
 from jax._src.state.types import AbstractRef, ReadEffect
 from jax._src.tree_util import FlatTree, PyTreeDef, treedef_tuple
@@ -67,11 +66,7 @@ AttrKind = Any
 PyTree = Any
 logger = logging.getLogger(__name__)
 
-# TODO(phawkins): remove after jaxlib 0.9.1 is the minimum
-if jaxlib_extension_version >= 406:
-  TracebackScope = _jax.TracebackScope
-else:
-  TracebackScope = contextlib.nullcontext  # type: ignore
+TracebackScope = _jax.TracebackScope
 
 
 class PartialVal(tuple):
@@ -183,7 +178,7 @@ class JaxprTrace(Trace['JaxprTracer']):
       with core.set_current_trace(self.parent_trace):
         return core.cur_qdd(const)
 
-  def process_primitive(self, primitive, tracers, params):
+  def process_primitive(self, primitive, tracers, params, /):
     with core.set_current_trace(self.parent_trace):
       if primitive in custom_partial_eval_rules:
         tracers = map(self.to_jaxpr_tracer, tracers)
@@ -222,7 +217,7 @@ class JaxprTrace(Trace['JaxprTracer']):
       out_tracer.recipe = eqn
       return out_tracer
 
-  def process_call(self, primitive, f: lu.WrappedFun, tracers, params):  # pyrefly: ignore[bad-param-name-override]
+  def process_call(self, primitive, f: lu.WrappedFun, tracers, params, /):
     tracers = map(self.to_jaxpr_tracer, tracers)
     rule = call_partial_eval_rules.get(primitive)
     if rule:
@@ -264,7 +259,7 @@ class JaxprTrace(Trace['JaxprTracer']):
     num_new_args = len(res_tracers) + len(env_tracers)  # pyrefly: ignore[bad-argument-type]  # pyrefly#2385
     new_jaxpr = convert_constvars_jaxpr(jaxpr)
     if isinstance(primitive, core.ClosedCallPrimitive):
-      new_jaxpr = close_jaxpr(new_jaxpr)  # type: ignore
+      new_jaxpr = close_jaxpr(new_jaxpr)
     staged_params = dict(params, call_jaxpr=new_jaxpr)
     staged_params = update_params(staged_params, map(op.not_, in_knowns),
                                   num_new_args)
@@ -278,7 +273,7 @@ class JaxprTrace(Trace['JaxprTracer']):
     for t in out_tracers: t.recipe = eqn
     return merge_lists(out_knowns, out_tracers, out_consts)
 
-  def process_map(self, primitive, f: lu.WrappedFun, tracers, params):  # pyrefly: ignore[bad-param-name-override]
+  def process_map(self, primitive, f: lu.WrappedFun, tracers, params, /):
     tracers = map(self.to_jaxpr_tracer, tracers)
     update_params = call_param_updaters.get(primitive) or (lambda p, _, __: p)
     in_knowns, in_avals, in_consts = partition_pvals([t.pval for t in tracers])
@@ -350,7 +345,7 @@ class JaxprTrace(Trace['JaxprTracer']):
   def _current_truncated_name_stack(self):
     return source_info_util.current_name_stack()[len(self.name_stack):]
 
-  def process_custom_jvp_call(self, prim, fun, jvp, tracers, symbolic_zeros):  # pyrefly: ignore[bad-override]
+  def process_custom_jvp_call(self, prim, fun, jvp, tracers, /, *, symbolic_zeros):
     tracers = map(self.to_jaxpr_tracer, tracers)
     if all(t.is_known() for t in tracers):
       with core.set_current_trace(self.parent_trace):
@@ -362,7 +357,7 @@ class JaxprTrace(Trace['JaxprTracer']):
     with core.set_current_trace(self):
       return fun.call_wrapped(*tracers)
 
-  def process_custom_transpose(self, prim, call, tracers, **params):
+  def process_custom_transpose(self, prim, call, tracers, /, **params):
     tracers = map(self.to_jaxpr_tracer, tracers)
     res_ts, lin_ts = split_list(tracers, [params['res_tree'].num_leaves])  # pyrefly: ignore[bad-argument-type]  # pyrefly#2385
     assert all(t.is_known()     for t in res_ts)
@@ -381,7 +376,7 @@ class JaxprTrace(Trace['JaxprTracer']):
       for t in out_tracers: t.recipe = eqn
       return out_tracers
 
-  def process_custom_vjp_call(self, prim, f, fwd, bwd, tracers, out_trees, symbolic_zeros):  # pyrefly: ignore[bad-param-name-override]
+  def process_custom_vjp_call(self, prim, f, fwd, bwd, tracers, /, *, out_trees, symbolic_zeros):
     tracers = map(self.to_jaxpr_tracer, tracers)
     if all(t.is_known() for t in tracers):
       vals = [t.pval[1] for t in tracers]
@@ -794,7 +789,7 @@ def tracers_to_jaxpr(
   env_vars, env_vals = unzip2(env.items())
   invars = [*env_vars, *map(get_atom, in_tracers)]
   const_vars, const_vals = unzip2(consts.items())
-  outvars = map(get_atom, out_tracers)  # type: ignore[arg-type]
+  outvars = map(get_atom, out_tracers)
   jaxpr_effects = make_jaxpr_effects(const_vars, invars, outvars, eqns)
   is_high |= any(x.aval.is_high for x in it.chain(const_vars, invars, outvars))  # pyrefly: ignore[bad-argument-type]  # pyrefly#2385
   jaxpr = Jaxpr(const_vars, invars,  # type: ignore[arg-type]
@@ -1012,9 +1007,9 @@ def partial_eval_jaxpr_stateful(
     saveable = everything_saveable
   jaxpr_known, jaxpr_staged, out_unknowns, out_inst, num_res, num_res_ref = \
       _partial_eval_jaxpr_custom_cached(
-          # pyrefly: ignore[bad-argument-type]  # pyrefly#2530
+
           jaxpr, tuple(in_unknowns), tuple(in_inst), tuple(ensure_out_unknowns),
-          # pyrefly: ignore[bad-argument-type]  # pyrefly#2530
+
           tuple(ensure_out_inst), saveable)
   return jaxpr_known, jaxpr_staged, out_unknowns, out_inst, num_res, num_res_ref
 
@@ -1079,7 +1074,7 @@ def _partial_eval_jaxpr_custom_cached(
         foreach(partial(write, False, False), eqn.outvars)
       elif isinstance(policy, Offloadable):
         # TODO(slebedev): This is a legit error which requires a BUILD fix.
-        from jax._src.dispatch import device_put_p, ArrayCopySemantics  # type: ignore
+        from jax._src.dispatch import device_put_p, ArrayCopySemantics
         resvars = [Var(v.aval.update(memory_space=core.mem_kind_to_space(policy.dst)))
                    for v in eqn.outvars]
         offload_eqn = core.JaxprEqn(
@@ -1410,7 +1405,7 @@ def dce_jaxpr(jaxpr: Jaxpr, used_outputs: Sequence[bool],
   """
   if type(instantiate) is bool:
     instantiate = (instantiate,) * len(jaxpr.invars)
-  # pyrefly: ignore[bad-argument-type]  # pyrefly#2530
+
   return _dce_jaxpr(jaxpr, tuple(used_outputs), tuple(instantiate))
 
 
@@ -1604,7 +1599,7 @@ def move_binders_to_back(closed_jaxpr: ClosedJaxpr, to_move: Sequence[bool]
 
 
 class DynamicJaxprTracer(core.Tracer):
-  __slots__ = ['aval', 'val', 'mutable_qdd', 'parent', '_debug_info']
+  __slots__ = ['_aval', 'val', 'mutable_qdd', 'parent', '_debug_info']
 
   _trace: DynamicJaxprTrace  # pyrefly: ignore[bad-override]
 
@@ -1623,7 +1618,7 @@ class DynamicJaxprTracer(core.Tracer):
     self._trace = trace
     self._line_info = line_info
     self._debug_info = self._trace.frame.debug_info  # for UnexpectedTracerError
-    self.aval = aval  # type: ignore[misc]
+    self._aval = aval
     self.val = val
     self.mutable_qdd = core.MutableQuasiDynamicData(qdd)
     self.parent = parent
@@ -1633,6 +1628,10 @@ class DynamicJaxprTracer(core.Tracer):
 
   def cur_qdd(self):
     return self.mutable_qdd.cur_val
+
+  @property
+  def aval(self):
+    return self._aval
 
   @property
   def aval_mutable_qdd(self):
@@ -1724,7 +1723,7 @@ def make_jaxpr_effects(constvars, invars, outvars, eqns) -> effects.Effects:
               f"`JaxprInputEffect` {eff} is invalid."
               f"\n Equation: {eqn}\n"
               "\n Jaxpr: "
-              f"{core.Jaxpr(constvars, invars, outvars, eqns, set(), dbg)}")  # type: ignore
+              f"{core.Jaxpr(constvars, invars, outvars, eqns, set(), dbg)}")
         eqn_invar = eqn.invars[eff.input_index]
         if type(eqn_invar) is core.Literal or eqn_invar in mut_arrays:
           continue
@@ -1740,7 +1739,7 @@ def make_jaxpr_effects(constvars, invars, outvars, eqns) -> effects.Effects:
                 f"\n Equation: {eqn}\n"
                 f"\n Effects: {eqn.effects}\n"
                 "\n Jaxpr: "
-                f"{core.Jaxpr(constvars, invars, outvars, eqns, set(), dbg)}")  # type: ignore
+                f"{core.Jaxpr(constvars, invars, outvars, eqns, set(), dbg)}")
         eff = eff.replace(input_index=input_index)
       jaxpr_effects.add(eff)
   return jaxpr_effects
@@ -2041,7 +2040,7 @@ class DynamicJaxprTrace(core.Trace):
     source_info = source_info_util.current()
     return self.to_jaxpr_tracer(x, source_info=source_info).mutable_qdd.cur_val
 
-  def process_primitive(self, primitive, tracers, params):
+  def process_primitive(self, primitive, tracers, params, /):
     self.frame.is_high |= primitive.is_high(*map(typeof, tracers), **params)
     if config.eager_constant_folding.value and not any(isinstance(x, Tracer) for x in tracers):
       return primitive.bind_with_trace(core.eval_trace, tracers, params)
@@ -2101,8 +2100,8 @@ class DynamicJaxprTrace(core.Trace):
       self.frame.add_eqn(eqn)  # pyrefly: ignore[bad-argument-type]
     return out_tracers if primitive.multiple_results else out_tracers.pop()
 
-  def process_call(self, call_primitive, f: lu.WrappedFun, in_tracers,  # pyrefly: ignore[bad-param-name-override]
-                   params):
+  def process_call(self, call_primitive, f: lu.WrappedFun, in_tracers,
+                   params, /):
     source_info = source_info_util.current()
     to_jaxpr_tracer = partial(self.to_jaxpr_tracer, source_info=source_info)
     in_type = (tuple(get_aval(t) for t in in_tracers) if f.in_type is None
@@ -2118,7 +2117,7 @@ class DynamicJaxprTrace(core.Trace):
 
     new_jaxpr = convert_constvars_jaxpr(jaxpr)
     if isinstance(call_primitive, core.ClosedCallPrimitive):
-      new_jaxpr = close_jaxpr(new_jaxpr)  # type: ignore
+      new_jaxpr = close_jaxpr(new_jaxpr)
     new_params = dict(params, call_jaxpr=new_jaxpr)
     update_params = call_param_updaters.get(call_primitive)
     if update_params:
@@ -2129,7 +2128,7 @@ class DynamicJaxprTrace(core.Trace):
         [*const_tracers, *in_tracers], out_avals, call_primitive,
         new_params, new_params['call_jaxpr'].effects, source_info=source_info)
 
-  def process_map(self, map_primitive, f: lu.WrappedFun, tracers, params):
+  def process_map(self, map_primitive, f: lu.WrappedFun, tracers, params, /):
     source_info = source_info_util.current()
     to_jaxpr_tracer = partial(self.to_jaxpr_tracer, source_info=source_info)
     tracers = map(to_jaxpr_tracer, tracers)
@@ -2163,8 +2162,8 @@ class DynamicJaxprTrace(core.Trace):
           [*const_tracers, *tracers], out_avals, map_primitive, new_params, effs, source_info=source_info)
     return out_tracers
 
-  def process_custom_jvp_call(self, prim, fun: lu.WrappedFun,  # pyrefly: ignore[bad-override]
-                              jvp: lu.WrappedFun, tracers,
+  def process_custom_jvp_call(self, prim, fun: lu.WrappedFun,
+                              jvp: lu.WrappedFun, tracers, /, *,
                               symbolic_zeros: bool):
     if config.eager_constant_folding.value and not any(isinstance(x, Tracer) for x in tracers):
       return prim.bind_with_trace(core.eval_trace, (fun, jvp, *tracers),
@@ -2198,9 +2197,9 @@ class DynamicJaxprTrace(core.Trace):
         fun_jaxpr.effects,
         source_info=source_info)
 
-  def process_custom_vjp_call(self, prim: core.Primitive,  # pyrefly: ignore[bad-param-name-override]
+  def process_custom_vjp_call(self, prim: core.Primitive,
                               fun: lu.WrappedFun,
-                              fwd: lu.WrappedFun, bwd: lu.WrappedFun, tracers,
+                              fwd: lu.WrappedFun, bwd: lu.WrappedFun, tracers, /, *,
                               out_trees: Callable[[], tuple[PyTreeDef, PyTreeDef, list[int | None]]],
                               symbolic_zeros: bool):
     if config.eager_constant_folding.value and not any(isinstance(x, Tracer) for x in tracers):
@@ -2238,7 +2237,7 @@ class DynamicJaxprTrace(core.Trace):
         fun_jaxpr.effects,
         source_info=source_info)
 
-  def process_custom_transpose(self, prim: core.Primitive,  # type: ignore[override]
+  def process_custom_transpose(self, prim: core.Primitive,  # pyrefly: ignore[bad-override]
                                call: lu.WrappedFun, tracers, *,
                                transpose: lu.WrappedFun,
                                out_types,
@@ -2456,13 +2455,9 @@ def trace_to_jaxpr(
 # TODO(dougalm): remove in favor of `trace_to_jaxpr`
 @profiler.annotate_function
 def trace_to_jaxpr_dynamic(
-    fun: lu.WrappedFun,
-    in_avals: Sequence[AbstractValue | core.AvalQDD],
-    *,
-    keep_inputs: list[bool] | None = None,
-    lower: bool = False,
-    auto_dce: bool = False,
-) -> tuple[Jaxpr, list[AbstractValue], list[Any]]:
+    fun: lu.WrappedFun, in_avals: Sequence[AbstractValue | core.AvalQDD],
+    *, keep_inputs: list[bool] | None = None, lower: bool = False,
+    auto_dce: bool = False) -> tuple[Jaxpr, list[AbstractValue], list[Any]]:
   config.enable_checks.value and fun.debug_info.assert_arg_names(len(in_avals))
   keep_inputs = [True] * len(in_avals) if keep_inputs is None else keep_inputs
   parent_trace = core.trace_ctx.trace
@@ -2472,15 +2467,11 @@ def trace_to_jaxpr_dynamic(
   # equations should be rooted at the enclosing jaxpr and not contain any
   # context from the callsite. Otherwise metadata from one caller would bleed
   # into metadata from a different caller if we, e.g., inline.
-  with (
-      core.ensure_no_leaks(trace),
-      source_info_util.reset_name_stack(),
-      TracebackScope(),
-  ):
+  with (core.ensure_no_leaks(trace), source_info_util.reset_name_stack(),
+        TracebackScope()):
     source_info = source_info_util.current()
     in_tracers = map(partial(trace.new_arg, source_info=source_info), in_avals)
     in_tracers = [t for t, keep in zip(in_tracers, keep_inputs) if keep]
-
     with core.set_current_trace(trace):
       ans = fun.call_wrapped(*in_tracers)
     _check_returned_jaxtypes(fun.debug_info, ans)
@@ -2489,7 +2480,6 @@ def trace_to_jaxpr_dynamic(
     jaxpr, consts = trace.frame.to_jaxpr(trace, out_tracers, fun.debug_info,  # pyrefly: ignore[bad-argument-type]  # pyrefly#2385
                                          source_info)
     del trace, fun, in_tracers, out_tracers, ans
-
   config.enable_checks.value and core.check_jaxpr(jaxpr)
   return jaxpr, [v.aval for v in jaxpr.outvars], consts
 

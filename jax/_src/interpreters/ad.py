@@ -103,8 +103,10 @@ def linearize_subtrace(_f: Callable, _store: lu.Store, _is_vjp: bool,
       del linearize_trace, ans, tracers
   nzs_out = tuple(type(t) is not Zero for t in out_tangents)
   out_tangents = tuple(t for t, nz in zip(out_tangents, nzs_out) if nz)
-  out_tangents = map(partial(tangent_trace.to_jaxpr_tracer, source_info=source_info), out_tangents)  # type: ignore[assignment]
-  jaxpr, consts = tangent_trace.to_jaxpr(out_tangents, debug_info.with_unknown_names(), source_info)  # pyrefly: ignore[bad-argument-type]  # pyrefly#2385
+  out_tangents = map(partial(tangent_trace.to_jaxpr_tracer, source_info=source_info),    # type: ignore
+                     out_tangents)
+  jaxpr, consts = tangent_trace.to_jaxpr(
+      out_tangents, debug_info.with_unknown_names(), source_info)  # type: ignore
   which_env = [(isinstance(c, pe.DynamicJaxprTracer) and
                 getattr(c._trace, 'tag', None) is _tag) for c in consts]
   jaxpr = pe.move_envvars(jaxpr, tuple(which_env))
@@ -154,12 +156,12 @@ def linearize_jaxpr(
 ) -> tuple[core.ClosedJaxpr, int, Sequence[bool], Sequence[int | None], core.ClosedJaxpr]:
   if type(allow_fwds) is bool:
     allow_fwds = (allow_fwds,) * (len(jaxpr.consts) + len(jaxpr.jaxpr.invars))
-  assert len(allow_fwds) == (len(jaxpr.consts) + len(jaxpr.jaxpr.invars))  # pyrefly: ignore[bad-argument-type]  # pyrefly#2530
+  assert len(allow_fwds) == (len(jaxpr.consts) + len(jaxpr.jaxpr.invars))
   if type(instantiate) is bool:
     instantiate = (instantiate,) * len(jaxpr.jaxpr.outvars)
-  assert len(instantiate) == len(jaxpr.jaxpr.outvars)  # pyrefly: ignore[bad-argument-type]  # pyrefly#2530
-  return _linearize_jaxpr(jaxpr, tuple(nonzeros), tuple(instantiate),  # pyrefly: ignore[bad-argument-type]  # pyrefly#2530
-                          tuple(allow_fwds), is_vjp)  # pyrefly: ignore[bad-argument-type]  # pyrefly#2530
+  assert len(instantiate) == len(jaxpr.jaxpr.outvars)
+  return _linearize_jaxpr(jaxpr, tuple(nonzeros), tuple(instantiate),
+                          tuple(allow_fwds), is_vjp)
 
 @weakref_lru_cache
 @source_info_util.reset_name_stack()
@@ -453,7 +455,7 @@ class ValAccum(GradAccum):
 
   def __init__(self, aval, val=None):
     self.aval = aval
-    self.val = Zero(aval.to_cotangent_aval()) if val is None else val
+    self.val = Zero(aval.to_ct_aval()) if val is None else val
     ct_check(self, self.val)
 
   def __repr__(self):
@@ -471,7 +473,7 @@ def ct_check(primal, ct):
   if config.disable_bwd_checks.value:
     return
   ct_aval = ct.aval if type(ct) is Zero else typeof(ct)
-  ct_aval_expected = primal.aval.to_cotangent_aval()  # type: ignore
+  ct_aval_expected = primal.aval.to_ct_aval()  # type: ignore
   if not core.typematch(ct_aval, ct_aval_expected, no_dtype_check=True):
     # TODO(yashkatariya, mattjj): Add primitive name here for
     # better error message?
@@ -556,7 +558,7 @@ class JVPTrace(Trace):
       tangent_zero = p2tz(val)
       return (val, tangent_zero)
 
-  def process_primitive(self, primitive, tracers, params):
+  def process_primitive(self, primitive, tracers, params, /):
     primals_in, tangents_in = unzip2(map(self.to_primal_tangent_pair, tracers))
     if (all(type(t) is Zero for t in tangents_in) and
         primitive is not core.ref_p and primitive is not core.empty_ref_p and
@@ -579,7 +581,7 @@ class JVPTrace(Trace):
     with core.set_current_trace(self.parent_trace):
       return core.cur_qdd(p)
 
-  def process_call(self, call_primitive, f, tracers, params):
+  def process_call(self, call_primitive, f, tracers, params, /):
     assert call_primitive.multiple_results
     primals, tangents = unzip2(map(self.to_primal_tangent_pair, tracers))
     which_nz = [     type(t) is not Zero           for t in tangents]
@@ -615,7 +617,7 @@ class JVPTrace(Trace):
   def process_map(self, map_primitive, f, tracers, params):
     return self.process_call(map_primitive, f, tracers, params)
 
-  def process_custom_jvp_call(self, primitive, fun, jvp, tracers, symbolic_zeros):
+  def process_custom_jvp_call(self, primitive, fun, jvp, tracers, /, *, symbolic_zeros):
     primals_in, tangents_in = unzip2(map(self.to_primal_tangent_pair, tracers))
     if all(type(t) is Zero for t in tangents_in):
       return primitive.bind_with_trace(self.parent_trace, (fun, jvp, *primals_in),
@@ -631,7 +633,7 @@ class JVPTrace(Trace):
     tangents_out = map(replace_rule_output_symbolic_zeros, tangents_out)
     return map(partial(maybe_jvp_tracer, self), primals_out, tangents_out)
 
-  def process_custom_vjp_call(self, primitive, fun, fwd, bwd, tracers, out_trees,
+  def process_custom_vjp_call(self, primitive, fun, fwd, bwd, tracers, /, *, out_trees,
                               symbolic_zeros):
     primals_in, tangents_in = unzip2(map(self.to_primal_tangent_pair, tracers))
     if all(type(t) is Zero for t in tangents_in):
@@ -791,7 +793,7 @@ class LinearizeTrace(Trace):
       tangent_zero = p2tz(val)
       return (val, tangent_zero)
 
-  def process_primitive(self, primitive, tracers, params):
+  def process_primitive(self, primitive, tracers, params, /):
     primals_in, tangents_in = unzip2(map(self.to_primal_tangent_pair, tracers))
     tangent_nzs = [type(t) is not Zero for t in tangents_in]
     if (all(type(t) is Zero for t in tangents_in) and
@@ -818,7 +820,7 @@ class LinearizeTrace(Trace):
       return core.cur_qdd(p)
 
   def process_custom_jvp_call(self, primitive, fun: lu.WrappedFun,
-                              jvp: lu.WrappedFun, tracers, *,
+                              jvp: lu.WrappedFun, tracers, /, *,
                               symbolic_zeros: bool):
     primals_in, tangents_in = unzip2(map(self.to_primal_tangent_pair, tracers))
     if all(type(t) is Zero for t in tangents_in):
@@ -845,7 +847,7 @@ class LinearizeTrace(Trace):
             for x, nz, t in zip(primals_out, tangent_nzs_out, tangents_out)]
 
   def process_custom_vjp_call(self, primitive, fun, fwd,
-                              bwd: lu.WrappedFun, tracers,
+                              bwd: lu.WrappedFun, tracers, /, *,
                               out_trees: Callable[[], tuple[PyTreeDef, PyTreeDef, list[int | None]]],
                               symbolic_zeros: bool):
     primals_in, tangents_in = unzip2(map(self.to_primal_tangent_pair, tracers))
@@ -875,7 +877,7 @@ class LinearizeTrace(Trace):
     tangent_nzs_out = [type(t) is not Zero for t in tangents_out]
     return map(partial(maybe_linearize_tracer, self), primals_out, tangent_nzs_out, tangents_out)
 
-  def process_call(self, call_primitive, f: lu.WrappedFun, tracers, params):
+  def process_call(self, call_primitive, f: lu.WrappedFun, tracers, params, /):
     assert call_primitive.multiple_results
     primals, tangents = unzip2(map(self.to_primal_tangent_pair, tracers))
     nzs_in = tuple(type(t) is not Zero for t in tangents)
@@ -1128,7 +1130,7 @@ def deflinear2(primitive, transpose_rule):
 
 def linear_transpose2(transpose_rule, cotangent, *args, **kwargs):
   if type(cotangent) is Zero:
-    return [Zero(x.aval.to_cotangent_aval()) if isinstance(x, UndefinedPrimal)
+    return [Zero(x.aval.to_ct_aval()) if isinstance(x, UndefinedPrimal)
             else None for x in args]
   else:
     return transpose_rule(cotangent, *args, **kwargs)
@@ -1177,13 +1179,13 @@ def bilinear_transpose(lhs_rule, rhs_rule, cotangent, x, y, **kwargs):
   assert is_undefined_primal(x) ^ is_undefined_primal(y)
   if is_undefined_primal(x):
     if type(cotangent) is Zero:
-      return Zero(x.aval.to_cotangent_aval()), None
+      return Zero(x.aval.to_ct_aval()), None
     else:
       out = lhs_rule(cotangent, x, y, **kwargs)
       return out, None
   else:
     if type(cotangent) is Zero:
-      return None, Zero(y.aval.to_cotangent_aval())
+      return None, Zero(y.aval.to_ct_aval())
     else:
       out = rhs_rule(cotangent, x, y, **kwargs)
       return None, out
@@ -1331,7 +1333,7 @@ def jvp_jaxpr(jaxpr: core.ClosedJaxpr, nonzeros: Sequence[bool],
               ) -> tuple[core.ClosedJaxpr, list[bool]]:
   if type(instantiate) is bool:
     instantiate = (instantiate,) * len(jaxpr.out_avals)
-  return _jvp_jaxpr(jaxpr, tuple(nonzeros), tuple(instantiate))  # pyrefly: ignore[bad-argument-type]  # pyrefly#2530
+  return _jvp_jaxpr(jaxpr, tuple(nonzeros), tuple(instantiate))
 
 @weakref_lru_cache
 def _jvp_jaxpr(jaxpr: core.ClosedJaxpr,

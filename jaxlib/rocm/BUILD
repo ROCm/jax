@@ -19,6 +19,7 @@ load("@rules_python//python:defs.bzl", "py_library")
 load(
     "//jaxlib:jax.bzl",
     "if_rocm_is_configured",
+    "jax_bzl_library",
     "rocm_library",
 )
 load("//jaxlib/rocm:rocm_rpath.bzl", "rocm_nanobind_extension")
@@ -398,11 +399,11 @@ rocm_nanobind_extension(
         ":hip_vendor",
         "//jaxlib:kernel_nanobind_helpers",
         "//jaxlib/cpu:lapack_kernels",
-        "@com_google_absl//absl/base",
         "@local_config_rocm//rocm:hip_runtime",
         "@local_config_rocm//rocm:rocm_headers",
         "@nanobind",
         "@xla//xla/ffi/api:ffi",
+        "@xla//xla/python:safe_static_init",
     ],
     linkopts = [
         "-L/opt/rocm/lib",
@@ -554,4 +555,10 @@ py_library(
         ":rocm_gpu_support",
         ":rocm_plugin_extension",
     ]),
+)
+
+jax_bzl_library(
+    name = "rocm_rpath_bzl",
+    srcs = ["rocm_rpath.bzl"],
+    visibility = ["//visibility:private"],
 )

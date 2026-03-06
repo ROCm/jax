@@ -41,7 +41,7 @@ from jax._src.state.discharge import run_state
 
 from jax._src.hijax import (
     HiPrimitive, HiType, Box, new_box, box_set, box_get, box_effect,
-    register_hitype, ShapedArray, Ty, custom_vjp3, MappingSpec, HipSpec)
+    register_hitype, ShapedArray, Ty, custom_vjp3, MappingSpec, HiPspec)
 from jax.experimental.hijax import VJPHiPrimitive
 
 jtu.request_cpu_devices(8)
@@ -222,6 +222,13 @@ class TupTy(HiType):
     return TupTy(tuple(ty.unshard(mesh, check_vma, s)
                        for ty, s in zip(self.tys, spec.val)))
 
+  def vspace_add(self, x_tup, y_tup):
+    n = len(self.tys)
+    x_elts = [get_tuple_element(x_tup, i) for i in range(n)]
+    y_elts = [get_tuple_element(y_tup, i) for i in range(n)]
+    return make_tup(*(ty.vspace_add(x, y) for ty, x, y
+                      in zip(self.tys, x_elts, y_elts)))
+
 register_hitype(HiTup, lambda t: TupTy(tuple(map(typeof, t.elts))))
 
 @dataclass(frozen=True)
@@ -229,7 +236,7 @@ class TupSpec(MappingSpec):
   val: tuple
 
 @dataclass(frozen=True)
-class TupP(HipSpec):
+class TupP(HiPspec):
   val: tuple
 
   def to_lo(self) -> tuple[jax.PartitionSpec, ...]:
@@ -246,6 +253,16 @@ class MakeTup(VJPHiPrimitive):
   def expand(self, *elts):
     return HiTup(elts)
 
+  def jvp(self, primals, tangents):
+    tangents = map(ad.instantiate_zeros, tangents)
+    return make_tup(*primals), make_tup(*tangents)
+
+  def transpose(self, ct, *maybe_accums):
+    cts = [get_tuple_element(ct, i) for i in range(len(self.out_aval.tys))]
+    for ct_, accum in zip(cts, maybe_accums):
+      if isinstance(accum, ad.GradAccum):
+        accum.accum(ct_)
+
   def batch(self, _axis_data, args, in_dims):
     return make_tup(*args), TupSpec(in_dims)
 
@@ -258,6 +275,16 @@ class GetTupElt(VJPHiPrimitive):
 
   def expand(self, tup):
     return tup.elts[self.idx]
+
+  def jvp(self, primals, tangents):
+    (tup,), (tup_dot,) = primals, tangents
+    return get_tuple_element(tup, self.idx), get_tuple_element(tup_dot, self.idx)
+
+  def transpose(self, g, tup_accum):
+    tup_ty, = self.in_avals
+    elts = map(ad.zeros_like_aval, tup_ty.tys)
+    elts[self.idx] = g
+    tup_accum.accum(make_tup(*elts))
 
   def vjp_fwd(self, tup):
     return get_tuple_element(tup, self.idx), None
@@ -1173,6 +1200,127 @@ class HijaxTest(jtu.JaxTestCase):
 
     self.assertEqual(f(2.0), 8.0)
     self.assertEqual(jax.linearize(f, 2.0)[1](1.0), 12.0)
+
+  @jtu.with_explicit_mesh((2, 2), ('i', 'j'))
+  def test_grad_remat_hitype(self, mesh):
+    x = jnp.ones(4)
+    y = jnp.ones(2)
+
+    @jax.remat
+    def f(x, y):
+      tup = make_tup(x, y)
+      x_ = get_tuple_element(tup, 0)
+      y_ = get_tuple_element(tup, 1)
+      return jnp.sum(x_ + jnp.concatenate((y_, y_)))
+
+    f(x, y)
+    jax.jit(jax.grad(f))(x, y)
+
+  @jtu.with_explicit_mesh((2,), 'x')
+  def test_shmap_grad_hitype(self, mesh):
+    class Mul(VJPHiPrimitive):
+      def __init__(self, aval):
+        self.in_avals = (aval, aval)
+        self.out_aval = aval
+        self.params = {}
+        super().__init__()
+
+      def expand(self, x, y):
+        return MulH(x.val * y.val)
+
+      def vjp_fwd(self, nzs_in, x, y):
+        return my_mul(x, y), (x, y)
+
+      def vjp_bwd_retval(self, res, g):
+        x, y = res
+        return (my_mul(g, y), my_mul(g, x))
+
+    @dataclass
+    class MulH:
+      val: Any
+
+    @dataclass(frozen=True)
+    class MulTy(HiType):
+      ty: Ty
+
+      def __repr__(self):
+        return f"MulTy({self.ty})"
+
+      def __hash__(self):
+        return hash((self.ty,))
+
+      def __eq__(self, other):
+        if not isinstance(other, MulTy):
+          return False
+        return self.ty == other.ty
+
+      def lo_ty(self):
+        return [self.ty]
+
+      def lower_val(self, hi_val: MulH):
+        return [hi_val.val]
+
+      def raise_val(self, lo_val):
+        return MulH(lo_val)
+
+      def to_tangent_aval(self) -> HiType:
+        return MulTy(self.ty.to_tangent_aval())
+
+      def vspace_zero(self):
+        return MulHZero(self)()
+
+      def to_ct_aval(self) -> HiType:
+        return MulTy(self.ty.to_ct_aval())
+
+      def shard(self, mesh, manual_axes, check_vma, spec):
+        return MulTy(self.ty.shard(mesh, manual_axes, check_vma, spec.val))
+
+      def unshard(self, mesh, check_vma, spec):
+        return MulTy(self.ty.unshard(mesh, check_vma, spec.val))
+
+    register_hitype(MulH, lambda m: MulTy(jax.typeof(m.val)))
+
+    class MulHZero(VJPHiPrimitive):
+      def __init__(self, mul_ty):
+        self.in_avals = ()
+        self.out_aval = mul_ty
+        self.params = {}
+        super().__init__()
+
+      def expand(self):
+        return MulH(ad.zeros_like_aval(self.out_aval.ty))
+
+    @dataclass(frozen=True)
+    class MulSpec(HiPspec):
+      val: Any
+
+      def to_lo(self):
+        return [self.val]
+
+      def to_tangent_spec(self):
+        return MulSpec(self.val)
+
+      def to_ct_spec(self):
+        return MulSpec(self.val)
+
+      def __repr__(self):
+        return f"MulSpec({self.val})"
+
+    def my_mul(x, y):
+      return Mul(jax.typeof(x))(x, y)
+
+    arr1 = jax.device_put(jnp.arange(8, dtype=jnp.float32), jax.P('x'))
+    arr2 = jax.device_put(jnp.arange(8, dtype=jnp.float32), jax.P('x'))
+
+    @jax.jit
+    @jax.shard_map(in_specs=(MulSpec(jax.P('x')), MulSpec(jax.P('x'))),
+                   out_specs=MulSpec(jax.P('x')))
+    def f(x, y):
+      return my_mul(x, y)
+
+    _, f_vjp = jax.vjp(f, MulH(arr1), MulH(arr2))
+    x = jax.device_put(jnp.ones((8,), dtype=jnp.float32), jax.P('x'))
+    f_vjp(MulH(x))  # doesn't crash
 
 
 class BoxTest(jtu.JaxTestCase):

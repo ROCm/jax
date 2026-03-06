@@ -66,7 +66,6 @@ from jax._src.util import foreach
 import numpy as np
 
 
-# mypy: ignore-errors
 
 map, unsafe_map = util.safe_map, map
 zip, unsafe_zip = util.safe_zip, zip
@@ -86,7 +85,7 @@ IrValues = Union[ir.Value, tuple[ir.Value, ...]]
 def _is_not_block_argument(x: IrValues) -> bool:
   return not isinstance(x, ir.BlockArgument)
 
-def dense_int_elements(xs) -> ir.DenseIntElementsAttr:
+def dense_int_elements(xs) -> ir.DenseElementsAttr:
   return ir.DenseIntElementsAttr.get(np.asarray(xs, np.int64))
 
 dense_int_array = ir.DenseI64ArrayAttr.get
@@ -94,8 +93,7 @@ dense_int_array = ir.DenseI64ArrayAttr.get
 def i32_attr(i): return ir.IntegerAttr.get(ir.IntegerType.get_signless(32), i)
 def i64_attr(i): return ir.IntegerAttr.get(ir.IntegerType.get_signless(64), i)
 
-def shape_tensor(sizes: Sequence[int | ir.RankedTensorType]
-                 ) -> ir.RankedTensorType:
+def shape_tensor(sizes: Sequence[int | ir.RankedTensorType]) -> IrValues:
   int1d = aval_to_ir_type(core.ShapedArray((1,), np.int32))
   i32_type = aval_to_ir_type(core.ShapedArray((), np.int32))
   def lower_dim(d):
@@ -107,7 +105,7 @@ def shape_tensor(sizes: Sequence[int | ir.RankedTensorType]
       return hlo.reshape(int1d, d)
   ds = map(lower_dim, sizes)
   if not ds:
-    return type_cast(ir.RankedTensorType, ir_constant(np.array([], np.int32)))
+    return ir_constant(np.array([], np.int32))
   elif len(ds) == 1:  # pyrefly: ignore[bad-argument-type]  # pyrefly#2385
     return ds[0]  # pyrefly: ignore[bad-index]  # pyrefly#2385
   else:
@@ -192,10 +190,10 @@ def dtype_to_ir_type(dtype: core.bint | np.dtype | np.generic) -> ir.Type:
   return ir_type_factory()
 
 def _array_ir_types(aval: core.ShapedArray) -> ir.Type:
-  aval = core.physical_aval(aval)  # type: ignore
+  aval = core.physical_aval(aval)
   if not core.is_constant_shape(aval.shape):
-    return _dynamic_array_ir_types(aval)  # type: ignore
-  return ir.RankedTensorType.get(aval.shape, dtype_to_ir_type(aval.dtype))  # type: ignore
+    return _dynamic_array_ir_types(aval)
+  return ir.RankedTensorType.get(aval.shape, dtype_to_ir_type(aval.dtype))
 
 def _dynamic_array_ir_types(aval: core.ShapedArray) -> ir.Type:
   dyn_size = ir.ShapedType.get_dynamic_size()
@@ -259,6 +257,7 @@ def ir_constant(
     A representation of the constant as an IR value or sequence of IR values.
   """
   if const_lowering is not None:
+    # pyrefly: ignore[no-matching-overload]
     if np.shape(val) and (c_val := const_lowering.get((id(val), aval))) is not None:
       return c_val
   for t in type(val).__mro__:
@@ -315,7 +314,7 @@ def _ndarray_constant_handler(val: np.ndarray | np.generic,
                               for ax in range(val.ndim))]
     out = hlo.broadcast_in_dim(
         ir.RankedTensorType.get(
-            val.shape, dtype_to_ir_type(collapsed_val.dtype)),  # type: ignore
+            val.shape, dtype_to_ir_type(collapsed_val.dtype)),
         _numpy_array_constant(collapsed_val),
         dense_int_array(other_axes))  # type: ignore
     return out
@@ -330,7 +329,7 @@ for _scalar_type in [np.int8, np.int16, np.int32, np.int64,
                      np.float16, np.float32, np.float64,
                      np.complex64, np.complex128,
                      np.bool_, np.longlong, dtypes.bfloat16]:
-  register_constant_handler(_scalar_type, _ndarray_constant_handler)  # type: ignore
+  register_constant_handler(_scalar_type, _ndarray_constant_handler)
 
 def _python_scalar_handler(val, aval: core.AbstractValue | None):
   assert isinstance(aval, core.ShapedArray), aval
@@ -398,7 +397,7 @@ for _scalar_type in [np.int8, np.int16, np.int32, np.int64,
                      np.float16, np.float32, np.float64,
                      np.complex64, np.complex128,
                      np.bool_, np.longlong, dtypes.bfloat16]:
-  register_attribute_handler(_scalar_type, _numpy_array_attribute_handler)  # type: ignore
+  register_attribute_handler(_scalar_type, _numpy_array_attribute_handler)
 
 def _dtype_attribute_handler(dtype: np.dtype | np.generic) -> ir.Attribute:
   return ir.TypeAttr.get(dtype_to_ir_type(dtype))
@@ -979,7 +978,7 @@ def sharded_aval(aval: core.AbstractValue,
     return aval
   if not isinstance(aval, core.ShapedArray):
     raise NotImplementedError
-  return aval.update(sharding.shard_shape(aval.shape), sharding=None)  # type: ignore
+  return aval.update(sharding.shard_shape(aval.shape), sharding=None)
 
 
 def eval_dynamic_shape(ctx: LoweringRuleContext,
@@ -1091,7 +1090,7 @@ def _to_physical_op_sharding(
       axis_ctx.manual_axes):
     sharding = add_manual_axes(axis_ctx, sharding, aval.ndim)
   if config.use_shardy_partitioner.value:
-    return sharding._to_sdy_sharding(aval.ndim)  # type: ignore
+    return sharding._to_sdy_sharding(aval.ndim)
   return sharding._to_xla_hlo_sharding(aval.ndim).to_proto()  # type: ignore
 
 
@@ -1333,7 +1332,7 @@ def lower_jaxpr_to_module(
       raise ValueError(
           "Cannot lower jaxpr with verifier errors. " +
           dump_module_message(ctx.module, "verification"))
-  except ir.MLIRError as e:
+  except ir.MLIRError as e:  # pyrefly: ignore[missing-attribute]
     msg_lines = ["Cannot lower jaxpr with verifier errors:"]
     def emit_diagnostic_info(d):
       msg_lines.append(f"\t{d.message}")
@@ -1364,7 +1363,7 @@ def _set_up_aliases(input_output_aliases, avals_in, avals_out,
                     donated_args, arg_memory_kinds, result_memory_kinds,
                     in_layouts, out_layouts, result_shardings):
   if input_output_aliases is None:
-    input_output_aliases = [None] * len(avals_in)
+    input_output_aliases: list[int | None] = [None] * len(avals_in)
   else:
     input_output_aliases = list(input_output_aliases)
   # To match-up in-avals to out-avals we only care about the number of
@@ -1437,7 +1436,7 @@ def _set_up_aliases(input_output_aliases, avals_in, avals_out,
   results_not_matched = collections.defaultdict(collections.deque)
   for i, (aval, rm) in enumerate(zip(avals_out, result_memory_kinds)):
     if i not in aliased_output_ids and aval is not core.abstract_token:
-      results_not_matched[(aval.size, rm)].append(i)
+      results_not_matched[(aval.size, rm)].append(i)  # pyrefly: ignore[missing-attribute]
 
   # For each donated argument that hasn't been aliased or donated to XLA, try to
   # find an output array with matching size ignoring shapes. If a matching
@@ -1450,7 +1449,11 @@ def _set_up_aliases(input_output_aliases, avals_in, avals_out,
     # then try to find an output array with matching size.
     if (out_donated_args[input_idx]
         and avals_in[input_idx] is not core.abstract_token):  # pyrefly: ignore[bad-index]  # pyrefly#2385
-      key = (avals_in[input_idx].size, arg_memory_kinds[input_idx])  # pyrefly: ignore[bad-index]  # pyrefly#2385
+      key = (
+          # pyrefly: ignore[missing-attribute]
+          avals_in[input_idx].size,  # pyrefly: ignore[bad-index]  # pyrefly#2385
+          arg_memory_kinds[input_idx],
+      )
       if results_not_matched.get(key, ()):
         # XLA donate the argument because there's a matching output array.
         results_not_matched[key].popleft()
@@ -1597,7 +1600,7 @@ def lower_jaxpr_to_fun(
   token_types = [token_type() for _ in effects]
   token_avals = [core.abstract_token] * num_tokens
   # Order of arguments: dim vars, tokens, const_args, array inputs
-  input_avals = dim_var_avals + token_avals + list(in_avals)  # type: ignore
+  input_avals = dim_var_avals + token_avals + list(in_avals)
   input_types = [*dim_var_types, *token_types, *input_types]
   output_avals = [core.abstract_token] * num_tokens + jaxpr.out_avals
   output_types = [*token_types, *output_types]
@@ -2052,7 +2055,7 @@ def jaxpr_subcomp(
   foreach(write, jaxpr.constvars, consts_for_constvars)
   foreach(write, jaxpr.invars, args)
   last_used = core.last_used(jaxpr)
-  if jaxlib_extension_version >= 409:
+  if jaxlib_extension_version >= 413:
     outer_traceback = outer_traceback or xc.Traceback()
   else:
     outer_traceback = None
@@ -2065,8 +2068,8 @@ def jaxpr_subcomp(
     tokens_in = tokens.subset(ordered_effects)
 
     eqn_name_stack = name_stack + eqn.source_info.name_stack
-    if jaxlib_extension_version >= 409:
-      traceback = (eqn.source_info.traceback or xc.Traceback()) + outer_traceback
+    if jaxlib_extension_version >= 413:
+      traceback = (eqn.source_info.traceback or xc.Traceback()) + outer_traceback  # pyrefly: ignore[unsupported-operation]
     else:
       traceback = eqn.source_info.traceback
     loc = source_info_to_location(ctx, eqn.primitive, eqn_name_stack, traceback)
@@ -2102,11 +2105,22 @@ def jaxpr_subcomp(
 
       assert len(out_nodes) == len(eqn.outvars), (out_nodes, eqn)
       if ordered_effects:
+        assert tokens_out is not None
         tokens = tokens.update_tokens(tokens_out)
 
     foreach(write, eqn.outvars, out_nodes)
     core.clean_up_dead_vars(eqn, env, last_used)
   return tuple(read(v) for v in jaxpr.outvars), tokens
+
+
+class CachedLoweringRule(Protocol):
+  def __call__(
+      self,
+      ctx: LoweringRuleContext,
+      *args: ir.Value | Sequence[ir.Value],
+      **kwargs: Any,
+  ) -> tuple[Sequence[ir.Value | Sequence[ir.Value]], bool]:
+      ...
 
 
 def _cached_lowering(
@@ -2144,9 +2158,9 @@ def _cached_lowering(
     avals_out = map(lambda v: v.aval, eqn.outvars)
     cache_entry = _emit_lowering_rule_as_fun(
         partial(_uncached_lowering, eqn.primitive, eqn.ctx, eqn.effects),
-        ctx, eqn.ctx, eqn.primitive, ordered_effects, avals_in, avals_out,
+        ctx, eqn.ctx, eqn.primitive, ordered_effects, avals_in, avals_out,  # pyrefly: ignore[bad-argument-type]  # pyrefly#2385
         **params,
-    )  # pyrefly: ignore[bad-argument-type]  # pyrefly#2385
+    )
     ctx.lowering_cache[cache_key] = cache_entry
 
   tokens_in_args = tuple(tokens_in.get(eff) for eff in ordered_effects)
@@ -2171,7 +2185,7 @@ def _cached_lowering(
 
 
 def _emit_lowering_rule_as_fun(
-    lowering_rule: LoweringRule,
+    lowering_rule: CachedLoweringRule,
     ctx: ModuleContext,
     eqn_ctx: core.JaxprEqnContext,
     primitive: core.Primitive,
@@ -2219,15 +2233,19 @@ def _emit_lowering_rule_as_fun(
         traceback=None,
         avals_in=avals_in, avals_out=avals_out,
         tokens_in=TokenSet(zip(ordered_effects, token_args)),
-        tokens_out=None, jaxpr_eqn_ctx=eqn_ctx, dim_var_values=dim_var_values,
+        tokens_out=None, jaxpr_eqn_ctx=eqn_ctx,
+        dim_var_values=flatten_ir_values(dim_var_values),
         const_lowering=const_lowering)
     with source_info_to_location(
       ctx, primitive, source_info_util.new_name_stack(), None
     ):
       outs, inline = lowering_rule(sub_ctx, *unflattened_args, **params)
     if sub_ctx.tokens_out:
-      outs = [*[sub_ctx.tokens_out.get(eff) for eff in ordered_effects], *outs]
-    outs = flatten_ir_values(outs)
+      outs = [
+          *(sub_ctx.tokens_out.get(eff) for eff in ordered_effects),
+          *outs
+      ]
+    outs = flatten_ir_values(outs)  # pyrefly: ignore[bad-argument-type]
     func_dialect.return_(outs)
   return LoweringCacheValue(func_op, output_types, const_args, const_arg_avals,
                             inline)
@@ -2393,16 +2411,18 @@ def lower_per_platform(ctx: LoweringRuleContext,
   assert kept_rules
   # If there is a single rule left just apply the rule, without conditionals.
   if len(kept_rules) == 1:
-    output = kept_rules[0](ctx, *rule_args, **rule_kwargs)
+    output = type_cast(
+        Sequence[IrValues], kept_rules[0](ctx, *rule_args, **rule_kwargs)
+    )
+    flat_output = flatten_ir_values(output)
     foreach(
         lambda o: wrap_compute_type_in_place(ctx, _get_owner(o)),
-        filter(_is_not_block_argument, flatten_ir_values(output)),
+        filter(_is_not_block_argument, flat_output),
     )
     foreach(
-        lambda o: wrap_xla_metadata_in_place(ctx, _get_owner(o)),
-        flatten_ir_values(output),
+        lambda o: wrap_xla_metadata_in_place(ctx, _get_owner(o)), flat_output
     )
-    return output
+    return flat_output
 
   assert len(platforms) > 1 and len(kept_rules) >= 2, (platforms, kept_rules)
   assert len(ctx.dim_var_values) >= 1, "Must have a platform_index variable"
@@ -2433,7 +2453,9 @@ def lower_per_platform(ctx: LoweringRuleContext,
     inner_ctx = ctx.replace(platforms=platforms_for_this_rule)
     branch = case_op.regions[i].blocks.append()
     with ir.InsertionPoint(branch):
-      output = rule(inner_ctx, *rule_args, **rule_kwargs)
+      output = type_cast(
+          Sequence[IrValues], rule(inner_ctx, *rule_args, **rule_kwargs)
+      )
       try:
         out_nodes = flatten_ir_values(output)
       except TypeError as e:
@@ -2483,7 +2505,7 @@ def lower_fun(fun: Callable, multiple_results: bool = True) -> Callable:
         wrapped_fun, ctx.avals_in, lower=True)
 
     if any(isinstance(e, core.InternalMutableArrayEffect) for e in jaxpr.effects):
-      from jax._src.interpreters import pxla  # type: ignore
+      from jax._src.interpreters import pxla  # pytype: disable=import-error
       closed_jaxpr = core.ClosedJaxpr(jaxpr, consts_for_constvars)
       closed_jaxpr = pxla._discharge_internal_refs(closed_jaxpr)
       jaxpr, consts_for_constvars = closed_jaxpr.jaxpr, closed_jaxpr.consts
@@ -2837,10 +2859,13 @@ def full_like_aval(ctx: LoweringRuleContext, value, aval: core.ShapedArray) -> i
   return broadcast_in_dim(ctx, zero, aval, broadcast_dimensions=())
 
 def add_jaxvals_lowering(ctx, x, y):
+  out_aval, = ctx.avals_out
   if (isinstance(a := ctx.avals_in[0], core.ShapedArray) and
       dtypes.issubdtype(a.dtype, dtypes.extended)):
     return lower_fun(lambda x, y: [a.dtype._rules.add(a.dtype, x, y)])(ctx, x, y)
-  return [hlo.add(x, y)]
+  out = hlo.add(x, y)
+  return [lower_with_sharding_in_types(ctx, out, out_aval)]
+
 register_lowering(ad_util.add_jaxvals_p, add_jaxvals_lowering)
 
 register_lowering(ad_util.stop_gradient_p, lambda ctx, x: [x])
@@ -2974,15 +2999,15 @@ def get_sharding_attr(
     sharding: xc.OpSharding | SdyArray | SdyArrayList
 ) -> ir.Attribute:
   if isinstance(sharding, (SdyArray, SdyArrayList)):
-    return sharding.build()  # type: ignore
+    return sharding.build()
   else:
     # If there are very large numbers of devices, use the proto representation.
     # The MHLO to HLO conversion supports both, and the proto representation is
     # more compact.
-    if len(sharding.tile_assignment_devices) > 100:  # type: ignore
-      return ir.StringAttr.get(sharding.SerializeToString())  # type: ignore
+    if len(sharding.tile_assignment_devices) > 100:
+      return ir.StringAttr.get(sharding.SerializeToString())
     else:
-      return ir.StringAttr.get(repr(xc.HloSharding.from_proto(sharding)))  # type: ignore[arg-type]
+      return ir.StringAttr.get(repr(xc.HloSharding.from_proto(sharding)))
 
 
 def wrap_with_layout_op(ctx: LoweringRuleContext,
