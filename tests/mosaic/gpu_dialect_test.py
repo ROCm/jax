@@ -99,6 +99,10 @@ def undefs(*tys: ir.Type) -> list[ir.Value]:
   return [builtin.unrealized_conversion_cast([ty], []) for ty in tys]
 
 
+@unittest.skipIf(
+    jtu.test_device_matches(["rocm"]),
+    "Mosaic GPU is not supported on ROCm.",
+)
 class MosaicGpuTest(parameterized.TestCase):
 
   def setUp(self):
