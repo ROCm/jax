@@ -105,6 +105,12 @@ jax_wheel(
     wheel_name = "jax",
 )
 
+filegroup(
+    name = "jax_wheel.whl",
+    srcs = [":jax_wheel"],
+    visibility = ["//visibility:public"],
+)
+
 jax_source_package(
     name = "jax_source_package",
     source_files = [":jax_sources"],
