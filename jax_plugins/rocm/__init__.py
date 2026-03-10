@@ -18,12 +18,13 @@ import logging
 import os
 import pathlib
 
+from jax._src import hardware_utils
 from jax._src.lib import xla_client
 import jax._src.xla_bridge as xb
 
 # rocm_plugin_extension locates inside jaxlib. `jaxlib` is for testing without
 # preinstalled jax rocm plugin packages.
-for pkg_name in ['jax_rocm60_plugin', 'jaxlib.cuda']:
+for pkg_name in ['jax_rocm7_plugin', 'jax_rocm60_plugin', 'jaxlib.rocm']:
   try:
     rocm_plugin_extension = importlib.import_module(
         f'{pkg_name}.rocm_plugin_extension'
@@ -80,6 +81,25 @@ def initialize():
   path = _get_library_path()
   if path is None:
     return
+
+  # Count GPUs (stop at 2 since that's all we need to know)
+  gpu_count = hardware_utils.count_amd_gpus(stop_at=2)
+  if gpu_count == 0:
+    logger.warning(
+        "No AMD GPUs detected via KFD. Proceeding with initialization "
+        "as GPUs may still be available."
+    )
+  elif gpu_count > 1:
+    shm_size_mb = hardware_utils.get_shm_size()
+    if shm_size_mb and shm_size_mb <= 64:
+      logger.warning(
+          "Detected multiple GPUs but /dev/shm size is only %.1f MB. "
+          "RCCL may exhaust shared memory during multi-GPU operations, "
+          "causing runtime failures. Consider increasing /dev/shm size. "
+          "For example in Docker, use: --shm-size=64g",
+          shm_size_mb,
+      )
+
   options = xla_client.generate_pjrt_gpu_plugin_options()
   options["platform_name"] = "ROCM"
   c_api = xb.register_plugin(

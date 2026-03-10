@@ -13,9 +13,13 @@
 # limitations under the License.
 
 import enum
+from itertools import islice
+import logging
 import os
 import pathlib
 import glob
+import re
+import sys
 
 _GOOGLE_PCI_VENDOR_ID = '0x1ae0'
 
@@ -80,3 +84,86 @@ def transparent_hugepages_enabled() -> bool:
   # information about transparent huge pages.
   path = pathlib.Path('/sys/kernel/mm/transparent_hugepage/enabled')
   return path.exists() and path.read_text().strip() == '[always] madvise never'
+
+
+logger = logging.getLogger(__name__)
+
+
+def count_amd_gpus(stop_at: int = sys.maxsize) -> int:
+    """Count AMD GPUs available via KFD kernel driver.
+
+    This function checks for the presence of AMD GPUs by examining the KFD
+    kernel driver sysfs topology. This approach works on both native Linux and
+    WSL2 environments where AMD ROCm drivers are properly installed. Presence
+    of KFD entities doesn't guarantee that the GPUs are usable through HIP and
+    PJRT, however, we can't do much better without spawning an additional
+    process with a potentially complicated setup to run actual HIP code. And
+    we don't want to initialize HIP right now inside the current process,
+    because doing so might spoil a proper initialization of the rocprofiler-sdk
+    later during PJRT startup.
+
+    Args:
+        stop_at: If provided, stop counting once this many GPUs are found.
+                 This allows early exit when only checking for thresholds.
+
+    Returns:
+        The number of AMD GPUs detected (up to stop_at if provided).
+    """
+    gpu_count = 0
+    try:
+        kfd_nodes_path = pathlib.Path("/sys/class/kfd/kfd/topology/nodes/")
+        if not kfd_nodes_path.exists():
+            return 0
+
+        # Pattern matches "simd_count ##" - we use non-zero simd_count as GPU trait
+        # following KFD implementation:
+        # https://github.com/torvalds/linux/blob/ea1013c1539270e372fc99854bc6e4d94eaeff66/drivers/gpu/drm/amd/amdkfd/kfd_topology.c#L941
+        r_simd_count = re.compile(r"\bsimd_count\s+(\d+)\b", re.MULTILINE)
+
+        def is_valid_gpu_node(props_file):
+            """Check if a properties file represents a valid GPU node."""
+            try:
+                file_size = props_file.stat().st_size
+                # 16KB is more than a reasonable limit
+                if file_size <= 0 or file_size > 16 * 1024:
+                    return False
+                content = props_file.read_text(encoding="ascii")
+                match = r_simd_count.search(content)
+                return match and int(match.group(1)) > 0
+            except Exception as e:  # pylint: disable=broad-exception-caught
+                logger.debug("Failed to read KFD node file '%s': %s", props_file, e)
+                return False
+
+        # Pipeline: list nodes -> get properties paths -> filter existing -> filter valid GPUs -> limit -> count
+        props_files = (node_dir / "properties" for node_dir in kfd_nodes_path.iterdir())
+        existing_files = filter(lambda p: p.exists(), props_files)
+        valid_gpus = filter(is_valid_gpu_node, existing_files)
+        limited_gpus = islice(valid_gpus, stop_at)
+        gpu_count = sum(1 for _ in limited_gpus)
+
+    except Exception as e:  # pylint: disable=broad-exception-caught
+        logger.warning("Failed to count AMD GPUs: %s", e)
+    return gpu_count
+
+
+def get_shm_size():
+    """Get /dev/shm size in MB.
+
+    Returns:
+        Size in MB if /dev/shm exists, None if it doesn't exist, 0 on error.
+    """
+    try:
+        shm_path = "/dev/shm"
+        if not os.path.exists(shm_path):
+            return None
+
+        stat = os.statvfs(shm_path)
+        # Total size in bytes
+        shm_size_bytes = stat.f_blocks * stat.f_frsize
+        shm_size_mb = shm_size_bytes / (1024 * 1024)
+
+        return shm_size_mb
+
+    except Exception as e:  # pylint: disable=broad-exception-caught
+        logger.debug("Failed to check /dev/shm size: %s", e)
+        return 0
