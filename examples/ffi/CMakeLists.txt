@@ -1,41 +1,52 @@
 cmake_minimum_required(VERSION 3.15...3.30)
-project(${SKBUILD_PROJECT_NAME} LANGUAGES CXX)
 
-option(JAX_FFI_EXAMPLE_ENABLE_CUDA "Enable CUDA support" OFF)
+project(${SKBUILD_PROJECT_NAME} LANGUAGES CXX HIP)
 
-find_package(Python 3.11 REQUIRED COMPONENTS Interpreter Development.Module)
+find_package(Python 3.12 REQUIRED COMPONENTS Interpreter Development.Module)
+
 execute_process(
-  COMMAND "${Python_EXECUTABLE}"
-          "-c" "from jax import ffi; print(ffi.include_dir())"
-  OUTPUT_STRIP_TRAILING_WHITESPACE OUTPUT_VARIABLE XLA_DIR)
-message(STATUS "XLA include directory: ${XLA_DIR}")
-
-find_package(nanobind CONFIG REQUIRED)
-
-set(
-  JAX_FFI_EXAMPLE_CPU_PROJECTS
-  "rms_norm"
-  "cpu_examples"
+  COMMAND "${Python_EXECUTABLE}" "-c"
+          "from jax import ffi; print(ffi.include_dir())"
+  OUTPUT_VARIABLE XLA_FFI_INCLUDE_DIR
+  OUTPUT_STRIP_TRAILING_WHITESPACE
 )
 
-foreach(PROJECT ${JAX_FFI_EXAMPLE_CPU_PROJECTS})
-  nanobind_add_module("_${PROJECT}" NB_STATIC "src/jax_ffi_example/${PROJECT}.cc")
-  target_include_directories("_${PROJECT}" PUBLIC ${XLA_DIR})
-  install(TARGETS "_${PROJECT}" LIBRARY DESTINATION ${SKBUILD_PROJECT_NAME})
-endforeach()
+message(STATUS "XLA FFI include directory: ${XLA_FFI_INCLUDE_DIR}")
 
-if(JAX_FFI_EXAMPLE_ENABLE_CUDA)
-  enable_language(CUDA)
-  find_package(CUDAToolkit REQUIRED)
+find_package(hip REQUIRED)
+find_package(nanobind CONFIG REQUIRED)
 
-  add_library(_cuda_examples SHARED "src/jax_ffi_example/cuda_examples.cu")
-  set_target_properties(_cuda_examples PROPERTIES POSITION_INDEPENDENT_CODE ON
-                                                  CUDA_STANDARD 17)
-  target_include_directories(_cuda_examples PUBLIC ${XLA_DIR})
-  install(TARGETS _cuda_examples LIBRARY DESTINATION ${SKBUILD_PROJECT_NAME})
+add_library(_hip_examples SHARED
+  src/jax_ffi_example/hip_examples.cu
+)
 
-  nanobind_add_module(_gpu_examples NB_STATIC "src/jax_ffi_example/gpu_examples.cc")
-  target_include_directories(_gpu_examples PUBLIC ${XLA_DIR})
-  target_link_libraries(_gpu_examples PRIVATE CUDA::cudart)
-  install(TARGETS _gpu_examples LIBRARY DESTINATION ${SKBUILD_PROJECT_NAME})
-endif()
+set_source_files_properties(
+  src/jax_ffi_example/hip_examples.cu
+  PROPERTIES LANGUAGE HIP
+)
+
+set_target_properties(_hip_examples PROPERTIES
+  POSITION_INDEPENDENT_CODE ON
+  HIP_STANDARD 17
+  HIP_STANDARD_REQUIRED ON
+  CXX_STANDARD 17
+  CXX_STANDARD_REQUIRED ON
+  LINKER_LANGUAGE HIP
+)
+
+target_include_directories(_hip_examples PRIVATE
+  ${XLA_FFI_INCLUDE_DIR}
+)
+
+target_link_libraries(_hip_examples PRIVATE
+  hip::host
+)
+
+target_compile_options(_hip_examples PRIVATE
+  $<$<COMPILE_LANGUAGE:HIP>:-Wno-return-type-c-linkage>
+  $<$<COMPILE_LANGUAGE:CXX>:-Wno-return-type-c-linkage>
+)
+
+install(TARGETS _hip_examples
+  LIBRARY DESTINATION ${SKBUILD_PROJECT_NAME}
+)
