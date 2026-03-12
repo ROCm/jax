@@ -640,6 +640,9 @@ async def main():
   if "rocm" in args.wheels:
     wheel_build_command_base.append("--config=rocm_base")
     wheel_build_command_base.append("--config=rocm")
+    wheel_build_command_base.append(
+        "--action_env=HIPCC_COMPILE_FLAGS_APPEND=--offload-compress"
+    )
     if clang_local:
       wheel_build_command_base.append(f"--action_env=CLANG_COMPILER_PATH=\"{clang_path}\"")
     if args.rocm_path:
