@@ -148,6 +148,60 @@ class FusedAttentionTest(PallasBaseTest):
     super().setUp()
     if jtu.test_device_matches(["tpu"]):
       self.skipTest("Not intended for TPU")
+  
+  def _estimate_mha_shared_memory_bytes(self, block_q, block_k, head_dim, dtype):
+    """Estimate shared memory usage for standard fused attention kernel (attention.mha)."""
+    dtype_size = jnp.dtype(dtype).itemsize
+    float32_size = jnp.dtype(jnp.float32).itemsize
+
+    # Pallas kernels pad head_dim to the next power of 2
+    head_dim_padded = 1 << (head_dim - 1).bit_length()
+    if head_dim_padded < head_dim:
+      head_dim_padded = 1
+
+    o_size = block_q * head_dim_padded * float32_size
+    q_size = block_q * head_dim_padded * dtype_size
+    k_size = block_k * head_dim_padded * dtype_size
+    v_size = block_k * head_dim_padded * dtype_size
+
+    estimated = o_size + q_size + k_size + v_size
+
+    # Add buffer for intermediate accumulators (m, l) in float32 for stable softmax
+    estimated += 2 * block_q * float32_size
+
+    return estimated
+
+  def _adjust_mha_params_for_shared_memory(self, block_q, block_k, head_dim, dtype):
+    """Adjust MHA block parameters (block_q, block_k) to fit within device SHMEM limits."""
+    try:
+      device = jax.local_devices()[0]
+      max_smem = device.shared_memory_per_block_optin
+    except (AttributeError, IndexError):
+      # Fallback limit
+      max_smem = 48 * 1024
+
+    estimated = self._estimate_mha_shared_memory_bytes(block_q, block_k, head_dim, dtype)
+
+    if estimated <= max_smem:
+      return block_q, block_k
+
+    params = [block_q, block_k]
+
+    min_block_size = 32
+
+    while estimated > max_smem:
+      # Reduce block_k - first priority
+      if params[1] > min_block_size:
+        params[1] = max(min_block_size, params[1] // 2)
+      # Reduce block_q 
+      elif params[0] > min_block_size:
+        params[0] = max(min_block_size, params[0] // 2)
+      else:
+        return None, None
+
+      estimated = self._estimate_mha_shared_memory_bytes(params[0], params[1], head_dim, dtype)
+
+    return params[0], params[1]
 
   @jtu.sample_product(
       batch_size=(1, 2),
@@ -175,6 +229,21 @@ class FusedAttentionTest(PallasBaseTest):
       use_fwd,
       use_segment_ids,
   ):
+    # SHMEM Adjustment Logic
+    original_blocks = dict(block_sizes)
+    block_q_orig = original_blocks["block_q"]
+    block_k_orig = original_blocks["block_k"]
+    dtype = jnp.float16
+
+    adjusted_q, adjusted_k = self._adjust_mha_params_for_shared_memory(
+        block_q_orig, block_k_orig, head_dim, dtype
+    )
+
+    if adjusted_q is None:
+      self.skipTest("Cannot adjust FusedAttention (fwd) parameters to fit device shared memory limits")
+
+    block_sizes = BlockSizes(block_q=adjusted_q, block_k=adjusted_k)
+
     k1, k2, k3 = random.split(random.key(0), 3)
     q = random.normal(
         k1, (batch_size, seq_len, num_heads, head_dim), dtype=jnp.float16
@@ -193,13 +262,12 @@ class FusedAttentionTest(PallasBaseTest):
       segment_ids = None
 
     if use_fwd:
-
       @jax.jit
       def impl(q, k, v):
         v, _ = jax.vjp(
             functools.partial(
                 attention.mha,
-                block_sizes=BlockSizes(**dict(block_sizes)),
+                block_sizes=block_sizes, #adjusted blocks for fwd
                 causal=causal,
                 segment_ids=segment_ids,
                 interpret=self.INTERPRET,
@@ -213,7 +281,7 @@ class FusedAttentionTest(PallasBaseTest):
     else:
       impl = functools.partial(
           attention.mha,
-          block_sizes=BlockSizes(**dict(block_sizes)),
+          block_sizes=block_sizes,
           causal=causal,
           segment_ids=segment_ids,
           interpret=self.INTERPRET,
@@ -267,6 +335,39 @@ class FusedAttentionTest(PallasBaseTest):
       causal,
       use_segment_ids,
   ):
+    # SHMEM Adjustment Logic 
+    original_block_dict = dict(block_sizes)
+    block_q_orig = original_block_dict["block_q"]
+    block_k_orig = original_block_dict["block_k"]
+    dtype = jnp.float16
+
+    # Estimate and adjust FWD blocks (the dominant memory consumers)
+    adjusted_q, adjusted_k = self._adjust_mha_params_for_shared_memory(
+        block_q_orig, block_k_orig, head_dim, dtype
+    )
+
+    if adjusted_q is None:
+      self.skipTest("Cannot adjust FusedAttention (bwd) parameters to fit device shared memory limits")
+
+    # Calculate reduction factors for q and k
+    q_reduction_factor = block_q_orig / adjusted_q
+    k_reduction_factor = block_k_orig / adjusted_k
+
+    # Apply factors to all 6 blocks for bwd
+    adjusted_block_dict = original_block_dict.copy()
+    min_bwd_block = 32
+
+    adjusted_block_dict["block_q"] = adjusted_q
+    adjusted_block_dict["block_k"] = adjusted_k
+
+    # Adjust BWD-specific blocks proportionally, ensuring they remain factors of 32
+    adjusted_block_dict["block_q_dkv"] = max(min_bwd_block, int(adjusted_block_dict["block_q_dkv"] // q_reduction_factor))
+    adjusted_block_dict["block_kv_dkv"] = max(min_bwd_block, int(adjusted_block_dict["block_kv_dkv"] // k_reduction_factor))
+    adjusted_block_dict["block_q_dq"] = max(min_bwd_block, int(adjusted_block_dict["block_q_dq"] // q_reduction_factor))
+    adjusted_block_dict["block_kv_dq"] = max(min_bwd_block, int(adjusted_block_dict["block_kv_dq"] // k_reduction_factor))
+
+    block_sizes = BlockSizes(**adjusted_block_dict)
+
     if jtu.is_cuda_compute_capability_at_least("8.0"):
       # TODO(b/416306534)
       self.skipTest("Precision issues after CUDA 12.8.1 upgrade")
@@ -291,7 +392,7 @@ class FusedAttentionTest(PallasBaseTest):
     def f(q, k, v):
       return attention.mha(
           q, k, v,
-          block_sizes=BlockSizes(**dict(block_sizes)),
+          block_sizes=block_sizes, # Use adjusted blocks
           causal=causal,
           segment_ids=segment_ids,
           interpret=self.INTERPRET).sum()
