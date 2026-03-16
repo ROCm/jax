@@ -30,8 +30,9 @@ import jax
 import jax.numpy as jnp
 import jax.profiler
 import jax._src.test_util as jtu
-from jax._src.lib import jaxlib_extension_version
+
 from jax._src import profiler
+from jax._src.lib import jaxlib_extension_version
 from jax import jit
 
 
@@ -57,12 +58,12 @@ class ProfilerTest(unittest.TestCase):
 
   def setUp(self):
     if (
-        sys.version_info < (3, 14)
-        and hasattr(sys, "_is_gil_enabled")
-        and not sys._is_gil_enabled()
+      sys.version_info < (3, 14)
+      and hasattr(sys, "_is_gil_enabled")
+      and not sys._is_gil_enabled()
     ):
       self.skipTest(
-          "Profiler tests are not thread-safe under Python 3.13 free threading"
+        "Profiler tests are not thread-safe under Python 3.13 free threading"
       )
 
     super().setUp()
@@ -82,7 +83,8 @@ class ProfilerTest(unittest.TestCase):
     jax.profiler.start_server(port=port)
     port = portpicker.pick_unused_port()
     with self.assertRaisesRegex(
-        ValueError, "Only one profiler server can be active at a time."):
+      ValueError, "Only one profiler server can be active at a time."
+    ):
       jax.profiler.start_server(port=port)
     jax.profiler.stop_server()
 
@@ -94,13 +96,15 @@ class ProfilerTest(unittest.TestCase):
     with tempfile.TemporaryDirectory() as tmpdir:
       try:
         jax.profiler.start_trace(tmpdir)
-        jax.pmap(lambda x: jax.lax.psum(x + 1, 'i'), axis_name='i')(
-            jnp.ones(jax.local_device_count()))
+        jax.pmap(lambda x: jax.lax.psum(x + 1, "i"), axis_name="i")(
+          jnp.ones(jax.local_device_count())
+        )
       finally:
         jax.profiler.stop_trace()
 
-      proto_path = glob.glob(os.path.join(tmpdir, "**/*.xplane.pb"),
-                             recursive=True)
+      proto_path = glob.glob(
+        os.path.join(tmpdir, "**/*.xplane.pb"), recursive=True
+      )
       self.assertEqual(len(proto_path), 1)
       with open(proto_path[0], "rb") as f:
         proto = f.read()
@@ -111,14 +115,14 @@ class ProfilerTest(unittest.TestCase):
         self.assertIn(b"/device:TPU", proto)
       self.assertIn(b"pxla.py", proto)
 
-  @unittest.skipIf(
-      jaxlib_extension_version < 379, "Requires jaxlib 0.8 or later."
-  )
+  @unittest.skipIf(jaxlib_extension_version < 379, "Requires jaxlib 0.8 or later.")
   def testProgrammaticProfilingConcurrency(self):
     def work():
-      x = jax.pmap(lambda x: jax.lax.psum(x + 1, 'i'), axis_name='i')(
-          jnp.ones(jax.local_device_count()))
+      x = jax.pmap(lambda x: jax.lax.psum(x + 1, "i"), axis_name="i")(
+        jnp.ones(jax.local_device_count())
+      )
       jax.block_until_ready(x)
+
     with tempfile.TemporaryDirectory() as tmpdir:
       try:
         jax.profiler.start_trace(tmpdir)
@@ -128,8 +132,9 @@ class ProfilerTest(unittest.TestCase):
       finally:
         jax.profiler.stop_trace()
 
-      proto_path = glob.glob(os.path.join(tmpdir, "**/*.xplane.pb"),
-                             recursive=True)
+      proto_path = glob.glob(
+        os.path.join(tmpdir, "**/*.xplane.pb"), recursive=True
+      )
       self.assertEqual(len(proto_path), 1)
       with open(proto_path[0], "rb") as f:
         proto = f.read()
@@ -147,13 +152,13 @@ class ProfilerTest(unittest.TestCase):
         options.python_tracer_level = 0
         jax.profiler.start_trace(tmpdir, profiler_options=options)
         jax.pmap(lambda x: jax.lax.psum(x + 1, "i"), axis_name="i")(
-            jnp.ones(jax.local_device_count())
+          jnp.ones(jax.local_device_count())
         )
       finally:
         jax.profiler.stop_trace()
 
       proto_path = glob.glob(
-          os.path.join(tmpdir, "**/*.xplane.pb"), recursive=True
+        os.path.join(tmpdir, "**/*.xplane.pb"), recursive=True
       )
       self.assertEqual(len(proto_path), 1)
       with open(proto_path[0], "rb") as f:
@@ -170,8 +175,9 @@ class ProfilerTest(unittest.TestCase):
       tmpdir = pathlib.Path(tmpdir_string)
       try:
         jax.profiler.start_trace(tmpdir)
-        jax.pmap(lambda x: jax.lax.psum(x + 1, 'i'), axis_name='i')(
-            jnp.ones(jax.local_device_count()))
+        jax.pmap(lambda x: jax.lax.psum(x + 1, "i"), axis_name="i")(
+          jnp.ones(jax.local_device_count())
+        )
       finally:
         jax.profiler.stop_trace()
 
@@ -193,7 +199,7 @@ class ProfilerTest(unittest.TestCase):
         options.advanced_configuration = {"tpu_trace_mode": "TRACE_ONLY_HOST"}
         jax.profiler.start_trace(tmpdir, profiler_options=options)
         jax.pmap(lambda x: jax.lax.psum(x + 1, "i"), axis_name="i")(
-            jnp.ones(jax.local_device_count())
+          jnp.ones(jax.local_device_count())
         )
       finally:
         jax.profiler.stop_trace()
@@ -213,7 +219,7 @@ class ProfilerTest(unittest.TestCase):
     try:
       jax.profiler.start_trace("test")
       jax.pmap(lambda x: jax.lax.psum(x + 1, "i"), axis_name="i")(
-          jnp.ones(jax.local_device_count())
+        jnp.ones(jax.local_device_count())
       )
     finally:
       fdo_profile = profiler.stop_and_get_fdo_profile()
@@ -230,7 +236,8 @@ class ProfilerTest(unittest.TestCase):
         with self.assertRaisesRegex(
           RuntimeError,
           "Profile has already been started. Only one profile may be run at a "
-          "time."):
+          "time.",
+        ):
           jax.profiler.start_trace(tmpdir)
     finally:
       jax.profiler.stop_trace()
@@ -238,11 +245,13 @@ class ProfilerTest(unittest.TestCase):
   def testProgrammaticProfilingContextManager(self):
     with tempfile.TemporaryDirectory() as tmpdir:
       with jax.profiler.trace(tmpdir):
-        jax.pmap(lambda x: jax.lax.psum(x + 1, 'i'), axis_name='i')(
-            jnp.ones(jax.local_device_count()))
+        jax.pmap(lambda x: jax.lax.psum(x + 1, "i"), axis_name="i")(
+          jnp.ones(jax.local_device_count())
+        )
 
-      proto_path = glob.glob(os.path.join(tmpdir, "**/*.xplane.pb"),
-                             recursive=True)
+      proto_path = glob.glob(
+        os.path.join(tmpdir, "**/*.xplane.pb"), recursive=True
+      )
       self.assertEqual(len(proto_path), 1)
       with open(proto_path[0], "rb") as f:
         proto = f.read()
@@ -258,6 +267,7 @@ class ProfilerTest(unittest.TestCase):
     @jit
     def xy_plus_z(x, y, z):
       return jnp.float32(jax.lax.batch_matmul(jnp.bfloat16(x), y)) + z
+
     k = jax.random.key(0)
     s = 1, 16, 16
     jax.devices()
@@ -290,8 +300,8 @@ class ProfilerTest(unittest.TestCase):
       tmpdir = pathlib.Path(tmpdir_string)
       options = jax.profiler.ProfileOptions()
       options.advanced_configuration = {
-          "gpu_max_callback_api_events": 1000000,
-          "gpu_enable_nvtx_tracking": True,
+        "gpu_max_callback_api_events": 1000000,
+        "gpu_enable_nvtx_tracking": True,
       }
       with jax.profiler.trace(tmpdir):
         xy_plus_z(x, y, z).block_until_ready()
@@ -341,8 +351,9 @@ class ProfilerTest(unittest.TestCase):
     with tempfile.TemporaryDirectory() as tmpdir_string:
       tmpdir = pathlib.Path(tmpdir_string)
       with jax.profiler.trace(tmpdir):
-        jax.pmap(lambda x: jax.lax.psum(x + 1, 'i'), axis_name='i')(
-            jnp.ones(jax.local_device_count()))
+        jax.pmap(lambda x: jax.lax.psum(x + 1, "i"), axis_name="i")(
+          jnp.ones(jax.local_device_count())
+        )
 
       proto_path = tuple(tmpdir.rglob("*.xplane.pb"))
       self.assertEqual(len(proto_path), 1)
@@ -362,36 +373,41 @@ class ProfilerTest(unittest.TestCase):
     @jax.profiler.annotate_function
     def f(x, *, y):
       return x + 2 * y
+
     self.assertEqual(f(7, y=3), 13)
 
     @jax.profiler.annotate_function
     def f(x, *, name):
       return x + 2 * len(name)
+
     self.assertEqual(f(7, name="abc"), 13)
 
     @partial(jax.profiler.annotate_function, name="aname")
     def g(x):
       return x + 2
+
     self.assertEqual(g(7), 9)
 
     @partial(jax.profiler.annotate_function, name="aname", akwarg="hello")
     def h(x):
       return x + 2
+
     self.assertEqual(h(7), 9)
 
   def testDeviceMemoryProfile(self):
-    x = jnp.ones((20,)) + 7.
+    x = jnp.ones((20,)) + 7.0
     self.assertIsInstance(jax.profiler.device_memory_profile(), bytes)
     del x
 
   def _check_xspace_pb_exist(self, logdir):
-    path = os.path.join(logdir, 'plugins', 'profile', '*', '*.xplane.pb')
-    self.assertEqual(1, len(glob.glob(path)),
-                     'Expected one path match: ' + path)
+    path = os.path.join(logdir, "plugins", "profile", "*", "*.xplane.pb")
+    self.assertEqual(1, len(glob.glob(path)), "Expected one path match: " + path)
 
   @unittest.skip("Test causes OOMs")
-  @unittest.skipIf(not (portpicker and _pywrap_profiler_plugin),
-    "Test requires xprof and portpicker")
+  @unittest.skipIf(
+    not (portpicker and _pywrap_profiler_plugin),
+    "Test requires xprof and portpicker",
+  )
   def testSingleWorkerSamplingMode(self, delay_ms=None):
     def on_worker(port, worker_start):
       jax.profiler.start_server(port)
@@ -407,22 +423,16 @@ class ProfilerTest(unittest.TestCase):
     def on_profile(port, logdir, worker_start):
       worker_start.wait()
       options = {
-          "host_tracer_level": 2,
-          "python_tracer_level": 2,
-          "device_tracer_level": 1,
-          "delay_ms": delay_ms,
+        "host_tracer_level": 2,
+        "python_tracer_level": 2,
+        "device_tracer_level": 1,
+        "delay_ms": delay_ms,
       }
 
       # Request for 1000 milliseconds of profile.
       duration_ms = 1000
       _pywrap_profiler_plugin.trace(
-          f'localhost:{port}',
-          logdir,
-          '',
-          True,
-          duration_ms,
-          3,
-          options
+        f"localhost:{port}", logdir, "", True, duration_ms, 3, options
       )
       self.profile_done = True
 
@@ -431,9 +441,11 @@ class ProfilerTest(unittest.TestCase):
     shutil.rmtree(logdir, ignore_errors=True)
     port = portpicker.pick_unused_port()
     thread_profiler = threading.Thread(
-        target=on_profile, args=(port, logdir, self.worker_start))
+      target=on_profile, args=(port, logdir, self.worker_start)
+    )
     thread_worker = threading.Thread(
-        target=on_worker, args=(port, self.worker_start))
+      target=on_worker, args=(port, self.worker_start)
+    )
     thread_worker.start()
     thread_profiler.start()
     thread_profiler.join()
@@ -441,8 +453,9 @@ class ProfilerTest(unittest.TestCase):
     self._check_xspace_pb_exist(logdir)
 
   @unittest.skipIf(
-      not (portpicker and _pywrap_profiler_plugin),
-    "Test requires xprof and portpicker")
+    not (portpicker and _pywrap_profiler_plugin),
+    "Test requires xprof and portpicker",
+  )
   def test_remote_profiler(self):
     port = portpicker.pick_unused_port()
     jax.profiler.start_server(port)
@@ -451,14 +464,15 @@ class ProfilerTest(unittest.TestCase):
     logdir = absltest.get_default_test_tmpdir()
     # Remove any existing log files.
     shutil.rmtree(logdir, ignore_errors=True)
+
     def on_profile():
       os.system(
-          f"{sys.executable} -m jax.collect_profile {port} 500 "
-          f"--log_dir {logdir} --no_perfetto_link")
+        f"{sys.executable} -m jax.collect_profile {port} 500 "
+        f"--log_dir {logdir} --no_perfetto_link"
+      )
       profile_done.set()
 
-    thread_profiler = threading.Thread(
-        target=on_profile, args=())
+    thread_profiler = threading.Thread(target=on_profile, args=())
     thread_profiler.start()
     start_time = time.time()
     y = jnp.zeros((5, 5))
@@ -474,8 +488,9 @@ class ProfilerTest(unittest.TestCase):
 
   @unittest.skip("Profiler takes >30s on Cloud TPUs")
   @unittest.skipIf(
-      not (portpicker and _pywrap_profiler_plugin),
-    "Test requires xprof and portpicker")
+    not (portpicker and _pywrap_profiler_plugin),
+    "Test requires xprof and portpicker",
+  )
   def test_remote_profiler_gcs_path(self):
     port = portpicker.pick_unused_port()
     jax.profiler.start_server(port)
@@ -484,12 +499,12 @@ class ProfilerTest(unittest.TestCase):
     logdir = "gs://mock-test-bucket/test-dir"
     # Mock XProf call in collect_profile.
     _pywrap_profiler_plugin.trace = unittest.mock.MagicMock()
+
     def on_profile():
       jax.collect_profile(port, 500, logdir, no_perfetto_link=True)
       profile_done.set()
 
-    thread_profiler = threading.Thread(
-        target=on_profile, args=())
+    thread_profiler = threading.Thread(target=on_profile, args=())
     thread_profiler.start()
     start_time = time.time()
     y = jnp.zeros((5, 5))
@@ -502,14 +517,77 @@ class ProfilerTest(unittest.TestCase):
     jax.profiler.stop_server()
     thread_profiler.join()
     _pywrap_profiler_plugin.trace.assert_called_once_with(
-        unittest.mock.ANY,
-        logdir,
-        unittest.mock.ANY,
-        unittest.mock.ANY,
-        unittest.mock.ANY,
-        unittest.mock.ANY,
-        unittest.mock.ANY,
+      unittest.mock.ANY,
+      logdir,
+      unittest.mock.ANY,
+      unittest.mock.ANY,
+      unittest.mock.ANY,
+      unittest.mock.ANY,
+      unittest.mock.ANY,
     )
+
+  @jtu.run_on_devices("gpu")
+  @jtu.thread_unsafe_test()
+  def test_rocm_profiling(self):
+    """Test that ROCm profiling captures GPU kernel events."""
+    # ROCm-only gate using supported API
+    from jax.extend import backend as jax_backend
+
+    be = jax_backend.get_backend()
+    platform_version = getattr(be, "platform_version", "") or ""
+    if "rocm" not in platform_version.lower():
+      self.skipTest(f"Not ROCm backend: {platform_version}")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+      with jax.profiler.trace(tmpdir):
+        # Test multiple matmul shapes
+        shapes = [(32, 32), (64, 128), (256, 256), (512, 128)]
+        for i, (m, n) in enumerate(shapes):
+          x = jax.random.normal(jax.random.key(i * 2), (m, n))
+          y = jax.random.normal(jax.random.key(i * 2 + 1), (n, m))
+          jnp.dot(x, y).block_until_ready()
+
+      proto_path = glob.glob(
+        os.path.join(tmpdir, "**/*.xplane.pb"), recursive=True
+      )
+      self.assertEqual(len(proto_path), 1)
+      with open(proto_path[0], "rb") as f:
+        proto = f.read()
+      # Sanity check that serialized proto contains GPU traces
+      self.assertIn(b"/device:GPU", proto)
+
+  @jtu.run_on_devices("gpu")
+  @jtu.thread_unsafe_test()
+  def test_rocm_kernel_details_in_trace_json(self):
+    """Test that ROCm profiling captures kernel_details in trace.json.gz."""
+    # ROCm-only gate using supported API
+    from jax.extend import backend as jax_backend
+
+    be = jax_backend.get_backend()
+    platform_version = getattr(be, "platform_version", "") or ""
+    if "rocm" not in platform_version.lower():
+      self.skipTest(f"Not ROCm backend: {platform_version}")
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+      with jax.profiler.trace(tmpdir):
+        # Test multiple matmul shapes
+        shapes = [(64, 64), (128, 256), (512, 512), (1024, 256)]
+        for i, (m, n) in enumerate(shapes):
+          x = jax.random.normal(jax.random.key(i * 2), (m, n))
+          y = jax.random.normal(jax.random.key(i * 2 + 1), (n, m))
+          jnp.dot(x, y).block_until_ready()
+
+      # Find and read trace.json.gz file
+      import gzip
+      trace_files = glob.glob(
+        os.path.join(tmpdir, "**/*.trace.json.gz"), recursive=True
+      )
+      self.assertEqual(len(trace_files), 1)
+      with gzip.open(trace_files[0], "rt") as f:
+        trace_content = f.read()
+      # Sanity check that trace contains kernel_details
+      self.assertIn("kernel_details", trace_content)
+
 
 if __name__ == "__main__":
   absltest.main(testLoader=jtu.JaxTestLoader())
