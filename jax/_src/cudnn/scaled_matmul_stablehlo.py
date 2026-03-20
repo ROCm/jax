@@ -116,7 +116,7 @@ def _scaled_matmul_rocm_lowering(
         rhs,
         lhs_scale=lhs_scales,
         rhs_scale=rhs_scales,
-        # `scaled_matmul` is canonicalized to (B, M, K) x (B, N, K), so we
+        #  `scaled_matmul` is canonicalized to (B, M, K) x (B, N, K), so we
         # contract over K (axis 2) and batch over B (axis 0), yielding (B, M, N).
         dimension_numbers=(((2,), (2,)), ((0,), (0,))),
         preferred_element_type=preferred_element_type,
