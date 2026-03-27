@@ -168,6 +168,7 @@ pytype_strict_library(
             ":tree_util",
             ":typing",
             ":xla_bridge",
+            ":aiter",
         ],
         if_not_building = [],
     ) + py_deps("numpy") + py_deps("absl/logging"),
@@ -1545,6 +1546,15 @@ pytype_strict_library(
         ":typing",
         ":xla_bridge",
         "//jax/_src/lib",
+    ] + py_deps("numpy"),
+)
+
+pytype_strict_library(
+    name = "aiter",
+    srcs = glob(["aiter/**/*.py"]),
+    deps = [
+        ":api",        # for jax.ffi, jax.custom_vjp
+        ":numpy",
     ] + py_deps("numpy"),
 )
 

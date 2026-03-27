@@ -163,6 +163,7 @@ from jax._src.array import (
 
 # These submodules are separate because they are in an import cycle with
 # jax and rely on the names imported above.
+from jax import aiter as aiter
 from jax import custom_derivatives as custom_derivatives
 from jax import custom_batching as custom_batching
 from jax import custom_transpose as custom_transpose
