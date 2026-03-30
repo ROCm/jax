@@ -139,6 +139,7 @@ import jaxlib.gpu_sparse as gpu_sparse  # pytype: disable=import-error  # noqa: 
 import jaxlib.gpu_prng as gpu_prng  # pytype: disable=import-error  # noqa: F401
 import jaxlib.gpu_linalg as gpu_linalg  # pytype: disable=import-error  # noqa: F401
 
+import jaxlib.gpu_aiter as gpu_aiter  # pytype: disable=import-error  # noqa: F401
 import jaxlib.gpu_rnn as gpu_rnn  # pytype: disable=import-error  # noqa: F401
 import jaxlib.gpu_triton as gpu_triton # pytype: disable=import-error  # noqa: F401
 

@@ -189,6 +189,7 @@ def prepare_wheel_rocm(
   copy_files(
       dst_dir=plugin_dir,
       src_files=[
+          f"{source_file_prefix}jaxlib/rocm/_aiter.{pyext}",
           f"{source_file_prefix}jaxlib/rocm/_linalg.{pyext}",
           f"{source_file_prefix}jaxlib/rocm/_prng.{pyext}",
           f"{source_file_prefix}jaxlib/rocm/_solver.{pyext}",

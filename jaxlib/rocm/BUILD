@@ -476,9 +476,54 @@ rocm_nanobind_extension(
     ],
 )
 
+rocm_library(
+    name = "hip_aiter_kernels_impl",
+    srcs = ["//jaxlib/gpu:aiter_mha_kernels.cu.cc"],
+    hdrs = ["//jaxlib/gpu:aiter_mha.h"],
+    deps = [
+        ":hip_vendor",
+        "@local_config_rocm//rocm:rocm_headers",
+        "@xla//xla/ffi/api:ffi",
+    ],
+)
+
+cc_library(
+    name = "hip_aiter_mha_kernels",
+    srcs = ["//jaxlib/gpu:aiter_mha.cc"],
+    hdrs = ["//jaxlib/gpu:aiter_mha.h"],
+    deps = [
+        ":hip_aiter_kernels_impl",
+        ":hip_gpu_kernel_helpers",
+        ":hip_vendor",
+        "@local_config_rocm//rocm:rocm_headers",
+        "@xla//xla/ffi/api:ffi",
+    ],
+)
+
+rocm_nanobind_extension(
+    name = "_aiter",
+    srcs = ["//jaxlib/gpu:aiter.cc"],
+    copts = [
+        "-fexceptions",
+        "-fno-strict-aliasing",
+    ],
+    features = ["-use_header_modules"],
+    module_name = "_aiter",
+    deps = [
+        ":hip_aiter_mha_kernels",
+        ":hip_gpu_kernel_helpers",
+        ":hip_vendor",
+        "//jaxlib:kernel_nanobind_helpers",
+        "@local_config_rocm//rocm:hip_runtime",
+        "@local_config_rocm//rocm:rocm_headers",
+        "@nanobind",
+    ],
+)
+
 py_library(
     name = "rocm_gpu_support",
     deps = [
+        ":_aiter",
         ":_hybrid",
         ":_linalg",
         ":_prng",

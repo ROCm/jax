@@ -172,6 +172,7 @@ pytype_strict_library(
             ":test_util",
             ":xla_bridge",
             "//jax/_src/lib",
+            ":aiter",
         ],
         if_not_building = [],
     ) + py_deps("absl-all") + py_deps("portpicker"),
@@ -1554,6 +1555,17 @@ pytype_strict_library(
     ] + py_deps("numpy"),
 )
 
+pytype_strict_library(
+    name = "aiter",
+    srcs = glob(["aiter/**/*.py"]),
+    deps = [
+        ":core",
+        ":custom_derivatives",
+        ":dtypes",
+        ":ffi",
+        "//jax/_src/lib",
+    ] + py_deps("numpy"),
+)
 pytype_strict_library(
     name = "extend_src",
     srcs = glob(include = ["extend/**/*.py"]),
