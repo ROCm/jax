@@ -116,12 +116,17 @@ jobs:
       - name: ROCm Info
         run: |
           rocminfo
-      - name: Download jaxlib wheel from PyPI
+      # Get the Jaxlib wheel from either GCS or PyPI when not building.
+      - name: Download JAX and Jaxlib wheel
         if: inputs.build_jaxlib == 'false'
-        run: |
-          mkdir -p $(pwd)/dist
-          python${{ inputs.python }} -m pip download jaxlib --dest $(pwd)/dist/
-          echo "Downloaded wheels:" && ls -lh $(pwd)/dist/
+        uses: ./.github/actions/download-jax-rocm-wheels
+        with:
+          python: ${{ inputs.python }}
+          rocm-version: ${{ inputs.rocm-version }}
+          jaxlib-version: ${{ inputs.jaxlib-version }}
+          download-jax-from-gcs: ${{ inputs.download-jax-from-gcs }}
+          skip-download-jaxlib-and-plugins-from-gcs: ${{ inputs.skip-download-jaxlib-and-plugins-from-gcs }}
+          gcs_download_uri: ${{ inputs.gcs_download_uri }}
       # Halt for testing
       - name: Wait For Connection
         uses: google-ml-infra/actions/ci_connection@7f5ca0c263a81ed09ea276524c1b9192f1304e3c
