@@ -4419,7 +4419,7 @@ class FunctionAccuracyTest(jtu.JaxTestCase):
     is_complex = dtype().dtype.kind == 'c'
 
     def func(x):
-      assert isinstance(x, mpmath.ctx_mp.mpnumeric)
+      assert isinstance(x, mpmath.ctx_mp_python.mpnumeric)
       assert x.context.prec == prec
       assert isinstance(x, x.context.mpc if is_complex else x.context.mpf)
       return x
