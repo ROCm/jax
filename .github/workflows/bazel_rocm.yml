@@ -135,12 +135,19 @@ jobs:
       - name: "Bazel ROCm tests with build_jax=${{ inputs.build_jax }}, build_jaxlib=${{ inputs.build_jaxlib }}"
         timeout-minutes: 120
         run: |
+          PYTHON_VERSION="${{ inputs.python }}"
+          FREETHREADED="no"
+          if [[ "$PYTHON_VERSION" == *"-nogil" ]]; then
+            PYTHON_VERSION="${PYTHON_VERSION%-nogil}-ft"
+            FREETHREADED="yes"
+          fi
           ./ci/run_bazel_test_rocm_rbe.sh  \
             --config=single_gpu \
             --local_test_jobs=4 \
             --//jax:build_jaxlib="${{ inputs.build_jaxlib }}" \
             --//jax:build_jax="${{ inputs.build_jax }}" \
-            --repo_env=HERMETIC_PYTHON_VERSION="${{ inputs.python }}" \
+            --repo_env=HERMETIC_PYTHON_VERSION="${PYTHON_VERSION}" \
+            --@rules_python//python/config_settings:py_freethreaded="${FREETHREADED}" \
             --action_env=JAX_ENABLE_X64="${{ inputs.enable-x64 }}" \
             --repo_env=TF_ROCM_RBE_DOCKER_IMAGE="rocm/tensorflow-build@sha256:30e7fcfad87b74a4b916565a6156f4d8d01a2f5a4e06d0d0e6c37926a1507d72" \
             ${JAXCI_ROCM_LOCK_FLAG:-}
