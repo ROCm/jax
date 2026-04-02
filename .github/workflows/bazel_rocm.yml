@@ -41,6 +41,10 @@ on:
         description: "ROCm tag for container image (e.g., rocm720)"
         type: string
         default: "rocm720"
+      container-image:
+        description: "Override the container image (e.g., for TheRock)"
+        type: string
+        default: ''
       enable-x64:
         description: "Should x64 mode be enabled?"
         type: string
@@ -96,7 +100,8 @@ jobs:
         shell: bash
     runs-on: ${{ inputs.runner }}
     container:
-      image: ghcr.io/rocm/jax-dev-ubu24.${{ inputs.rocm-tag }}:latest
+      image: >-
+       ${{inputs.container-image||format('ghcr.io/rocm/jax-dev-ubu24.{0}:latest',inputs.rocm-tag)}}
       volumes:
         - /data:/data
       options: >-
@@ -133,9 +138,13 @@ jobs:
           halt-dispatch-input: ${{ inputs.halt-for-connection }}
       - name: Resolve RBE container image digest
         id: rbe-image
+        env:
+          TAG: ${{ inputs.rocm-tag }}
+          CONTAINER_IMAGE: >-
+            ${{inputs.container-image||format('ghcr.io/rocm/jax-dev-ubu24.{0}:latest',env.TAG)}}
         run: |
-          IMAGE="ghcr.io/rocm/jax-dev-ubu24.${{ inputs.rocm-tag }}"
-          REPO="rocm/jax-dev-ubu24.${{ inputs.rocm-tag }}"
+          IMAGE="${CONTAINER_IMAGE%:*}"
+          REPO="${IMAGE#ghcr.io/}"
           TOKEN=$(curl -sf "https://ghcr.io/token?service=ghcr.io&scope=repository:${REPO}:pull" | \
             python3 -c "import sys,json; print(json.load(sys.stdin)['token'])")
           echo "::add-mask::${TOKEN}"

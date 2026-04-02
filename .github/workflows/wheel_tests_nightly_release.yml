@@ -222,6 +222,67 @@ jobs:
       run_multiaccelerator_tests: "true"
       clone_main_xla: 0
 
+  # ── TheRock (ROCm via pip wheels) ──────────────────────────────────
+  run-pytest-therock:
+    permissions:
+      id-token: write
+      contents: read
+      checks: write
+    uses: ./.github/workflows/pytest_rocm.yml
+    strategy:
+        fail-fast: false
+        matrix:
+          runner:
+            - "linux-x86-64-1gpu-amd"
+            - "linux-x86-64-4gpu-amd"
+            - "linux-x86-64-8gpu-amd"
+          python: ["3.11", "3.12", "3.13", "3.14"]
+    name: >-
+      Pytest TheRock (JAX artifacts = ${{
+        startsWith(github.ref_name, 'release/')
+        && 'latest release' || 'nightly' }})
+    with:
+      runner: ${{ matrix.runner }}
+      python: ${{ matrix.python }}
+      rocm-version: "7"
+      jaxlib-version: "head"
+      gcs_download_uri: ${{ inputs.gcs_download_uri }}
+      container-image: >-
+        ghcr.io/rocm/jax-base-therock-ubu24.therock-latest:latest
+
+  run-bazel-test-therock:
+    uses: ./.github/workflows/bazel_rocm.yml
+    strategy:
+        fail-fast: false
+        matrix:
+          runner: ["linux-x86-64-1gpu-amd"]
+          python:
+            - "3.11"
+            - "3.12"
+            - "3.13"
+            - "3.13-nogil"
+            - "3.14"
+            - "3.14-nogil"
+          enable-x64: [0]
+    name: >-
+      Bazel TheRock Non-RBE (${{
+        format('{0}', 'build_jaxlib=false') }})
+    with:
+      runner: ${{ matrix.runner }}
+      python: ${{ matrix.python }}
+      rocm-version: "7"
+      enable-x64: ${{ matrix.enable-x64 }}
+      gcs_download_uri: ${{ inputs.gcs_download_uri }}
+      halt-for-connection: ${{ inputs.halt-for-connection }}
+      build_jaxlib: "false"
+      build_jax: "false"
+      jaxlib-version: "head"
+      write_to_bazel_remote_cache: 1
+      run_multiaccelerator_tests: "true"
+      clone_main_xla: 0
+      container-image: >-
+        ghcr.io/rocm/jax-dev-therock-ubu24.therock-latest:latest
+
   run-pytest-tpu:
     uses: ./.github/workflows/pytest_tpu.yml
     strategy:

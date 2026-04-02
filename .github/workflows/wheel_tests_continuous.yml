@@ -369,3 +369,91 @@ jobs:
       jaxlib-version: "head"
       run_multiaccelerator_tests: "false"
       clone_main_xla: 1
+
+  # ── TheRock (ROCm via pip wheels) ──────────────────────────────────
+  build-therock-artifacts:
+    uses: ./.github/workflows/build_rocm_artifacts.yml
+    permissions:
+      id-token: write
+      contents: read
+      actions: read
+    strategy:
+        fail-fast: false
+        matrix:
+          runner: ["linux-x86-64-1gpu-amd"]
+          artifact: ["jax-rocm-plugin", "jax-rocm-pjrt"]
+          python: ["3.11", "3.12", "3.13", "3.14"]
+          rocm-version: ["7"]
+          exclude:
+            - artifact: "jax-rocm-pjrt"
+              python: "3.12"
+            - artifact: "jax-rocm-pjrt"
+              python: "3.13"
+            - artifact: "jax-rocm-pjrt"
+              python: "3.14"
+    name: >-
+      Build ${{ format('{0}', 'TheRock') }} artifacts
+    with:
+      runner: ${{ matrix.runner }}
+      artifact: ${{ matrix.artifact }}
+      python: ${{ matrix.python }}
+      rocm-version: ${{ matrix.rocm-version }}
+      clone_main_xla: 1
+      upload_artifacts_to_s3: true
+      s3_upload_uri: >-
+        s3://jax-ci-amd/rocm-wheels/therock-continuous/${{
+          github.run_number }}/${{ github.run_attempt }}
+      container-image: >-
+        ghcr.io/rocm/jax-dev-therock-ubu24.therock-latest:latest
+
+  run-pytest-therock:
+    if: ${{ !cancelled() }}
+    needs: [build-therock-artifacts]
+    uses: ./.github/workflows/pytest_rocm.yml
+    strategy:
+        fail-fast: false
+        matrix:
+          runner:
+            - "linux-x86-64-1gpu-amd"
+            - "linux-x86-64-4gpu-amd"
+            - "linux-x86-64-8gpu-amd"
+          python: ["3.11"]
+    name: >-
+      Pytest TheRock (JAX artifacts = ${{ format('{0}', 'head') }})
+    with:
+      runner: ${{ matrix.runner }}
+      python: ${{ matrix.python }}
+      rocm-version: "7"
+      jaxlib-version: "head"
+      gcs_download_uri: 'gs://jax-nightly-artifacts/latest'
+      s3_download_uri: >-
+        s3://jax-ci-amd/rocm-wheels/therock-continuous/${{
+          github.run_number }}/${{ github.run_attempt }}
+      container-image: >-
+        ghcr.io/rocm/jax-base-therock-ubu24.therock-latest:latest
+
+  run-bazel-test-therock:
+    if: ${{ !cancelled() }}
+    uses: ./.github/workflows/bazel_rocm.yml
+    strategy:
+        fail-fast: false
+        matrix:
+          runner:
+            - "linux-x86-64-4gpu-amd"
+            - "linux-x86-64-8gpu-amd"
+          python: ["3.11"]
+          enable-x64: [0]
+    name: >-
+      Bazel TheRock tests (JAX = ${{ format('{0}', 'head') }})
+    with:
+      runner: ${{ matrix.runner }}
+      python: ${{ matrix.python }}
+      rocm-version: "7"
+      enable-x64: ${{ matrix.enable-x64 }}
+      build_jaxlib: "wheel"
+      build_jax: "wheel"
+      jaxlib-version: "head"
+      run_multiaccelerator_tests: "false"
+      clone_main_xla: 1
+      container-image: >-
+        ghcr.io/rocm/jax-dev-therock-ubu24.therock-latest:latest

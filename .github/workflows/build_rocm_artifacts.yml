@@ -51,6 +51,10 @@ on:
         options:
         - 'yes'
         - 'no'
+      container-image:
+        description: "Override the container image (e.g., for TheRock)"
+        type: string
+        default: ''
   workflow_call:
     inputs:
       runner:
@@ -89,6 +93,10 @@ on:
         description: 'Should this workflow run wait for a remote connection?'
         type: string
         default: 'no'
+      container-image:
+        description: "Override the container image (e.g., for TheRock)"
+        type: string
+        default: ''
     outputs:
       s3_upload_uri:
         description: "S3 location prefix to where the artifacts were uploaded"
@@ -108,7 +116,7 @@ jobs:
     outputs:
       s3_upload_uri: ${{ steps.store-s3-upload-uri.outputs.s3_upload_uri }}
     container:
-      image: "ghcr.io/rocm/jax-manylinux_2_28-rocm-7.2.0:latest"
+      image: "${{ inputs.container-image || 'ghcr.io/rocm/jax-manylinux_2_28-rocm-7.2.0:latest' }}"
       volumes:
         - /data:/data
       options: >-

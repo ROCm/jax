@@ -41,6 +41,10 @@ on:
         description: "ROCm tag for container image (e.g., rocm720)"
         type: string
         default: "rocm720"
+      container-image:
+        description: "Override the container image (e.g., for TheRock)"
+        type: string
+        default: ''
       jaxlib-version:
         description: "Which jaxlib version to use? (head/pypi_latest)"
         type: choice
@@ -85,6 +89,10 @@ on:
         description: "ROCm tag for container image (e.g., rocm720)"
         type: string
         default: "rocm720"
+      container-image:
+        description: "Override the container image (e.g., for TheRock)"
+        type: string
+        default: ''
       jaxlib-version:
         description: "Which jaxlib version to use? (head/pypi_latest)"
         type: string
@@ -101,6 +109,10 @@ on:
         description: "S3 URI for ROCm plugin/PJRT wheels (use 'latest' to resolve via LATEST pointer)"
         default: 'latest'
         type: string
+      halt-for-connection:
+        description: 'Should this workflow run wait for a remote connection?'
+        type: string
+        default: 'no'
 permissions:
   id-token: write
   contents: read
@@ -118,7 +130,9 @@ jobs:
     continue-on-error: true
     # Run in ROCm team's GHCR container with GPU access
     container:
-      image: ghcr.io/rocm/jax-base-ubu24.${{ inputs.rocm-tag }}:latest
+      image: >-
+        ${{ inputs.container-image ||
+          format('ghcr.io/rocm/jax-base-ubu24.{0}:latest', inputs.rocm-tag) }}
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
