@@ -404,7 +404,7 @@ jobs:
         s3://jax-ci-amd/rocm-wheels/therock-continuous/${{
           github.run_number }}/${{ github.run_attempt }}
       container-image: >-
-        ghcr.io/rocm/jax-dev-therock-ubu24.therock-latest:latest
+        ghcr.io/rocm/jax-manylinux_2_28-therock-latest:latest
 
   run-pytest-therock:
     if: ${{ !cancelled() }}
