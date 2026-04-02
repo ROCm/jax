@@ -306,84 +306,10 @@ jobs:
           runner: ["linux-x86-64-1gpu-amd"]
           artifact: ["jax-rocm-plugin", "jax-rocm-pjrt"]
           python: ["3.11", "3.12", "3.13", "3.14"]
-          rocm-version: ["7"]
-          exclude:
-            - artifact: "jax-rocm-pjrt"
-              python: "3.12"
-            - artifact: "jax-rocm-pjrt"
-              python: "3.13"
-            - artifact: "jax-rocm-pjrt"
-              python: "3.14"
-    name: "Build ${{ format('{0}', 'ROCm') }} artifacts"
-    with:
-      runner: ${{ matrix.runner }}
-      artifact: ${{ matrix.artifact }}
-      python: ${{ matrix.python }}
-      rocm-version: ${{ matrix.rocm-version }}
-      clone_main_xla: 1
-      upload_artifacts_to_s3: true
-      s3_upload_uri: 's3://jax-ci-amd/rocm-wheels/wheel-tests-continuous/${{ github.run_number }}/${{ github.run_attempt }}'
-
-  run-pytest-rocm:
-    if: ${{ !cancelled() }}
-    needs: [build-jax-artifact, build-jaxlib-artifact, build-rocm-artifacts]
-    uses: ./.github/workflows/pytest_rocm.yml
-    strategy:
-        fail-fast: false
-        matrix:
-          runner: ["linux-x86-64-1gpu-amd", "linux-x86-64-4gpu-amd", "linux-x86-64-8gpu-amd"]
-          python: ["3.11"]
-          rocm: [
-            {version: "7.2.0", tag: "rocm720"},
-          ]
-    name: "Pytest ROCm (JAX artifacts version = ${{ format('{0}', 'head') }})"
-    with:
-      runner: ${{ matrix.runner }}
-      python: ${{ matrix.python }}
-      rocm-version: ${{ matrix.rocm.version }}
-      rocm-tag: ${{ matrix.rocm.tag }}
-      jaxlib-version: "head"
-      gcs_download_uri: ${{ needs.build-jaxlib-artifact.outputs.gcs_upload_uri }}
-      s3_download_uri: 's3://jax-ci-amd/rocm-wheels/wheel-tests-continuous/${{ github.run_number }}/${{ github.run_attempt }}'
-
-  run-bazel-test-rocm:
-    if: ${{ !cancelled() }}
-    needs: [build-jax-artifact, build-jaxlib-artifact, build-rocm-artifacts]
-    uses: ./.github/workflows/bazel_rocm.yml
-    strategy:
-        fail-fast: false
-        matrix:
-          runner: ["linux-x86-64-4gpu-amd", "linux-x86-64-8gpu-amd"]
-          python: ["3.11"]
-          rocm-version: ["7"]
-          enable-x64: [0]
-    name: "Bazel ROCm tests (JAX artifacts version = ${{ format('{0}', 'head') }})"
-    with:
-      runner: ${{ matrix.runner }}
-      python: ${{ matrix.python }}
-      rocm-version: ${{ matrix.rocm-version }}
-      enable-x64: ${{ matrix.enable-x64 }}
-      gcs_download_uri: ${{ needs.build-jaxlib-artifact.outputs.gcs_upload_uri }}
-      build_jaxlib: "false"
-      build_jax: "false"
-      jaxlib-version: "head"
-      run_multiaccelerator_tests: "false"
-      clone_main_xla: 1
-
-  # ── TheRock (ROCm via pip wheels) ──────────────────────────────────
-  build-therock-artifacts:
-    uses: ./.github/workflows/build_rocm_artifacts.yml
-    permissions:
-      id-token: write
-      contents: read
-      actions: read
-    strategy:
-        fail-fast: false
-        matrix:
-          runner: ["linux-x86-64-1gpu-amd"]
-          artifact: ["jax-rocm-plugin", "jax-rocm-pjrt"]
-          python: ["3.11", "3.12", "3.13", "3.14"]
-          rocm-version: ["7"]
+          rocm:
+            - {version: "7", backend: "rocm"}
+            - {version: "7", backend: "therock",
+               container-image: "ghcr.io/rocm/jax-manylinux_2_28-therock-latest:latest"}
           exclude:
             - artifact: "jax-rocm-pjrt"
               python: "3.12"
@@ -392,23 +318,26 @@ jobs:
             - artifact: "jax-rocm-pjrt"
               python: "3.14"
     name: >-
-      Build ${{ format('{0}', 'TheRock') }} artifacts
+      Build ROCm (${{ matrix.rocm.backend }}) artifacts
     with:
       runner: ${{ matrix.runner }}
       artifact: ${{ matrix.artifact }}
       python: ${{ matrix.python }}
-      rocm-version: ${{ matrix.rocm-version }}
+      rocm-version: ${{ matrix.rocm.version }}
       clone_main_xla: 1
       upload_artifacts_to_s3: true
       s3_upload_uri: >-
-        s3://jax-ci-amd/rocm-wheels/therock-continuous/${{
+        s3://jax-ci-amd/rocm-wheels/${{
+          matrix.rocm.backend }}-continuous/${{
           github.run_number }}/${{ github.run_attempt }}
-      container-image: >-
-        ghcr.io/rocm/jax-manylinux_2_28-therock-latest:latest
+      container-image: ${{ matrix.rocm.container-image }}
 
-  run-pytest-therock:
+  run-pytest-rocm:
     if: ${{ !cancelled() }}
-    needs: [build-therock-artifacts]
+    needs:
+      - build-jax-artifact
+      - build-jaxlib-artifact
+      - build-rocm-artifacts
     uses: ./.github/workflows/pytest_rocm.yml
     strategy:
         fail-fast: false
@@ -418,22 +347,37 @@ jobs:
             - "linux-x86-64-4gpu-amd"
             - "linux-x86-64-8gpu-amd"
           python: ["3.11"]
+          rocm:
+            - version: "7.2.0"
+              tag: "rocm720"
+              backend: "rocm"
+            - version: "7"
+              backend: "therock"
+              container-image: >-
+                ghcr.io/rocm/jax-base-therock-ubu24.therock-latest:latest
     name: >-
-      Pytest TheRock (JAX artifacts = ${{ format('{0}', 'head') }})
+      Pytest ROCm (${{ matrix.rocm.backend }},
+      JAX = ${{ format('{0}', 'head') }})
     with:
       runner: ${{ matrix.runner }}
       python: ${{ matrix.python }}
-      rocm-version: "7"
+      rocm-version: ${{ matrix.rocm.version }}
+      rocm-tag: ${{ matrix.rocm.tag }}
       jaxlib-version: "head"
-      gcs_download_uri: 'gs://jax-nightly-artifacts/latest'
+      gcs_download_uri: >-
+        ${{ needs.build-jaxlib-artifact.outputs.gcs_upload_uri }}
       s3_download_uri: >-
-        s3://jax-ci-amd/rocm-wheels/therock-continuous/${{
+        s3://jax-ci-amd/rocm-wheels/${{
+          matrix.rocm.backend }}-continuous/${{
           github.run_number }}/${{ github.run_attempt }}
-      container-image: >-
-        ghcr.io/rocm/jax-base-therock-ubu24.therock-latest:latest
+      container-image: ${{ matrix.rocm.container-image }}
 
-  run-bazel-test-therock:
+  run-bazel-test-rocm:
     if: ${{ !cancelled() }}
+    needs:
+      - build-jax-artifact
+      - build-jaxlib-artifact
+      - build-rocm-artifacts
     uses: ./.github/workflows/bazel_rocm.yml
     strategy:
         fail-fast: false
@@ -443,17 +387,28 @@ jobs:
             - "linux-x86-64-8gpu-amd"
           python: ["3.11"]
           enable-x64: [0]
+          rocm:
+            - version: "7"
+              tag: "rocm720"
+              backend: "rocm"
+            - version: "7"
+              backend: "therock"
+              container-image: >-
+                ghcr.io/rocm/jax-dev-therock-ubu24.therock-latest:latest
     name: >-
-      Bazel TheRock tests (JAX = ${{ format('{0}', 'head') }})
+      Bazel ROCm (${{ matrix.rocm.backend }},
+      JAX = ${{ format('{0}', 'head') }})
     with:
       runner: ${{ matrix.runner }}
       python: ${{ matrix.python }}
-      rocm-version: "7"
+      rocm-version: ${{ matrix.rocm.version }}
+      rocm-tag: ${{ matrix.rocm.tag }}
       enable-x64: ${{ matrix.enable-x64 }}
-      build_jaxlib: "wheel"
-      build_jax: "wheel"
+      gcs_download_uri: >-
+        ${{ needs.build-jaxlib-artifact.outputs.gcs_upload_uri }}
+      build_jaxlib: "false"
+      build_jax: "false"
       jaxlib-version: "head"
       run_multiaccelerator_tests: "false"
       clone_main_xla: 1
-      container-image: >-
-        ghcr.io/rocm/jax-dev-therock-ubu24.therock-latest:latest
+      container-image: ${{ matrix.rocm.container-image }}
