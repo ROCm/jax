@@ -142,9 +142,7 @@ jobs:
           curl -fSsL -o /usr/local/bin/bazel https://github.com/bazelbuild/bazelisk/releases/latest/download/bazelisk-linux-amd64
           chmod +x /usr/local/bin/bazel
       - name: ROCm Info
-        run: |
-          if command -v rocm-sdk &>/dev/null; then rocm-sdk init; fi
-          rocminfo
+        run: rocminfo
       # Halt for testing
       - name: Wait For Connection
         uses: google-ml-infra/actions/ci_connection@7f5ca0c263a81ed09ea276524c1b9192f1304e3c

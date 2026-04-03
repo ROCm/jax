@@ -124,7 +124,6 @@ jobs:
           persist-credentials: false
       - name: ROCm Info
         run: |
-          if command -v rocm-sdk &>/dev/null; then rocm-sdk init; fi
           rocminfo
       - name: Download jaxlib wheel from PyPI
         if: inputs.build_jaxlib == 'false'

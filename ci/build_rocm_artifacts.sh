@@ -24,11 +24,6 @@
 # -o allexport: export all functions and variables to be available to subscripts
 set -exu -o history -o allexport
 
-# Initialize TheRock SDK if installed via pip wheels.
-if command -v rocm-sdk &>/dev/null; then
-  rocm-sdk init
-fi
-
 artifact="$1"
 
 # Source default JAXCI environment variables.
