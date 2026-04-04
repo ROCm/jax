@@ -21,6 +21,7 @@ import argparse
 import functools
 import os
 import pathlib
+import shutil
 import tempfile
 
 from python.runfiles import runfiles
@@ -201,6 +202,12 @@ def prepare_wheel_rocm(
           f"{source_file_prefix}jaxlib/version.py",
       ],
   )
+
+  if wheel_sources:
+    for src in wheel_sources:
+      basename = os.path.basename(src)
+      if basename in ("libmha_fwd.so", "libmha_bwd.so"):
+        shutil.copy(src, plugin_dir / basename)
 
 
 # Build wheel for cuda kernels

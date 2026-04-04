@@ -14,7 +14,7 @@ limitations under the License.
 ==============================================================================*/
 
 #include "nanobind/nanobind.h"
-#include "jaxlib/gpu/aiter_mha.h"
+#include "jaxlib/gpu/hip_aiter_mha.h"
 #include "jaxlib/gpu/vendor.h"
 #include "jaxlib/kernel_nanobind_helpers.h"
 
@@ -26,10 +26,8 @@ namespace nb = nanobind;
 
 nb::dict Registrations() {
   nb::dict dict;
-  dict[JAX_GPU_PREFIX "_neuron_fwd_ffi"] =
-      EncapsulateFfiHandler(NeuronForwardFfi);
-  dict[JAX_GPU_PREFIX "_neuron_bwd_ffi"] =
-      EncapsulateFfiHandler(NeuronBackwardFfi);
+  dict[JAX_GPU_PREFIX "_mha_fwd_ffi"] = EncapsulateFfiHandler(MhaFwdUnifiedJA);
+  dict[JAX_GPU_PREFIX "_mha_bwd_ffi"] = EncapsulateFfiHandler(MhaBwdUnifiedJA);
   return dict;
 }
 
