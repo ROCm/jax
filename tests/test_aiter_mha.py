@@ -18,6 +18,21 @@ import numpy as np
     
 from jax._src.aiter.aiter_mha import flash_attn_func, flash_attn_varlen
 
+# ---------------------------------------------------------------------------
+# Tolerances (matching TE: eps^(2/3))
+# ---------------------------------------------------------------------------
+
+def get_tolerances(dtype):
+    if dtype == jnp.float16:
+        eps = jnp.finfo(jnp.float16).eps
+        tol = float(eps ** (2.0 / 3.0))
+        return tol, tol
+    elif dtype == jnp.bfloat16:
+        eps = jnp.finfo(jnp.bfloat16).eps
+        tol = float(eps ** (2.0 / 3.0))
+        return tol, tol
+    return 1e-5, 1e-5
+
 
 def assert_close(actual, expected, dtype, name="", bwd_factor=1):
     atol, rtol = get_tolerances(dtype)
