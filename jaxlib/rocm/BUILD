@@ -487,10 +487,6 @@ rocm_library(
         "//jaxlib/gpu:hip_aiter_mha.h",
         "//jaxlib/gpu:mha_common_utils.h",
         "//jaxlib/gpu:mha_common_utils.cu",
-        "//jaxlib/gpu:logging.h",
-        "//jaxlib/gpu:hip_utils.h",
-        "//jaxlib/gpu:jax_aiter_common.h",
-        "//jaxlib/gpu:ffi_utils.h",
     ]),
     deps = [
         ":hip_gpu_kernel_helpers",
@@ -499,6 +495,7 @@ rocm_library(
         "@local_config_rocm//rocm:rocm_headers",
         "@local_config_rocm//rocm:hip_runtime",
         "@xla//xla/ffi/api:ffi",
+        "@com_google_absl//absl/log",
     ],
 )
 

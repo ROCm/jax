@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (C) 2025, Advanced Micro Devices, Inc. All rights reserved.
 
-#include "logging.h"
+
 #include "mha_common_utils.h"
 #include <chrono>
 #include <hip/hip_bfloat16.h>
@@ -104,9 +104,8 @@ prepare_rng_state_for_fwd(hipStream_t stream, float dropout_p, int dev_idx,
       const auto *gen_data = static_cast<const int64_t *>(gen->untyped_data());
       seed_value = static_cast<uint64_t>(gen_data[0]);
       offset_value = static_cast<uint64_t>(gen_data[1]);
-      JA_LOG("[JAX_AITER_CPP] Using provided generator with seed: %llu, "
-             "offset: %llu",
-             seed_value, offset_value);
+      LOG(INFO) << "Using provided generator with seed: " << seed_value
+                << ", offset: " << offset_value;
 
       hipError_t err = hipMemcpyAsync(
           rng_state->untyped_data(), gen_data, 2 * sizeof(int64_t),
@@ -136,9 +135,8 @@ prepare_rng_state_for_fwd(hipStream_t stream, float dropout_p, int dev_idx,
       offset_value = static_cast<uint64_t>(batch_size * num_heads *
                                            ck_tile::get_warp_size());
 
-      JA_LOG("[JAX_AITER_CPP] Generated RNG with seed: %llu, offset: %llu (no "
-             "gen_ provided)",
-             seed_value, offset_value);
+      LOG(INFO) << "Generated RNG with seed: " << seed_value
+                << ", offset: " << offset_value << " (no gen_ provided)";
 
       uint64_t host_rng[2] = {seed_value, offset_value};
       hipError_t err =
@@ -159,8 +157,7 @@ prepare_rng_state_for_fwd(hipStream_t stream, float dropout_p, int dev_idx,
     hipError_t err = hipMemsetAsync(rng_state->untyped_data(), 0,
                                     2 * sizeof(int64_t), stream);
     if (err != hipSuccess) {
-      JA_LOG("[JAX_AITER_CPP] Warning: Failed to zero RNG state: %s",
-             hipGetErrorString(err));
+      LOG(WARNING) << "Failed to zero RNG state: " << hipGetErrorString(err);
     }
 
     out_ptrs.seed = rng_state_ptr;
