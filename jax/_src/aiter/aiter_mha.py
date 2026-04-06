@@ -30,38 +30,15 @@ import numpy as np
 
 # -------------- Register AITER ------------
 
-#from jax._src.lib import gpu_aiter
+from jax._src.lib import gpu_aiter
 
-#for platform, targets in gpu_aiter.registrations().items():
-#  for name, value, api_version in targets:
-#    print(f"Registering AITER FFI target: {name} for platform: {platform} with api_version: {api_version}")
-#    jax.ffi.register_ffi_target(
-#        name, value, platform=platform, api_version=api_version
-#    )
+for platform, targets in gpu_aiter.registrations().items():
+  for name, value, api_version in targets:
+    print(f"Registering AITER FFI target: {name} for platform: {platform} with api_version: {api_version}")
+    jax.ffi.register_ffi_target(
+        name, value, platform=platform, api_version=api_version
+    )
 
-from jaxlib.plugin_support import import_from_plugin
-
-def do_register_ffi_target():
-
-    def get_ffi_targets() -> dict[str, list[tuple[str, Any]]]:
-        registrations: dict[str, list[tuple[str, Any]]] = {"ROCM": [], }
-        _hip_aiter = import_from_plugin("rocm", "_aiter")
-        if _hip_aiter:
-            registrations["ROCM"].extend(
-                (name, value)
-                for name, value in _hip_aiter.registrations().items()
-            )
-        return registrations
-
-    for platform, targets in get_ffi_targets().items():
-        for name, value in targets:
-            print(f"Registering AITER FFI target: {name} and value: {value} for platform: {platform}")
-            jax.ffi.register_ffi_target(
-                name, value, platform=platform
-            )
-
-
-do_register_ffi_target()
 # ------------------------------------------------------------
 
 def executable_path(executable: str) -> str:
@@ -120,6 +97,7 @@ def _si(x) -> np.int32:
 # -------------- Unified Forward Call --------------
 
 def _cached_unified_fwd_call(out_shape, lse_shape, p_shape, rng_shape, dtype):
+
     call = jax.ffi.ffi_call(
         "hip_mha_fwd_ffi",
         (
@@ -195,6 +173,8 @@ def mha_fwd_unified(q, k, v, dropout_p, softmax_scale, causal,
 
     rng_shape = (2,)
     bf16_cvt = 0 if get_gfx() == "gfx950" else 1
+    dq = q.shape[-1]
+    use_v3_fwd = not (get_gfx() == "gfx950" and dq >= 96)
 
     fn = _cached_unified_fwd_call(out_shape, lse_shape, p_shape, rng_shape, q.dtype)
     return fn(q, k, v, cu_seqlens_q, cu_seqlens_kv, _empty(q.dtype),
@@ -202,7 +182,7 @@ def mha_fwd_unified(q, k, v, dropout_p, softmax_scale, causal,
               dropout_p=_sf(dropout_p), softmax_scale=_sf(softmax_scale),
               is_causal=causal, wl=_si(wl), wr=_si(wr),
               return_lse=return_lse, return_randval=(return_softmax and dropout_p > 0),
-              use_asm_v3=True, how_v3_bf16_cvt=_si(bf16_cvt),
+              use_asm_v3=use_v3_fwd, how_v3_bf16_cvt=_si(bf16_cvt),
               max_seqlen_q_attr=_si(max_seqlen_q), max_seqlen_k_attr=_si(max_seqlen_k),
               min_seqlen_q=_si(min_seqlen_q), logits_soft_cap=_sf(logits_soft_cap),
               zero_tensors=zero_tensors)
@@ -254,7 +234,7 @@ def mha_bwd_unified(dout, q, k, v, out, lse, dropout_p, softmax_scale,
                     cu_seqlens_q=None, cu_seqlens_k=None,
                     max_seqlen_q=-1, max_seqlen_k=-1, zero_tensors=False):
     """Unified backward for both batch (4D q) and varlen (3D q)."""
-    #_ensure_registered("MhaBwdUnifiedJA")
+    #_ensure_registered("aiter_mha_bwd")
 
     is_varlen = (q.ndim == 3)
 
@@ -354,9 +334,12 @@ def _flash_attn_backward(dout, q, k, v, out, lse,
         use_v3 = False
     if causal and get_gfx() == "gfx950" and sq > sk:
         use_v3 = False
+    if get_gfx() == "gfx950" and dq >= 96:
+        use_v3 = False
 
-    # gfx950 1-block override: sk<=256 with hd in (64,128]
+    # gfx950 1-block override: only relevant for ASM v3 backward
     is_950_1block = (
+        use_v3 and
         get_gfx() == "gfx950" and sk <= 256
         and dq > 64 and dq <= 128 and dq % 8 == 0
     )
@@ -650,6 +633,8 @@ def _flash_attn_varlen_bwd(max_seqlen_q, max_seqlen_k, dropout_p,
     if swa:
         use_v3 = False
     if causal and get_gfx() == "gfx950" and max_seqlen_k > 256:
+        use_v3 = False
+    if get_gfx() == "gfx950" and dq >= 96:
         use_v3 = False
 
     bwd_atomic = use_v3

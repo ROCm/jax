@@ -65,7 +65,7 @@ static size_t compute_dq_acc_size_unified(
   return total * elem_sz;
 }
 
-ffi::Error MhaBwdUnified_Bridge(
+ffi::Error aiter_mha_bwd_impl(
     hipStream_t stream,
     ffi::AnyBuffer dout, ffi::AnyBuffer q, ffi::AnyBuffer k, ffi::AnyBuffer v,
     ffi::AnyBuffer out, ffi::AnyBuffer softmax_lse,
@@ -228,10 +228,16 @@ ffi::Error MhaBwdUnified_Bridge(
       stride_dq_acc = strides[1];
       nhead_stride_dq_acc = strides[2];
     } else {
-      // [split, batch, ...] → batch at [1]
       batch_stride_dq_acc = strides[1];
-      nhead_stride_dq_acc = strides[2];
-      stride_dq_acc = strides[3];
+      if (use_asm_v3) {
+        // ASM v3: [split, batch, nheads, seqlen_q, head]
+        nhead_stride_dq_acc = strides[2];
+        stride_dq_acc = strides[3];
+      } else {
+        // CK: [split, batch, seqlen_q, nheads, head]
+        stride_dq_acc = strides[2];
+        nhead_stride_dq_acc = strides[3];
+      }
     }
   }
 
@@ -431,7 +437,7 @@ ffi::Error MhaBwdUnified_Bridge(
 #pragma GCC visibility push(default)
 
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
-    MhaBwdUnifiedJA, jax_aiter::MhaBwdUnified_Bridge,
+    aiter_mha_bwd, jax_aiter::aiter_mha_bwd_impl,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<hipStream_t>>()
         .Arg<ffi::AnyBuffer>() // dout

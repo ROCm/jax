@@ -24,10 +24,11 @@ namespace {
 
 namespace nb = nanobind;
 
+
 nb::dict Registrations() {
   nb::dict dict;
-  dict[JAX_GPU_PREFIX "_mha_fwd_ffi"] = EncapsulateFfiHandler(MhaFwdUnifiedJA);
-  dict[JAX_GPU_PREFIX "_mha_bwd_ffi"] = EncapsulateFfiHandler(MhaBwdUnifiedJA);
+  dict[JAX_GPU_PREFIX "_mha_fwd_ffi"] = EncapsulateFfiHandler(aiter_mha_fwd);
+  dict[JAX_GPU_PREFIX "_mha_bwd_ffi"] = EncapsulateFfiHandler(aiter_mha_bwd);
   return dict;
 }
 

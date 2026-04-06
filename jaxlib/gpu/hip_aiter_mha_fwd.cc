@@ -20,7 +20,7 @@ namespace ffi = xla::ffi;
 namespace jax_aiter {
 
 ffi::Error
-MhaFwdUnified_Bridge(
+aiter_mha_fwd_impl(
     hipStream_t stream,
     ffi::AnyBuffer q,
     ffi::AnyBuffer k,
@@ -380,7 +380,7 @@ MhaFwdUnified_Bridge(
 #pragma GCC visibility push(default)
 
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
-    MhaFwdUnifiedJA, jax_aiter::MhaFwdUnified_Bridge,
+    aiter_mha_fwd, jax_aiter::aiter_mha_fwd_impl,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<hipStream_t>>()
         .Arg<ffi::AnyBuffer>() // q: 4D [b,s,h,d] or 3D [total,h,d]
