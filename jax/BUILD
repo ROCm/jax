@@ -137,6 +137,7 @@ py_library_providing_imports_info(
     srcs = glob(
         [
             "*.py",
+            "aiter/**/*.py",
             "image/**/*.py",
             "interpreters/**/*.py",
             "lax/**/*.py",
@@ -167,6 +168,7 @@ py_library_providing_imports_info(
         "//jax/_src:abstract_arrays",
         "//jax/_src:ad",
         "//jax/_src:ad_util",
+        "//jax/_src:aiter",
         "//jax/_src:api",
         "//jax/_src:api_util",
         "//jax/_src:basearray",

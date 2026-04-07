@@ -1558,6 +1558,18 @@ pytype_strict_library(
 )
 
 pytype_strict_library(
+    name = "aiter",
+    srcs = glob(["aiter/**/*.py"]),
+    deps = [
+        ":core",
+        ":custom_derivatives",
+        ":dtypes",
+        ":ffi",
+        "//jax/_src/lib",
+    ] + py_deps("numpy"),
+)
+
+pytype_strict_library(
     name = "extend_src",
     srcs = glob(include = ["extend/**/*.py"]),
     deps = [
