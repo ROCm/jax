@@ -22,26 +22,13 @@ logger = logging.getLogger(__name__)
 
 _hip_aiter = import_from_plugin("rocm", "_aiter")
 
-if _hip_aiter is None:
-  _candidates = ["jax_rocm7_plugin._aiter", "jax_rocm60_plugin._aiter"]
-  for name in _candidates:
-    try:
-      importlib.import_module(name)
-    except ImportError as e:
-      logger.warning("AITer: import %s failed: %s", name, e)
-    except Exception as e:
-      logger.warning("AITer: import %s raised unexpected %s: %s",
-                     name, type(e).__name__, e)
-
-
-def registrations() -> dict[str, list[tuple[str, Any, int]]]:
-  registrations: dict[str, list[tuple[str, Any, int]]] = {
+def registrations() -> dict[str, list[tuple[str, Any]]]:
+  registrations: dict[str, list[tuple[str, Any]]] = {
       "ROCM": [],
   }
   if _hip_aiter:
     registrations["ROCM"].extend(
-        (name, value, int(name.endswith("_ffi")))
-        for name, value in _hip_aiter.registrations().items()
+        (name, value) for name, value in _hip_aiter.registrations().items()
     )
   else:
     logger.warning(

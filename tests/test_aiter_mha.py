@@ -15,7 +15,23 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
-    
+
+def _is_rocm():
+    try:
+        return any(
+            d.platform == "gpu"
+            and "rocm" in d.client.platform_version.lower()
+            for d in jax.devices()
+        )
+    except Exception:
+        return False
+
+
+pytestmark = pytest.mark.skipif(
+    not _is_rocm(),
+    reason="AITer MHA tests require a ROCm GPU",
+)
+
 from jax._src.aiter.aiter_mha import flash_attn_func, flash_attn_varlen
 
 # ---------------------------------------------------------------------------

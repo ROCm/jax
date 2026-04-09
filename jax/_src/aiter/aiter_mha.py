@@ -33,10 +33,9 @@ import numpy as np
 from jax._src.lib import gpu_aiter
 
 for platform, targets in gpu_aiter.registrations().items():
-  for name, value, api_version in targets:
-    print(f"Registering AITER FFI target: {name} for platform: {platform} with api_version: {api_version}")
+  for name, value in targets:
     jax.ffi.register_ffi_target(
-        name, value, platform=platform, api_version=api_version
+        name, value, platform=platform, api_version=1
     )
 
 # ------------------------------------------------------------
