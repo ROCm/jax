@@ -51,6 +51,11 @@ def add_imports(doctest_namespace):
 # For GPU, the env var JAX_ENABLE_CUDA_XDIST must be set equal to the number of
 # CUDA devices. Test processes will be assigned in round robin fashion across
 # the devices.
+#
+# For ROCm, use os.environ assignment (not setdefault) for ROCR_VISIBLE_DEVICES
+# so runner-injected visibility (e.g. GitHub gha-gpu-isolation-settings) cannot
+# defeat per-worker pinning. Set HIP_VISIBLE_DEVICES=0 after narrowing ROCR so
+# workers do not inherit a multi-device HIP filter.
 def pytest_collection() -> None:
   if os.environ.get("JAX_ENABLE_TPU_XDIST", None):
     # When running as an xdist worker, will be something like "gw0"
@@ -78,6 +83,7 @@ def pytest_collection() -> None:
     if not xdist_worker_name.startswith("gw"):
       return
     xdist_worker_number = int(xdist_worker_name[len("gw") :])
-    os.environ.setdefault(
-        "ROCR_VISIBLE_DEVICES", str(xdist_worker_number % num_rocm_devices)
+    os.environ["ROCR_VISIBLE_DEVICES"] = str(
+        xdist_worker_number % num_rocm_devices
     )
+    os.environ["HIP_VISIBLE_DEVICES"] = "0"
