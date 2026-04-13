@@ -115,7 +115,6 @@ jobs:
         # Set the shell to bash as GitHub actions run with /bin/sh by default
         shell: bash
     runs-on: ${{ inputs.runner }}
-    continue-on-error: true
     # Run in ROCm team's GHCR container with GPU access
     container:
       image: ghcr.io/rocm/jax-base-ubu24.${{ inputs.rocm-tag }}:latest

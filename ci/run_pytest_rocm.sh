@@ -111,11 +111,10 @@ export XLA_FLAGS="--xla_gpu_force_compilation_parallelism=1 --xla_gpu_enable_ncc
 ulimit -c 0
 
 echo "Running ROCm tests..."
-export NPROC=32
 LOGS_DIR="logs"
 mkdir -p "${LOGS_DIR}"
 mkdir -p test-artifacts
-"$JAXCI_PYTHON" -m pytest -n $num_processes --tb=short \
+"$JAXCI_PYTHON" -m pytest -n $num_processes --tb=short --maxfail=20 \
 --json-report --json-report-file=${LOGS_DIR}/pytest_results.json \
 --junitxml=test-artifacts/junit.xml \
 tests \
