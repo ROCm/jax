@@ -148,7 +148,7 @@ prepare_rng_state_for_fwd(hipStream_t stream, float dropout_p, int dev_idx,
                                            ck_tile::get_warp_size());
 
       VLOG(1) << "Generated RNG with seed: " << seed_value
-              << ", offset: " << offset_value << " (no gen_ provided)";
+              << ", offset: " << offset_value << " (no gen provided)";
 
       uint64_t host_rng[2] = {seed_value, offset_value};
       hipError_t err =

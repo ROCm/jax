@@ -34,12 +34,12 @@ aiter_mha_fwd_impl(
     ffi::AnyBuffer q,
     ffi::AnyBuffer k,
     ffi::AnyBuffer v,
-    std::optional<ffi::AnyBuffer> cu_seqlens_q_,
-    std::optional<ffi::AnyBuffer> cu_seqlens_kv_,
-    std::optional<ffi::AnyBuffer> out_,
-    std::optional<ffi::AnyBuffer> bias_,
-    std::optional<ffi::AnyBuffer> alibi_slopes_,
-    std::optional<ffi::AnyBuffer> gen_,
+    std::optional<ffi::AnyBuffer> cu_seqlens_q,
+    std::optional<ffi::AnyBuffer> cu_seqlens_kv,
+    std::optional<ffi::AnyBuffer> out,
+    std::optional<ffi::AnyBuffer> bias,
+    std::optional<ffi::AnyBuffer> alibi_slopes,
+    std::optional<ffi::AnyBuffer> gen,
     ffi::Result<ffi::AnyBuffer> o,
     ffi::Result<ffi::AnyBuffer> lse,
     ffi::Result<ffi::AnyBuffer> p,
@@ -89,11 +89,11 @@ aiter_mha_fwd_impl(
     num_heads_k = k_dims[1];
     head_size_v = v_dims[2];
 
-    if (!cu_seqlens_q_.has_value() || !mha_utils::is_valid_buffer(*cu_seqlens_q_)) {
+    if (!cu_seqlens_q.has_value() || !mha_utils::is_valid_buffer(*cu_seqlens_q)) {
       return ffi::Error(ffi::ErrorCode::kInvalidArgument,
                         "varlen mode requires cu_seqlens_q");
     }
-    batch_size = cu_seqlens_q_->dimensions()[0] - 1;
+    batch_size = cu_seqlens_q->dimensions()[0] - 1;
     seqlen_q = total_q;
     seqlen_k = total_k;
     max_seqlen_q = max_seqlen_q_attr;
@@ -144,20 +144,20 @@ aiter_mha_fwd_impl(
   // Bias / ALiBi handling.
   const void *bias_ptr = nullptr;
   ck_tile::index_t stride_bias = 0;
-  bool has_bias = bias_.has_value() && mha_utils::is_valid_buffer(*bias_);
-  bool has_alibi = alibi_slopes_.has_value() && mha_utils::is_valid_buffer(*alibi_slopes_);
+  bool has_bias = bias.has_value() && mha_utils::is_valid_buffer(*bias);
+  bool has_alibi = alibi_slopes.has_value() && mha_utils::is_valid_buffer(*alibi_slopes);
 
   if (has_bias && has_alibi) {
     return ffi::Error(ffi::ErrorCode::kInvalidArgument,
                       "cannot apply both bias and alibi");
   }
   if (has_bias) {
-    bias_ptr = bias_->untyped_data();
-    auto bd = bias_->dimensions();
+    bias_ptr = bias->untyped_data();
+    auto bd = bias->dimensions();
     stride_bias = bd.size() >= 2 ? mha_utils::calculate_stride(bd, 0) : 0;
   } else if (has_alibi) {
-    bias_ptr = alibi_slopes_->untyped_data();
-    auto ad = alibi_slopes_->dimensions();
+    bias_ptr = alibi_slopes->untyped_data();
+    auto ad = alibi_slopes->dimensions();
     stride_bias = ad.size() >= 2 ? mha_utils::calculate_stride(ad, 0) : 0;
   }
   bias_enum bias_type = mha_utils::get_bias_type(has_bias, has_alibi);
@@ -204,7 +204,7 @@ aiter_mha_fwd_impl(
   // RNG state for dropout.
   mha_utils::RngStatePointers rng_ptrs;
   auto rng_err = mha_utils::prepare_rng_state_for_fwd(
-      stream, dropout_p, dev_idx, batch_size, num_heads, gen_, rng_state, rng_ptrs);
+      stream, dropout_p, dev_idx, batch_size, num_heads, gen, rng_state, rng_ptrs);
   if (!rng_err.success()) return rng_err;
 
   // Sequence length pointers.
@@ -214,16 +214,16 @@ aiter_mha_fwd_impl(
   const ck_tile::index_t *cu_seqlen_k_ptr = nullptr;
 
   if (is_varlen) {
-    seqstart_q_ptr = reinterpret_cast<const ck_tile::index_t *>(cu_seqlens_q_->untyped_data());
-    if (cu_seqlens_kv_.has_value() && mha_utils::is_valid_buffer(*cu_seqlens_kv_)) {
-      seqstart_k_ptr = reinterpret_cast<const ck_tile::index_t *>(cu_seqlens_kv_->untyped_data());
+    seqstart_q_ptr = reinterpret_cast<const ck_tile::index_t *>(cu_seqlens_q->untyped_data());
+    if (cu_seqlens_kv.has_value() && mha_utils::is_valid_buffer(*cu_seqlens_kv)) {
+      seqstart_k_ptr = reinterpret_cast<const ck_tile::index_t *>(cu_seqlens_kv->untyped_data());
     }
   } else {
-    if (cu_seqlens_q_.has_value() && mha_utils::is_valid_buffer(*cu_seqlens_q_)) {
-      cu_seqlen_q_ptr = reinterpret_cast<const ck_tile::index_t *>(cu_seqlens_q_->untyped_data());
+    if (cu_seqlens_q.has_value() && mha_utils::is_valid_buffer(*cu_seqlens_q)) {
+      cu_seqlen_q_ptr = reinterpret_cast<const ck_tile::index_t *>(cu_seqlens_q->untyped_data());
     }
-    if (cu_seqlens_kv_.has_value() && mha_utils::is_valid_buffer(*cu_seqlens_kv_)) {
-      cu_seqlen_k_ptr = reinterpret_cast<const ck_tile::index_t *>(cu_seqlens_kv_->untyped_data());
+    if (cu_seqlens_kv.has_value() && mha_utils::is_valid_buffer(*cu_seqlens_kv)) {
+      cu_seqlen_k_ptr = reinterpret_cast<const ck_tile::index_t *>(cu_seqlens_kv->untyped_data());
     }
   }
 

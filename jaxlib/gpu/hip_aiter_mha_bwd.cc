@@ -27,86 +27,90 @@
 
 namespace ffi = xla::ffi;
 
-namespace jax_aiter {
-
-struct BwdDeviceBuffers {
-  void *dbias_expanded = nullptr;
-  void *dummy_rng = nullptr;
-  void *dq_acc = nullptr;
-  void *dk_expanded = nullptr;
-  void *dv_expanded = nullptr;
-
-  void free_all() {
-    if (dbias_expanded) { hipFree(dbias_expanded); dbias_expanded = nullptr; }
-    if (dummy_rng) { hipFree(dummy_rng); dummy_rng = nullptr; }
-    if (dq_acc) { hipFree(dq_acc); dq_acc = nullptr; }
-    if (dk_expanded) { hipFree(dk_expanded); dk_expanded = nullptr; }
-    if (dv_expanded) { hipFree(dv_expanded); dv_expanded = nullptr; }
-  }
-
-  ~BwdDeviceBuffers() { free_all(); }
-
-  BwdDeviceBuffers() = default;
-  BwdDeviceBuffers(const BwdDeviceBuffers &) = delete;
-  BwdDeviceBuffers &operator=(const BwdDeviceBuffers &) = delete;
-};
-
-static size_t compute_dq_acc_size_unified(
+namespace {
+  size_t compute_dq_acc_size_unified(
     bool is_varlen, int64_t batch_size, int64_t seqlen_q_or_total,
     int64_t seqlen_k_or_max, int64_t num_heads, int64_t head_size,
     bool deterministic, bool use_asm_v3, bool is_v3_atomic_fp32,
-    ffi::DataType q_dtype, std::vector<int64_t> &out_shape) {
+    ffi::DataType q_dtype, std::vector<int64_t> &out_shape)
+    noexcept { 
 
-  size_t elem_sz = 4;
+    size_t elem_sz = 4;
 
-  if (is_varlen) {
-    // Varlen: 4D layout [split, total_q, nheads, head_size]
-    if (!deterministic) {
-      out_shape = {1, seqlen_q_or_total, num_heads, head_size};
-    } else {
-      int64_t kN0 = head_size <= 128 ? 128 : 64;
-      int64_t nsplits = (seqlen_k_or_max + kN0 - 1) / kN0;
-      out_shape = {nsplits, seqlen_q_or_total, num_heads, head_size};
-    }
-  } else {
-    // Batch: 5D layout depends on path
-    if (!deterministic) {
-      if (use_asm_v3 && is_v3_atomic_fp32) {
-        out_shape = {1, batch_size, num_heads, seqlen_q_or_total, head_size};
-      } else if (use_asm_v3 && !is_v3_atomic_fp32) {
-        int64_t sq_pad = ((seqlen_q_or_total + 15) / 16) * 16;
-        int64_t pd = (head_size == 192) ? 192 : 128;
-        out_shape = {1, batch_size, num_heads, sq_pad, pd};
-        elem_sz = (q_dtype == ffi::DataType::F16 || q_dtype == ffi::DataType::BF16) ? 2 : 4;
+    if (is_varlen) {
+      // Varlen: 4D layout [split, total_q, nheads, head_size]
+      if (!deterministic) {
+        out_shape = {1, seqlen_q_or_total, num_heads, head_size};
       } else {
-        out_shape = {1, batch_size, seqlen_q_or_total, num_heads, head_size};
+        int64_t kN0 = head_size <= 128 ? 128 : 64;
+        int64_t nsplits = (seqlen_k_or_max + kN0 - 1) / kN0;
+        out_shape = {nsplits, seqlen_q_or_total, num_heads, head_size};
       }
     } else {
-      int64_t kN0 = head_size <= 128 ? 128 : 64;
-      int64_t nsplits = (seqlen_k_or_max + kN0 - 1) / kN0;
-      if (use_asm_v3) {
-        out_shape = {nsplits, batch_size, num_heads, seqlen_q_or_total, head_size};
+      // Batch: 5D layout depends on path
+      if (!deterministic) {
+        if (use_asm_v3 && is_v3_atomic_fp32) {
+          out_shape = {1, batch_size, num_heads, seqlen_q_or_total, head_size};
+        } else if (use_asm_v3 && !is_v3_atomic_fp32) {
+          int64_t sq_pad = ((seqlen_q_or_total + 15) / 16) * 16;
+          int64_t pd = (head_size == 192) ? 192 : 128;
+          out_shape = {1, batch_size, num_heads, sq_pad, pd};
+          elem_sz = (q_dtype == ffi::DataType::F16 || q_dtype == ffi::DataType::BF16) ? 2 : 4;
+        } else {
+          out_shape = {1, batch_size, seqlen_q_or_total, num_heads, head_size};
+        }
       } else {
-        out_shape = {nsplits, batch_size, seqlen_q_or_total, num_heads, head_size};
+        int64_t kN0 = head_size <= 128 ? 128 : 64;
+        int64_t nsplits = (seqlen_k_or_max + kN0 - 1) / kN0;
+        if (use_asm_v3) {
+          out_shape = {nsplits, batch_size, num_heads, seqlen_q_or_total, head_size};
+        } else {
+          out_shape = {nsplits, batch_size, seqlen_q_or_total, num_heads, head_size};
+        }
       }
     }
-  }
 
-  size_t total = 1;
-  for (auto d : out_shape) total *= d;
-  return total * elem_sz;
-}
+    size_t total = 1;
+    for (auto d : out_shape) total *= d;
+    return total * elem_sz;
+  } // compute_dq_acc_size_unified
+
+  struct BwdDeviceBuffers {
+    void *dbias_expanded = nullptr;
+    void *dummy_rng = nullptr;
+    void *dq_acc = nullptr;
+    void *dk_expanded = nullptr;
+    void *dv_expanded = nullptr;
+  
+    void free_all() {
+      if (dbias_expanded) { hipFree(dbias_expanded); dbias_expanded = nullptr; }
+      if (dummy_rng) { hipFree(dummy_rng); dummy_rng = nullptr; }
+      if (dq_acc) { hipFree(dq_acc); dq_acc = nullptr; }
+      if (dk_expanded) { hipFree(dk_expanded); dk_expanded = nullptr; }
+      if (dv_expanded) { hipFree(dv_expanded); dv_expanded = nullptr; }
+    }
+  
+    ~BwdDeviceBuffers() { free_all(); }
+  
+    BwdDeviceBuffers() = default;
+    BwdDeviceBuffers(const BwdDeviceBuffers &) = delete;
+    BwdDeviceBuffers &operator=(const BwdDeviceBuffers &) = delete;
+  }; // struct BwdDeviceBuffers
+
+} // namespace
+
+namespace jax_aiter {
 
 ffi::Error aiter_mha_bwd_impl(
     hipStream_t stream,
     ffi::AnyBuffer dout, ffi::AnyBuffer q, ffi::AnyBuffer k, ffi::AnyBuffer v,
     ffi::AnyBuffer out, ffi::AnyBuffer softmax_lse,
-    std::optional<ffi::AnyBuffer> cu_seqlens_q_,
-    std::optional<ffi::AnyBuffer> cu_seqlens_k_,
-    std::optional<ffi::AnyBuffer> dq_, std::optional<ffi::AnyBuffer> dk_,
-    std::optional<ffi::AnyBuffer> dv_,
-    std::optional<ffi::AnyBuffer> bias_, std::optional<ffi::AnyBuffer> alibi_slopes_,
-    std::optional<ffi::AnyBuffer> rng_state_, std::optional<ffi::AnyBuffer> gen_,
+    std::optional<ffi::AnyBuffer> cu_seqlens_q,
+    std::optional<ffi::AnyBuffer> cu_seqlens_k,
+    std::optional<ffi::AnyBuffer> dq, std::optional<ffi::AnyBuffer> dk,
+    std::optional<ffi::AnyBuffer> dv,
+    std::optional<ffi::AnyBuffer> bias, std::optional<ffi::AnyBuffer> alibi_slopes,
+    std::optional<ffi::AnyBuffer> rng_state, std::optional<ffi::AnyBuffer> gen,
     ffi::Result<ffi::AnyBuffer> dq_ret, ffi::Result<ffi::AnyBuffer> dk_ret,
     ffi::Result<ffi::AnyBuffer> dv_ret, ffi::Result<ffi::AnyBuffer> softmax_d_ret,
     ffi::Result<ffi::AnyBuffer> dbias_ret,
@@ -144,9 +148,9 @@ ffi::Error aiter_mha_bwd_impl(
     seqlen_k = k_dims[0]; // total_k
     num_heads_k = k_dims[1];
     head_size_v = v_dims[2];
-    if (!cu_seqlens_q_.has_value() || !mha_utils::is_valid_buffer(*cu_seqlens_q_))
+    if (!cu_seqlens_q.has_value() || !mha_utils::is_valid_buffer(*cu_seqlens_q))
       return ffi::Error(ffi::ErrorCode::kInvalidArgument, "varlen requires cu_seqlens_q");
-    batch_size = cu_seqlens_q_->dimensions()[0] - 1;
+    batch_size = cu_seqlens_q->dimensions()[0] - 1;
     max_sq = max_seqlen_q_attr;
     max_sk = max_seqlen_k_attr;
   } else {
@@ -191,16 +195,16 @@ ffi::Error aiter_mha_bwd_impl(
   // Bias handling
   const void *bias_ptr = nullptr;
   ck_tile::index_t stride_bias = 0;
-  bool has_bias = bias_.has_value() && mha_utils::is_valid_buffer(*bias_);
-  bool has_alibi = alibi_slopes_.has_value() && mha_utils::is_valid_buffer(*alibi_slopes_);
+  bool has_bias = bias.has_value() && mha_utils::is_valid_buffer(*bias);
+  bool has_alibi = alibi_slopes.has_value() && mha_utils::is_valid_buffer(*alibi_slopes);
 
   if (has_bias) {
-    bias_ptr = bias_->untyped_data();
-    auto bd = bias_->dimensions();
+    bias_ptr = bias->untyped_data();
+    auto bd = bias->dimensions();
     stride_bias = bd.size() >= 2 ? mha_utils::calculate_stride(bd, 0) : 0;
   } else if (has_alibi) {
-    bias_ptr = alibi_slopes_->untyped_data();
-    auto ad = alibi_slopes_->dimensions();
+    bias_ptr = alibi_slopes->untyped_data();
+    auto ad = alibi_slopes->dimensions();
     stride_bias = ad.size() >= 2 ? mha_utils::calculate_stride(ad, 0) : 0;
   }
   bias_enum bias_type = mha_utils::get_bias_type(has_bias, has_alibi);
@@ -221,9 +225,9 @@ ffi::Error aiter_mha_bwd_impl(
 
   // RNG
   uint64_t *seed_ptr = nullptr, *offset_ptr = nullptr;
-  if (dropout_p > 0.0f && rng_state_.has_value() && mha_utils::is_valid_buffer(*rng_state_)) {
+  if (dropout_p > 0.0f && rng_state.has_value() && mha_utils::is_valid_buffer(*rng_state)) {
     try {
-      auto [s, o] = mha_utils::get_rng_seed_offset_ptrs(rng_state_, dropout_p);
+      auto [s, o] = mha_utils::get_rng_seed_offset_ptrs(rng_state, dropout_p);
       seed_ptr = s; offset_ptr = o;
     } catch (...) { /* fallthrough to dummy */ }
   }
@@ -361,9 +365,9 @@ ffi::Error aiter_mha_bwd_impl(
   // Seqstart pointers
   const void *seqstart_q_ptr = nullptr, *seqstart_k_ptr = nullptr;
   if (is_varlen) {
-    seqstart_q_ptr = cu_seqlens_q_->untyped_data();
-    if (cu_seqlens_k_.has_value() && mha_utils::is_valid_buffer(*cu_seqlens_k_))
-      seqstart_k_ptr = cu_seqlens_k_->untyped_data();
+    seqstart_q_ptr = cu_seqlens_q->untyped_data();
+    if (cu_seqlens_k.has_value() && mha_utils::is_valid_buffer(*cu_seqlens_k))
+      seqstart_k_ptr = cu_seqlens_k->untyped_data();
   }
 
   auto args = aiter::mha_bwd_args{
@@ -474,13 +478,13 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Arg<ffi::AnyBuffer>() // softmax_lse
         .Arg<ffi::AnyBuffer>() // cu_seqlens_q (optional)
         .Arg<ffi::AnyBuffer>() // cu_seqlens_k (optional)
-        .Arg<ffi::AnyBuffer>() // dq_ (optional)
-        .Arg<ffi::AnyBuffer>() // dk_ (optional)
-        .Arg<ffi::AnyBuffer>() // dv_ (optional)
-        .Arg<ffi::AnyBuffer>() // bias_ (optional)
-        .Arg<ffi::AnyBuffer>() // alibi_slopes_ (optional)
-        .Arg<ffi::AnyBuffer>() // rng_state_ (optional)
-        .Arg<ffi::AnyBuffer>() // gen_ (optional)
+        .Arg<ffi::AnyBuffer>() // dq (optional)
+        .Arg<ffi::AnyBuffer>() // dk (optional)
+        .Arg<ffi::AnyBuffer>() // dv (optional)
+        .Arg<ffi::AnyBuffer>() // bias (optional)
+        .Arg<ffi::AnyBuffer>() // alibi_slopes (optional)
+        .Arg<ffi::AnyBuffer>() // rng_state (optional)
+        .Arg<ffi::AnyBuffer>() // gen (optional)
         .Ret<ffi::AnyBuffer>() // dq_ret
         .Ret<ffi::AnyBuffer>() // dk_ret
         .Ret<ffi::AnyBuffer>() // dv_ret

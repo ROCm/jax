@@ -13,10 +13,21 @@ import math
 import pytest
 import jax
 import jax.numpy as jnp
-import numpy as np
 
-    
+
 from jax._src.aiter.aiter_mha import flash_attn_func, flash_attn_varlen
+
+def _on_rocm():
+    """True only when JAX is running on an AMD ROCm GPU."""
+    try:
+        return str(jax.devices()[0]).startswith("rocm")
+    except Exception:
+        return False
+
+pytestmark = pytest.mark.skipif(
+    not _on_rocm(),
+    reason="AITER MHA kernels require ROCm (AMD GPU) platform",
+)
 
 # ---------------------------------------------------------------------------
 # Tolerances (matching TE: eps^(2/3))

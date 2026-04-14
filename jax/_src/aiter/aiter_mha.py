@@ -26,6 +26,8 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+jax.config.update("jax_enable_x64", True)
+
 # -------------- Register AITER ------------
 
 from jax._src.lib import gpu_aiter
@@ -174,13 +176,12 @@ def mha_fwd_unified(q, k, v, dropout_p, softmax_scale, causal,
                     max_seqlen_q=-1, max_seqlen_k=-1, min_seqlen_q=0,
                     logits_soft_cap=0.0, zero_tensors=False):
     """Unified forward for both batch (4D q) and varlen (3D q)."""
-    
+
     is_varlen = (q.ndim == 3)
 
     if is_varlen:
         total_q, hq, dq = q.shape
         _, hk, dv = v.shape
-        batch_size = cu_seqlens_q.shape[0] - 1
         out_shape = (total_q, hq, dv)
         lse_shape = (hq, max_seqlen_q) if return_lse else (0,)
         p_shape = (0,)
