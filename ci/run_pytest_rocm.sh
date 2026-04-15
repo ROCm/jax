@@ -110,6 +110,11 @@ export XLA_FLAGS="--xla_gpu_force_compilation_parallelism=1 --xla_gpu_enable_ncc
 # Disable core dumps just in case
 ulimit -c 0
 
+# Prefer this checkout's `jax/` package over a jax preinstalled in site-packages
+# (e.g. CI images). Otherwise `import jax` can resolve to /usr/local/.../dist-packages
+# while `tests/` come from the PR tree, causing missing jax._src.* errors.
+export PYTHONPATH="$(pwd):${PYTHONPATH:-}"
+
 echo "Running ROCm tests..."
 export NPROC=32
 LOGS_DIR="logs"
