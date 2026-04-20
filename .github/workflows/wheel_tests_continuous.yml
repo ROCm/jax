@@ -338,6 +338,7 @@ jobs:
           python: ["3.11"]
           rocm: [
             {version: "7.2.0", tag: "rocm720"},
+            {version: "7",     tag: "therock-latest"},
           ]
     name: "Pytest ROCm (JAX artifacts version = ${{ format('{0}', 'head') }})"
     with:
@@ -358,13 +359,17 @@ jobs:
         matrix:
           runner: ["linux-x86-64-4gpu-amd", "linux-x86-64-8gpu-amd"]
           python: ["3.11"]
-          rocm-version: ["7"]
+          rocm: [
+            {version: "7", tag: "rocm720"},
+            {version: "7", tag: "therock-latest"},
+          ]
           enable-x64: [0]
     name: "Bazel ROCm tests (JAX artifacts version = ${{ format('{0}', 'head') }})"
     with:
       runner: ${{ matrix.runner }}
       python: ${{ matrix.python }}
-      rocm-version: ${{ matrix.rocm-version }}
+      rocm-version: ${{ matrix.rocm.version }}
+      rocm-tag: ${{ matrix.rocm.tag }}
       enable-x64: ${{ matrix.enable-x64 }}
       gcs_download_uri: ${{ needs.build-jaxlib-artifact.outputs.gcs_upload_uri }}
       build_jaxlib: ${{ 'false' }}

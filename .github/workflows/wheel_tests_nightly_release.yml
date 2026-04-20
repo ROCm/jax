@@ -186,6 +186,7 @@ jobs:
           python: ["3.11", "3.12", "3.13", "3.14"]
           rocm: [
             {version: "7.2.0", tag: "rocm720"},
+            {version: "7",     tag: "therock-latest"},
           ]
     name: "Pytest ROCm (JAX artifacts version = ${{ startsWith(github.ref_name, 'release/') && 'latest release' || 'nightly' }})"
     with:
@@ -209,13 +210,17 @@ jobs:
           # that build the wheels.
           runner: ["linux-x86-64-1gpu-amd"]
           python: ["3.11", "3.12", "3.13", "3.14"]
-          rocm-version: [7]
+          rocm: [
+            {version: 7, tag: "rocm720"},
+            {version: 7, tag: "therock-latest"},
+          ]
           enable-x64: [0]
     name: "Bazel ROCm Non-RBE with ${{ format('{0}', 'build_jaxlib=false') }}"
     with:
       runner: ${{ matrix.runner }}
       python: ${{ matrix.python }}
-      rocm-version: ${{ matrix.rocm-version }}
+      rocm-version: ${{ matrix.rocm.version }}
+      rocm-tag: ${{ matrix.rocm.tag }}
       enable-x64:  ${{ matrix.enable-x64 }}
       gcs_download_uri: ${{inputs.gcs_download_uri}}
       halt-for-connection: ${{inputs.halt-for-connection}}
