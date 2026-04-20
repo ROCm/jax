@@ -356,7 +356,6 @@ static absl::Status DnnRNNForward_(gpuStream_t stream, void** buffers,
   JAX_RETURN_IF_ERROR(JAX_AS_STATUS(gpudnnDestroyRNNDescriptor(rnn_desc)));
 #ifdef JAX_GPU_HIP
   JAX_RETURN_IF_ERROR(JAX_AS_STATUS(gpuFree(dropout_states_dev)));
-  JAX_RETURN_IF_ERROR(JAX_AS_STATUS(gpudnnDestroyTensorDescriptor(input_tensor_desc)));
 #endif
 
   return absl::OkStatus();
@@ -545,7 +544,6 @@ static absl::Status DnnRNNBackward_(gpuStream_t stream, void** buffers,
   JAX_RETURN_IF_ERROR(JAX_AS_STATUS(gpudnnDestroyRNNDescriptor(rnn_desc)));
 #ifdef JAX_GPU_HIP
   JAX_RETURN_IF_ERROR(JAX_AS_STATUS(gpuFree(dropout_states_dev)));
-  JAX_RETURN_IF_ERROR(JAX_AS_STATUS(gpudnnDestroyTensorDescriptor(input_tensor_desc)));
 #endif
 
   return absl::OkStatus();
