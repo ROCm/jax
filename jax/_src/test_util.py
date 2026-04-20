@@ -1988,7 +1988,7 @@ class vectorize_with_mpmath(np.vectorize):
         dtype = None
       if dtype is not None:
         return np.fromiter(map(self.mptonp, x_flat), dtype=dtype).reshape(x.shape)
-    elif isinstance(x, self.mpmath.ctx_mp.mpnumeric):
+    elif isinstance(x, self.mpmath.ctx_mp_python.mpnumeric):
       ctx = x.context
       if isinstance(x, ctx.mpc):
         fp_format = self.contexts_inv[ctx]
@@ -2038,13 +2038,13 @@ class vectorize_with_mpmath(np.vectorize):
       lst = []
       for r in result:
         if ((isinstance(r, np.ndarray) and r.dtype.kind == 'O')
-            or isinstance(r, self.mpmath.ctx_mp.mpnumeric)):
+            or isinstance(r, self.mpmath.ctx_mp_python.mpnumeric)):
           r = self.mptonp(r)
         lst.append(r)
       return tuple(lst)
 
     if ((isinstance(result, np.ndarray) and result.dtype.kind == 'O')
-        or isinstance(result, self.mpmath.ctx_mp.mpnumeric)):
+        or isinstance(result, self.mpmath.ctx_mp_python.mpnumeric)):
       return self.mptonp(result)
 
     return result
