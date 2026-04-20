@@ -60,18 +60,21 @@ def parse_wheel_name(path):
 def fix_wheel(path):
     tup = parse_wheel_name(path)
     plat_tag = tup[4]
-    if "manylinux2014" in plat_tag:
+    if "manylinux2014" in plat_tag or "manylinux_2_27" in plat_tag:
         # strip any manylinux tags from the current wheel first
-        from wheel.cli import tags
-
         plat_mod_str = "linux_x86_64"
-        new_wheel = tags.tags(
-            path,
-            python_tags=None,
-            abi_tags=None,
-            platform_tags=plat_mod_str,
-            build_tag=None,
+        output = subprocess.run(
+            [
+                "wheel",
+                "tags",
+                "--platform-tag=%s" % plat_mod_str,
+                path,
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
         )
+        new_wheel = output.stdout.strip()
         new_path = os.path.join(os.path.dirname(path), new_wheel)
         LOG.info("Stripped broken tags and created new wheel at %r" % new_path)
         path = new_path
