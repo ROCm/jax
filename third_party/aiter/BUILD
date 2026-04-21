@@ -14,14 +14,14 @@ cc_library(
 
 cc_import(
     name = "mha_fwd_so",
-    shared_library = "libmha_fwd.so",
+    shared_library = "@aiter_mha_wheel//:libmha_fwd.so",
     deps = [":aiter_headers"],
 )
 
 cc_import(
     name = "mha_bwd_so",
-    shared_library = "libmha_bwd.so",
-    deps = [ ":aiter_headers"],
+    shared_library = "@aiter_mha_wheel//:libmha_bwd.so",
+    deps = [":aiter_headers"],
 )
 
 cc_library(
@@ -35,7 +35,7 @@ cc_library(
 filegroup(
     name = "aiter_runtime_sos",
     srcs = [
-        "libmha_fwd.so",
-        "libmha_bwd.so",
+        "@aiter_mha_wheel//:libmha_fwd.so",
+        "@aiter_mha_wheel//:libmha_bwd.so",
     ],
 )
