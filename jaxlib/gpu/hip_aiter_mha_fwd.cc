@@ -28,6 +28,25 @@ namespace ffi = xla::ffi;
 
 namespace jax_aiter {
 
+// Fill a device float buffer with a constant value using a pinned host staging
+// buffer.  The staging buffer is allocated once and grows as needed, avoiding
+// per-call std::vector + hipMemcpyHostToDevice overhead.
+// Fill a device float buffer with a constant value using a pinned host staging
+// buffer.  The staging buffer is allocated once and grows as needed, avoiding
+// per-call std::vector + hipMemcpyHostToDevice overhead.
+static void fill_float_constant(void *dst, size_t n, float val,
+  hipStream_t stream) {
+  static thread_local float *pinned = nullptr;
+  static thread_local size_t pinned_cap = 0;
+  if (n > pinned_cap) {
+    if (pinned) hipHostFree(pinned);
+    hipHostMalloc(&pinned, n * sizeof(float), hipHostMallocDefault);
+    pinned_cap = n;
+  }
+  for (size_t i = 0; i < n; i++) pinned[i] = val;
+  hipMemcpyAsync(dst, pinned, n * sizeof(float), hipMemcpyHostToDevice, stream);
+}
+
 ffi::Error
 aiter_mha_fwd_impl(
     hipStream_t stream,
@@ -179,10 +198,8 @@ aiter_mha_fwd_impl(
   if (zero_tensors) {
     HIP_CHECK(hipMemsetAsync(o->untyped_data(), 0, o->size_bytes(), stream));
     if (return_softmax_lse && lse->size_bytes() > 0) {
-      size_t n = lse->element_count();
-      std::vector<float> neg_inf(n, -std::numeric_limits<float>::infinity());
-      HIP_CHECK(hipMemcpyAsync(lse->untyped_data(), neg_inf.data(),
-                               n * sizeof(float), hipMemcpyHostToDevice, stream));
+      fill_float_constant(lse->untyped_data(), lse->element_count(),
+                          -std::numeric_limits<float>::infinity(), stream);
     }
     if (return_dropout_randval && p->size_bytes() > 0) {
       HIP_CHECK(hipMemsetAsync(p->untyped_data(), 0, p->size_bytes(), stream));
@@ -193,10 +210,8 @@ aiter_mha_fwd_impl(
   if (ref_sk == 0) {
     HIP_CHECK(hipMemsetAsync(o->untyped_data(), 0, o->size_bytes(), stream));
     if (return_softmax_lse && lse->size_bytes() > 0) {
-      size_t n = lse->element_count();
-      std::vector<float> inf_buf(n, std::numeric_limits<float>::infinity());
-      HIP_CHECK(hipMemcpyAsync(lse->untyped_data(), inf_buf.data(),
-                               n * sizeof(float), hipMemcpyHostToDevice, stream));
+      fill_float_constant(lse->untyped_data(), lse->element_count(),
+                          std::numeric_limits<float>::infinity(), stream);
     }
     return ffi::Error::Success();
   }

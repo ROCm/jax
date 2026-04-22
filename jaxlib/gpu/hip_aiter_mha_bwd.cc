@@ -1,22 +1,16 @@
-// Copyright 2025 The JAX Authors.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     https://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: MIT
+// Copyright (C) 2025, Advanced Micro Devices, Inc. All rights reserved.
 //
 // Unified MHA backward FFI handler for both batch and varlen modes.
 // Detects mode from tensor rank: 4D = batch [b,s,h,d], 3D = varlen [total,h,d].
 // Calls aiter::mha_bwd(args, stream) which handles CK vs ASM v3 internally.
+//
+// Multi-GPU note: AITER's fmha_v3_bwd impl_ptr_map is now protected by a
+// mutex (Xinya's fix cherry-picked onto third_party/aiter), so ASM v3
+// kernels can be used on all devices concurrently.
 
 #include <hip/hip_runtime.h>
+#include <set>
 #include <vector>
 
 #include "xla/ffi/api/c_api.h"
@@ -27,90 +21,99 @@
 
 namespace ffi = xla::ffi;
 
-namespace {
-  size_t compute_dq_acc_size_unified(
+namespace jax_aiter {
+
+// Persistent workspace pool: reuses device memory across calls to avoid
+// per-call hipMalloc/hipFree which synchronises the device.
+// Device-aware: re-allocates when the current device changes.
+struct WorkspacePool {
+  void *ptr = nullptr;
+  size_t cap = 0;
+  int dev = -1;
+
+  void *get(size_t bytes, hipStream_t stream, bool zero = true) {
+    int cur_dev = -1;
+    hipGetDevice(&cur_dev);
+    if (cur_dev != dev || bytes > cap) {
+      if (ptr) { hipSetDevice(dev); hipFree(ptr); hipSetDevice(cur_dev); }
+      hipMalloc(&ptr, bytes);
+      cap = bytes;
+      dev = cur_dev;
+    }
+    if (zero) hipMemsetAsync(ptr, 0, bytes, stream);
+    return ptr;
+  }
+
+  ~WorkspacePool() {
+    if (ptr) {
+      int cur; hipGetDevice(&cur);
+      hipSetDevice(dev); hipFree(ptr); hipSetDevice(cur);
+    }
+  }
+};
+
+static thread_local WorkspacePool s_dq_acc_pool;
+static thread_local WorkspacePool s_dk_exp_pool;
+static thread_local WorkspacePool s_dv_exp_pool;
+static thread_local WorkspacePool s_dbias_pool;
+static thread_local WorkspacePool s_rng_pool;
+
+static size_t compute_dq_acc_size_unified(
     bool is_varlen, int64_t batch_size, int64_t seqlen_q_or_total,
     int64_t seqlen_k_or_max, int64_t num_heads, int64_t head_size,
     bool deterministic, bool use_asm_v3, bool is_v3_atomic_fp32,
-    ffi::DataType q_dtype, std::vector<int64_t> &out_shape)
-    noexcept { 
+    ffi::DataType q_dtype, std::vector<int64_t> &out_shape) {
 
-    size_t elem_sz = 4;
+  size_t elem_sz = 4;
 
-    if (is_varlen) {
-      // Varlen: 4D layout [split, total_q, nheads, head_size]
-      if (!deterministic) {
-        out_shape = {1, seqlen_q_or_total, num_heads, head_size};
+  if (is_varlen) {
+    // Varlen: 4D layout [split, total_q, nheads, head_size]
+    if (!deterministic) {
+      out_shape = {1, seqlen_q_or_total, num_heads, head_size};
+    } else {
+      int64_t kN0 = head_size <= 128 ? 128 : 64;
+      int64_t nsplits = (seqlen_k_or_max + kN0 - 1) / kN0;
+      out_shape = {nsplits, seqlen_q_or_total, num_heads, head_size};
+    }
+  } else {
+    // Batch: 5D layout depends on path
+    if (!deterministic) {
+      if (use_asm_v3 && is_v3_atomic_fp32) {
+        out_shape = {1, batch_size, num_heads, seqlen_q_or_total, head_size};
+      } else if (use_asm_v3 && !is_v3_atomic_fp32) {
+        int64_t sq_pad = ((seqlen_q_or_total + 15) / 16) * 16;
+        int64_t pd = (head_size == 192) ? 192 : 128;
+        out_shape = {1, batch_size, num_heads, sq_pad, pd};
+        elem_sz = (q_dtype == ffi::DataType::F16 || q_dtype == ffi::DataType::BF16) ? 2 : 4;
       } else {
-        int64_t kN0 = head_size <= 128 ? 128 : 64;
-        int64_t nsplits = (seqlen_k_or_max + kN0 - 1) / kN0;
-        out_shape = {nsplits, seqlen_q_or_total, num_heads, head_size};
+        out_shape = {1, batch_size, seqlen_q_or_total, num_heads, head_size};
       }
     } else {
-      // Batch: 5D layout depends on path
-      if (!deterministic) {
-        if (use_asm_v3 && is_v3_atomic_fp32) {
-          out_shape = {1, batch_size, num_heads, seqlen_q_or_total, head_size};
-        } else if (use_asm_v3 && !is_v3_atomic_fp32) {
-          int64_t sq_pad = ((seqlen_q_or_total + 15) / 16) * 16;
-          int64_t pd = (head_size == 192) ? 192 : 128;
-          out_shape = {1, batch_size, num_heads, sq_pad, pd};
-          elem_sz = (q_dtype == ffi::DataType::F16 || q_dtype == ffi::DataType::BF16) ? 2 : 4;
-        } else {
-          out_shape = {1, batch_size, seqlen_q_or_total, num_heads, head_size};
-        }
+      int64_t kN0 = head_size <= 128 ? 128 : 64;
+      int64_t nsplits = (seqlen_k_or_max + kN0 - 1) / kN0;
+      if (use_asm_v3) {
+        out_shape = {nsplits, batch_size, num_heads, seqlen_q_or_total, head_size};
       } else {
-        int64_t kN0 = head_size <= 128 ? 128 : 64;
-        int64_t nsplits = (seqlen_k_or_max + kN0 - 1) / kN0;
-        if (use_asm_v3) {
-          out_shape = {nsplits, batch_size, num_heads, seqlen_q_or_total, head_size};
-        } else {
-          out_shape = {nsplits, batch_size, seqlen_q_or_total, num_heads, head_size};
-        }
+        out_shape = {nsplits, batch_size, seqlen_q_or_total, num_heads, head_size};
       }
     }
+  }
 
-    size_t total = 1;
-    for (auto d : out_shape) total *= d;
-    return total * elem_sz;
-  } // compute_dq_acc_size_unified
-
-  struct BwdDeviceBuffers {
-    void *dbias_expanded = nullptr;
-    void *dummy_rng = nullptr;
-    void *dq_acc = nullptr;
-    void *dk_expanded = nullptr;
-    void *dv_expanded = nullptr;
-  
-    void free_all() {
-      if (dbias_expanded) { hipFree(dbias_expanded); dbias_expanded = nullptr; }
-      if (dummy_rng) { hipFree(dummy_rng); dummy_rng = nullptr; }
-      if (dq_acc) { hipFree(dq_acc); dq_acc = nullptr; }
-      if (dk_expanded) { hipFree(dk_expanded); dk_expanded = nullptr; }
-      if (dv_expanded) { hipFree(dv_expanded); dv_expanded = nullptr; }
-    }
-  
-    ~BwdDeviceBuffers() { free_all(); }
-  
-    BwdDeviceBuffers() = default;
-    BwdDeviceBuffers(const BwdDeviceBuffers &) = delete;
-    BwdDeviceBuffers &operator=(const BwdDeviceBuffers &) = delete;
-  }; // struct BwdDeviceBuffers
-
-} // namespace
-
-namespace jax_aiter {
+  size_t total = 1;
+  for (auto d : out_shape) total *= d;
+  return total * elem_sz;
+}
 
 ffi::Error aiter_mha_bwd_impl(
     hipStream_t stream,
     ffi::AnyBuffer dout, ffi::AnyBuffer q, ffi::AnyBuffer k, ffi::AnyBuffer v,
     ffi::AnyBuffer out, ffi::AnyBuffer softmax_lse,
-    std::optional<ffi::AnyBuffer> cu_seqlens_q,
-    std::optional<ffi::AnyBuffer> cu_seqlens_k,
-    std::optional<ffi::AnyBuffer> dq, std::optional<ffi::AnyBuffer> dk,
-    std::optional<ffi::AnyBuffer> dv,
-    std::optional<ffi::AnyBuffer> bias, std::optional<ffi::AnyBuffer> alibi_slopes,
-    std::optional<ffi::AnyBuffer> rng_state, std::optional<ffi::AnyBuffer> gen,
+    std::optional<ffi::AnyBuffer> cu_seqlens_q_,
+    std::optional<ffi::AnyBuffer> cu_seqlens_k_,
+    std::optional<ffi::AnyBuffer> dq_, std::optional<ffi::AnyBuffer> dk_,
+    std::optional<ffi::AnyBuffer> dv_,
+    std::optional<ffi::AnyBuffer> bias_, std::optional<ffi::AnyBuffer> alibi_slopes_,
+    std::optional<ffi::AnyBuffer> rng_state_, std::optional<ffi::AnyBuffer> gen_,
     ffi::Result<ffi::AnyBuffer> dq_ret, ffi::Result<ffi::AnyBuffer> dk_ret,
     ffi::Result<ffi::AnyBuffer> dv_ret, ffi::Result<ffi::AnyBuffer> softmax_d_ret,
     ffi::Result<ffi::AnyBuffer> dbias_ret,
@@ -148,9 +151,9 @@ ffi::Error aiter_mha_bwd_impl(
     seqlen_k = k_dims[0]; // total_k
     num_heads_k = k_dims[1];
     head_size_v = v_dims[2];
-    if (!cu_seqlens_q.has_value() || !mha_utils::is_valid_buffer(*cu_seqlens_q))
+    if (!cu_seqlens_q_.has_value() || !mha_utils::is_valid_buffer(*cu_seqlens_q_))
       return ffi::Error(ffi::ErrorCode::kInvalidArgument, "varlen requires cu_seqlens_q");
-    batch_size = cu_seqlens_q->dimensions()[0] - 1;
+    batch_size = cu_seqlens_q_->dimensions()[0] - 1;
     max_sq = max_seqlen_q_attr;
     max_sk = max_seqlen_k_attr;
   } else {
@@ -195,47 +198,43 @@ ffi::Error aiter_mha_bwd_impl(
   // Bias handling
   const void *bias_ptr = nullptr;
   ck_tile::index_t stride_bias = 0;
-  bool has_bias = bias.has_value() && mha_utils::is_valid_buffer(*bias);
-  bool has_alibi = alibi_slopes.has_value() && mha_utils::is_valid_buffer(*alibi_slopes);
+  bool has_bias = bias_.has_value() && mha_utils::is_valid_buffer(*bias_);
+  bool has_alibi = alibi_slopes_.has_value() && mha_utils::is_valid_buffer(*alibi_slopes_);
 
   if (has_bias) {
-    bias_ptr = bias->untyped_data();
-    auto bd = bias->dimensions();
+    bias_ptr = bias_->untyped_data();
+    auto bd = bias_->dimensions();
     stride_bias = bd.size() >= 2 ? mha_utils::calculate_stride(bd, 0) : 0;
   } else if (has_alibi) {
-    bias_ptr = alibi_slopes->untyped_data();
-    auto ad = alibi_slopes->dimensions();
+    bias_ptr = alibi_slopes_->untyped_data();
+    auto ad = alibi_slopes_->dimensions();
     stride_bias = ad.size() >= 2 ? mha_utils::calculate_stride(ad, 0) : 0;
   }
   bias_enum bias_type = mha_utils::get_bias_type(has_bias, has_alibi);
 
   bool has_dbias = has_bias && (dbias_ret->size_bytes() > 0) && !is_varlen;
+  void *dbias_expanded_ptr = nullptr;
   ck_tile::index_t stride_dbias = 0, nhead_stride_dbias = 0, batch_stride_dbias = 0;
-
-  BwdDeviceBuffers bufs;
 
   if (has_dbias) {
     size_t dbias_sz = batch_size * seqlen_q * num_heads * seqlen_k * mha_utils::dtype_size(q.element_type());
-    HIP_CHECK(hipMalloc(&bufs.dbias_expanded, dbias_sz));
-    HIP_CHECK(hipMemsetAsync(bufs.dbias_expanded, 0, dbias_sz, stream));
+    dbias_expanded_ptr = s_dbias_pool.get(dbias_sz, stream);
     stride_dbias = num_heads * seqlen_k;
     nhead_stride_dbias = seqlen_k;
     batch_stride_dbias = seqlen_q * num_heads * seqlen_k;
   }
 
   // RNG
-  uint64_t *seed_ptr = nullptr, *offset_ptr = nullptr;
-  if (dropout_p > 0.0f && rng_state.has_value() && mha_utils::is_valid_buffer(*rng_state)) {
+  uint64_t *seed_ptr = nullptr, *offset_ptr = nullptr, *dummy_rng = nullptr;
+  if (dropout_p > 0.0f && rng_state_.has_value() && mha_utils::is_valid_buffer(*rng_state_)) {
     try {
-      auto [s, o] = mha_utils::get_rng_seed_offset_ptrs(rng_state, dropout_p);
+      auto [s, o] = mha_utils::get_rng_seed_offset_ptrs(rng_state_, dropout_p);
       seed_ptr = s; offset_ptr = o;
     } catch (...) { /* fallthrough to dummy */ }
   }
   if (!seed_ptr) {
-    HIP_CHECK(hipMalloc(&bufs.dummy_rng, 2 * sizeof(uint64_t)));
-    HIP_CHECK(hipMemsetAsync(bufs.dummy_rng, 0, 2 * sizeof(uint64_t), stream));
-    seed_ptr = reinterpret_cast<uint64_t *>(bufs.dummy_rng);
-    offset_ptr = seed_ptr + 1;
+    dummy_rng = (uint64_t *)s_rng_pool.get(2 * sizeof(uint64_t), stream, /*zero=*/false);
+    seed_ptr = dummy_rng; offset_ptr = dummy_rng + 1;
   }
 
   // dq_acc
@@ -245,8 +244,7 @@ ffi::Error aiter_mha_bwd_impl(
       num_heads, head_size_q, deterministic, use_asm_v3, is_v3_atomic_fp32,
       q.element_type(), dq_acc_shape);
 
-  HIP_CHECK(hipMalloc(&bufs.dq_acc, dq_acc_bytes));
-  HIP_CHECK(hipMemsetAsync(bufs.dq_acc, 0, dq_acc_bytes, stream));
+  void *dq_acc_ptr = s_dq_acc_pool.get(dq_acc_bytes, stream);
 
   // dq_acc strides
   ck_tile::index_t split_stride_dq_acc = 1, batch_stride_dq_acc = 0;
@@ -265,16 +263,10 @@ ffi::Error aiter_mha_bwd_impl(
       stride_dq_acc = strides[1];
       nhead_stride_dq_acc = strides[2];
     } else {
+      // [split, batch, ...] → batch at [1]
       batch_stride_dq_acc = strides[1];
-      if (use_asm_v3) {
-        // ASM v3: [split, batch, nheads, seqlen_q, head]
-        nhead_stride_dq_acc = strides[2];
-        stride_dq_acc = strides[3];
-      } else {
-        // CK: [split, batch, seqlen_q, nheads, head]
-        stride_dq_acc = strides[2];
-        nhead_stride_dq_acc = strides[3];
-      }
+      nhead_stride_dq_acc = strides[2];
+      stride_dq_acc = strides[3];
     }
   }
 
@@ -283,28 +275,22 @@ ffi::Error aiter_mha_bwd_impl(
   auto dk_dims = dk_ret->dimensions();
   auto dv_dims = dv_ret->dimensions();
 
+  void *dk_expanded_ptr = nullptr, *dv_expanded_ptr = nullptr;
   void *dk_final = dk_ret->untyped_data(), *dv_final = dv_ret->untyped_data();
 
   if (is_mqa_gqa) {
     size_t dk_sz = (is_varlen ? seqlen_k : batch_size * seqlen_k) * num_heads * head_size_q * mha_utils::dtype_size(q.element_type());
     size_t dv_sz = (is_varlen ? seqlen_k : batch_size * seqlen_k) * num_heads * head_size_v * mha_utils::dtype_size(v.element_type());
-    HIP_CHECK(hipMalloc(&bufs.dk_expanded, dk_sz));
-    HIP_CHECK(hipMalloc(&bufs.dv_expanded, dv_sz));
-    dk_final = bufs.dk_expanded;
-    dv_final = bufs.dv_expanded;
+    dk_expanded_ptr = s_dk_exp_pool.get(dk_sz, stream);
+    dv_expanded_ptr = s_dv_exp_pool.get(dv_sz, stream);
+    dk_final = dk_expanded_ptr; dv_final = dv_expanded_ptr;
   }
 
   // Zero tensors (varlen)
   if (zero_tensors) {
     HIP_CHECK(hipMemsetAsync(dq_ret->untyped_data(), 0, dq_ret->size_bytes(), stream));
-    size_t dk_clear_sz = is_mqa_gqa
-        ? (is_varlen ? seqlen_k : batch_size * seqlen_k) * num_heads * head_size_q * mha_utils::dtype_size(q.element_type())
-        : dk_ret->size_bytes();
-    size_t dv_clear_sz = is_mqa_gqa
-        ? (is_varlen ? seqlen_k : batch_size * seqlen_k) * num_heads * head_size_v * mha_utils::dtype_size(v.element_type())
-        : dv_ret->size_bytes();
-    HIP_CHECK(hipMemsetAsync(dk_final, 0, dk_clear_sz, stream));
-    HIP_CHECK(hipMemsetAsync(dv_final, 0, dv_clear_sz, stream));
+    HIP_CHECK(hipMemsetAsync(dk_final, 0, is_mqa_gqa ? ((is_varlen ? seqlen_k : batch_size * seqlen_k) * num_heads * head_size_q * mha_utils::dtype_size(q.element_type())) : dk_ret->size_bytes(), stream));
+    HIP_CHECK(hipMemsetAsync(dv_final, 0, is_mqa_gqa ? ((is_varlen ? seqlen_k : batch_size * seqlen_k) * num_heads * head_size_v * mha_utils::dtype_size(v.element_type())) : dv_ret->size_bytes(), stream));
     HIP_CHECK(hipMemsetAsync(softmax_d_ret->untyped_data(), 0, softmax_d_ret->size_bytes(), stream));
   }
 
@@ -365,9 +351,9 @@ ffi::Error aiter_mha_bwd_impl(
   // Seqstart pointers
   const void *seqstart_q_ptr = nullptr, *seqstart_k_ptr = nullptr;
   if (is_varlen) {
-    seqstart_q_ptr = cu_seqlens_q->untyped_data();
-    if (cu_seqlens_k.has_value() && mha_utils::is_valid_buffer(*cu_seqlens_k))
-      seqstart_k_ptr = cu_seqlens_k->untyped_data();
+    seqstart_q_ptr = cu_seqlens_q_->untyped_data();
+    if (cu_seqlens_k_.has_value() && mha_utils::is_valid_buffer(*cu_seqlens_k_))
+      seqstart_k_ptr = cu_seqlens_k_->untyped_data();
   }
 
   auto args = aiter::mha_bwd_args{
@@ -391,7 +377,7 @@ ffi::Error aiter_mha_bwd_impl(
       .do_ptr = dout.untyped_data(), .d_ptr = softmax_d_ret->untyped_data(),
       .rand_val_ptr = nullptr,
       .dq_ptr = dq_ret->untyped_data(), .dk_ptr = dk_final, .dv_ptr = dv_final,
-      .dbias_ptr = bufs.dbias_expanded, .dq_acc_ptr = bufs.dq_acc,
+      .dbias_ptr = dbias_expanded_ptr, .dq_acc_ptr = dq_acc_ptr,
       .seqstart_q_ptr = seqstart_q_ptr, .seqstart_k_ptr = seqstart_k_ptr,
       .seqlen_q = static_cast<int>(seqlen_q), .seqlen_k = static_cast<int>(seqlen_k),
       .batch = static_cast<int>(batch_size),
@@ -430,6 +416,13 @@ ffi::Error aiter_mha_bwd_impl(
       .drop_seed_offset = std::make_pair(seed_ptr, offset_ptr)
   };
 
+  // Ensure HIP device context matches the data device.  XLA usually sets
+  // this, but being explicit prevents WorkspacePool and kernel loads from
+  // targeting the wrong device.
+  HIP_CHECK(hipSetDevice(dev_idx));
+
+  args.use_asm_v3 = use_asm_v3;
+
   auto stream_config = mha_utils::create_stream_config(stream);
   float runtime = aiter::mha_bwd(args, stream_config);
 
@@ -440,24 +433,28 @@ ffi::Error aiter_mha_bwd_impl(
   // MQA/GQA reduction
   if (is_mqa_gqa) {
     int64_t groups = num_heads / num_heads_k;
+    int64_t total_tokens = is_varlen ? seqlen_k : batch_size * seqlen_k;
 
     mha_utils::launch_mqa_gqa_reduction(
-        bufs.dk_expanded, dk_ret->untyped_data(),
+        dk_expanded_ptr, dk_ret->untyped_data(),
         is_varlen ? 1 : batch_size,
-        seqlen_k,
+        is_varlen ? seqlen_k : seqlen_k,
         num_heads, num_heads_k, head_size_q, groups, q.element_type(), stream);
     mha_utils::launch_mqa_gqa_reduction(
-        bufs.dv_expanded, dv_ret->untyped_data(),
+        dv_expanded_ptr, dv_ret->untyped_data(),
         is_varlen ? 1 : batch_size,
-        seqlen_k,
+        is_varlen ? seqlen_k : seqlen_k,
         num_heads, num_heads_k, head_size_v, groups, v.element_type(), stream);
+
+    // dk/dv expanded buffers managed by pool -- no free needed
   }
 
-  if (has_dbias && bufs.dbias_expanded) {
+  if (has_dbias && dbias_expanded_ptr) {
     size_t dbias_sz = batch_size * seqlen_q * num_heads * seqlen_k * mha_utils::dtype_size(q.element_type());
-    HIP_CHECK(hipMemcpyAsync(dbias_ret->untyped_data(), bufs.dbias_expanded,
+    HIP_CHECK(hipMemcpyAsync(dbias_ret->untyped_data(), dbias_expanded_ptr,
                              dbias_sz, hipMemcpyDeviceToDevice, stream));
   }
+  // All workspace buffers managed by pools -- no hipFree needed
 
   return ffi::Error::Success();
 }
@@ -478,13 +475,13 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
         .Arg<ffi::AnyBuffer>() // softmax_lse
         .Arg<ffi::AnyBuffer>() // cu_seqlens_q (optional)
         .Arg<ffi::AnyBuffer>() // cu_seqlens_k (optional)
-        .Arg<ffi::AnyBuffer>() // dq (optional)
-        .Arg<ffi::AnyBuffer>() // dk (optional)
-        .Arg<ffi::AnyBuffer>() // dv (optional)
-        .Arg<ffi::AnyBuffer>() // bias (optional)
-        .Arg<ffi::AnyBuffer>() // alibi_slopes (optional)
-        .Arg<ffi::AnyBuffer>() // rng_state (optional)
-        .Arg<ffi::AnyBuffer>() // gen (optional)
+        .Arg<ffi::AnyBuffer>() // dq_ (optional)
+        .Arg<ffi::AnyBuffer>() // dk_ (optional)
+        .Arg<ffi::AnyBuffer>() // dv_ (optional)
+        .Arg<ffi::AnyBuffer>() // bias_ (optional)
+        .Arg<ffi::AnyBuffer>() // alibi_slopes_ (optional)
+        .Arg<ffi::AnyBuffer>() // rng_state_ (optional)
+        .Arg<ffi::AnyBuffer>() // gen_ (optional)
         .Ret<ffi::AnyBuffer>() // dq_ret
         .Ret<ffi::AnyBuffer>() // dk_ret
         .Ret<ffi::AnyBuffer>() // dv_ret

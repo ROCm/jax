@@ -1,20 +1,8 @@
-// Copyright 2025 The JAX Authors.
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-//     https://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
+// SPDX-License-Identifier: MIT
+// Copyright (C) 2025, Advanced Micro Devices, Inc. All rights reserved.
 
-
-#include "hip_aiter_mha_common_utils.h"
 #include "absl/log/log.h"
+#include "hip_aiter_mha_common_utils.h"
 #include <chrono>
 #include <hip/hip_bfloat16.h>
 #include <hip/hip_fp16.h>
@@ -116,9 +104,7 @@ prepare_rng_state_for_fwd(hipStream_t stream, float dropout_p, int dev_idx,
       const auto *gen_data = static_cast<const int64_t *>(gen->untyped_data());
       seed_value = static_cast<uint64_t>(gen_data[0]);
       offset_value = static_cast<uint64_t>(gen_data[1]);
-      VLOG(1) << "Using provided generator with seed: " << seed_value
-              << ", offset: " << offset_value;
-
+      VLOG(1) <<"[JAX_AITER_CPP] Using provided generator with seed: "<<seed_value<<", offset: "<<offset_value;
       hipError_t err = hipMemcpyAsync(
           rng_state->untyped_data(), gen_data, 2 * sizeof(int64_t),
           hipMemcpyDeviceToDevice, // Try device-to-device first
@@ -148,7 +134,7 @@ prepare_rng_state_for_fwd(hipStream_t stream, float dropout_p, int dev_idx,
                                            ck_tile::get_warp_size());
 
       VLOG(1) << "Generated RNG with seed: " << seed_value
-              << ", offset: " << offset_value << " (no gen provided)";
+                                           << ", offset: " << offset_value << " (no gen provided)";
 
       uint64_t host_rng[2] = {seed_value, offset_value};
       hipError_t err =
@@ -169,7 +155,7 @@ prepare_rng_state_for_fwd(hipStream_t stream, float dropout_p, int dev_idx,
     hipError_t err = hipMemsetAsync(rng_state->untyped_data(), 0,
                                     2 * sizeof(int64_t), stream);
     if (err != hipSuccess) {
-      LOG(WARNING) << "Failed to zero RNG state: " << hipGetErrorString(err);
+      VLOG(1) << "[JAX_AITER_CPP] Warning: Failed to zero RNG state: "<<hipGetErrorString(err);
     }
 
     out_ptrs.seed = rng_state_ptr;

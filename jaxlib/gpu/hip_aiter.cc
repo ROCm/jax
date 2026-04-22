@@ -27,8 +27,8 @@ namespace nb = nanobind;
 
 nb::dict Registrations() {
   nb::dict dict;
-  dict[JAX_GPU_PREFIX "_mha_fwd_ffi"] = EncapsulateFfiHandler(aiter_mha_fwd);
-  dict[JAX_GPU_PREFIX "_mha_bwd_ffi"] = EncapsulateFfiHandler(aiter_mha_bwd);
+  dict["hip_mha_fwd_ffi"] = EncapsulateFfiHandler(aiter_mha_fwd);
+  dict["hip_mha_bwd_ffi"] = EncapsulateFfiHandler(aiter_mha_bwd);
   return dict;
 }
 
