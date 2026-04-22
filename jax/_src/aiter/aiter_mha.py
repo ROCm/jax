@@ -498,6 +498,8 @@ def mha_fwd_unified(q, k, v, dropout_p, softmax_scale, causal,
         gen = _empty(jnp.int64)
 
     bf16_cvt = 0 if get_gfx() == "gfx950" else 1
+    dq = q.shape[-1]
+    use_v3_fwd = not (get_gfx() == "gfx950" and dq >= 96)
 
     config = MhaFwdConfig(
         dropout_p=float(dropout_p),
@@ -506,7 +508,7 @@ def mha_fwd_unified(q, k, v, dropout_p, softmax_scale, causal,
         wl=int(wl), wr=int(wr),
         return_lse=return_lse,
         return_randval=bool(return_softmax and dropout_p > 0),
-        use_asm_v3=True,
+        use_asm_v3=use_v3_fwd,
         how_v3_bf16_cvt=int(bf16_cvt),
         max_seqlen_q=int(max_seqlen_q),
         max_seqlen_k=int(max_seqlen_k),
@@ -606,11 +608,15 @@ def _flash_attn_backward(dout, q, k, v, out, lse,
     use_v3 = True
     if dropout_p > 0:
         use_v3 = False
+    if hq != hk:
+        use_v3 = False
     if bias is not None and bias.size > 0:
         use_v3 = False
     if swa:
         use_v3 = False
     if causal and get_gfx() == "gfx950" and sq > sk:
+        use_v3 = False
+    if get_gfx() == "gfx950" and dq >= 96:
         use_v3 = False
 
     # gfx950 1-block override: sk<=256 with hd in (64,128]
@@ -904,9 +910,13 @@ def _flash_attn_varlen_bwd(max_seqlen_q, max_seqlen_k, dropout_p,
     use_v3 = True
     if res_dp > 0:
         use_v3 = False
+    if hq != hk:
+        use_v3 = False
     if swa:
         use_v3 = False
     if causal and get_gfx() == "gfx950" and max_seqlen_k > 256:
+        use_v3 = False
+    if get_gfx() == "gfx950" and dq >= 96:
         use_v3 = False
 
     bwd_atomic = use_v3
