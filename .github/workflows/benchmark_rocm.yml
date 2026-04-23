@@ -1,0 +1,203 @@
+# CI - Benchmark ROCm
+#
+# This workflow runs ROCm benchmarks in ROCm team's GHCR containers.
+# It can be triggered manually via workflow_dispatch or called by other workflows
+# via workflow_call.
+#
+# It consists of the following job:
+# run-benchmark:
+#    - Runs in ROCm team's container (ghcr.io/rocm/jax-base-ubu24-rocm*:latest)
+#    - Downloads the JAX and jaxlib wheels from GCS, and ROCm plugins from S3.
+#    - Executes the target benchmark runner script at `targets/<target>/run.sh`.
+name: CI - Benchmark ROCm
+on:
+  workflow_dispatch:
+    inputs:
+      runner:
+        description: "Which runner should the workflow run on?"
+        type: choice
+        default: "linux-x86-64-8gpu-amd"
+        options:
+          - "linux-x86-64-1gpu-amd"
+          - "linux-x86-64-4gpu-amd"
+          - "linux-x86-64-8gpu-amd"
+      python:
+        description: "Which Python version to use?"
+        type: choice
+        default: "3.12"
+        options:
+          - "3.11"
+          - "3.12"
+      rocm-version:
+        description: "Which ROCm version to benchmark?"
+        type: choice
+        default: "7.2.0"
+        options:
+          - "7.2.0"
+      rocm-tag:
+        description: "ROCm tag for container image (e.g., rocm720)"
+        type: string
+        default: "rocm720"
+      target:
+        description: "Benchmark target"
+        type: choice
+        default: "maxtext"
+        options:
+          - "maxtext"
+      workload:
+        description: "Benchmark workload"
+        type: string
+        default: "llama3_8b"
+      jaxlib-version:
+        description: "Which jaxlib version to use? (head/pypi_latest)"
+        type: choice
+        default: "head"
+        options:
+          - "head"
+          - "pypi_latest"
+      skip-download-jaxlib-and-plugins-from-gcs:
+        description: "Whether to skip downloading the jaxlib and plugins from GCS (e.g for testing a jax only release)"
+        type: choice
+        default: '0'
+        options:
+          - '0'
+          - '1'
+      gcs_download_uri:
+        description: "GCS location prefix from where the artifacts should be downloaded"
+        type: string
+        default: 'gs://jax-nightly-artifacts/latest'
+      s3_download_uri:
+        description: "S3 URI for ROCm plugin/PJRT wheels (use 'latest' to resolve via LATEST pointer)"
+        type: string
+        default: 'latest'
+      use-te:
+        description: "Install Transformer Engine"
+        type: choice
+        default: '1'
+        options:
+          - '0'
+          - '1'
+      halt-for-connection:
+        description: 'Should this workflow run wait for a remote connection?'
+        type: string
+        default: 'no'
+  workflow_call:
+    inputs:
+      runner:
+        description: "Which runner should the workflow run on?"
+        type: string
+        default: "linux-x86-64-8gpu-amd"
+      python:
+        description: "Which Python version to use?"
+        type: string
+        default: "3.12"
+      rocm-version:
+        description: "Which ROCm version to benchmark?"
+        type: string
+        default: "7.2.0"
+      rocm-tag:
+        description: "ROCm tag for container image (e.g., rocm720)"
+        type: string
+        default: "rocm720"
+      target:
+        description: "Benchmark target"
+        type: string
+        default: "maxtext"
+      workload:
+        description: "Benchmark workload"
+        type: string
+        default: "llama3_8b"
+      jaxlib-version:
+        description: "Which jaxlib version to use? (head/pypi_latest)"
+        type: string
+        default: "head"
+      skip-download-jaxlib-and-plugins-from-gcs:
+        description: "Whether to skip downloading the jaxlib and plugins from GCS (e.g for testing a jax only release)"
+        type: string
+        default: '0'
+      gcs_download_uri:
+        description: "GCS location prefix from where the artifacts should be downloaded"
+        type: string
+        default: 'gs://jax-nightly-artifacts/latest'
+      s3_download_uri:
+        description: "S3 URI for ROCm plugin/PJRT wheels (use 'latest' to resolve via LATEST pointer)"
+        type: string
+        default: 'latest'
+      use-te:
+        description: "Install Transformer Engine"
+        type: string
+        default: '1'
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  UV_DEFAULT_INDEX: "https://us-python.pkg.dev/ml-oss-artifacts-published/pypi-mirror/simple"
+
+jobs:
+  run-benchmark:
+    defaults:
+      run:
+        # Set the shell to bash as GitHub actions run with /bin/sh by default
+        shell: bash
+    runs-on: ${{ inputs.runner }}
+    continue-on-error: true
+    # Run in ROCm team's GHCR container with GPU access
+    container:
+      image: ghcr.io/rocm/jax-base-ubu24.rocm722:2d65281b00de2bcafc811247d563b6e5e7c887af
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+      options: --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --shm-size 64G --env-file /etc/podinfo/gha-gpu-isolation-settings
+    name: "${{ (contains(inputs.runner, '1gpu') && '1gpu') ||
+        (contains(inputs.runner, '4gpu') && '4gpu') ||
+        (contains(inputs.runner, '8gpu') && '8gpu') }}, ROCm ${{ inputs.rocm-version }}, py${{ inputs.python }}"
+
+    env:
+      JAXCI_HERMETIC_PYTHON_VERSION: "${{ inputs.python }}"
+      JAXCI_PYTHON: "python${{ inputs.python }}"
+      JAXCI_ENABLE_X64: "0"
+      USE_TE: "${{ inputs.use-te }}"
+      INPUT_ROCM_VERSION: "${{ inputs.rocm-version }}"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Download JAX ROCm wheels
+        uses: ./.github/actions/download-jax-rocm-wheels
+        with:
+          python: ${{ inputs.python }}
+          rocm-version: ${{ inputs.rocm-version }}
+          jaxlib-version: ${{ inputs.jaxlib-version }}
+          skip-download-jaxlib-and-plugins-from-gcs: ${{ inputs.skip-download-jaxlib-and-plugins-from-gcs }}
+          gcs_download_uri: ${{ inputs.gcs_download_uri }}
+          s3_download_uri: ${{ inputs.s3_download_uri }}
+      - name: Install Python dependencies
+        run: |
+          $JAXCI_PYTHON -m pip install uv~=0.11.2
+          $JAXCI_PYTHON -m uv pip install -r build/test-requirements.txt
+          $JAXCI_PYTHON -m pip install pytest-json-report
+      # Halt for testing
+      - name: Wait For Connection
+        uses: google-ml-infra/actions/ci_connection@7f5ca0c263a81ed09ea276524c1b9192f1304e3c
+        with:
+          halt-dispatch-input: ${{ inputs.halt-for-connection }}
+      - name: Run ROCm benchmarks
+        env:
+          TARGET: ${{ inputs.target }}
+          WORKLOAD: ${{ inputs.workload }}
+        timeout-minutes: 120
+        run: ./ci/benchmark_targets/${TARGET}/run_${TARGET}_rocm.sh" --workload "${WORKLOAD}"
+      - name: Upload GitHub artifacts
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-artifacts-${{ inputs.target }}-${{ inputs.workload }}-${{ inputs.runner }}-py${{ inputs.python }}-rocm${{ inputs.rocm-version }}
+          path: run_artifacts/result.json
+          if-no-files-found: warn
+      - name: Upload CI artifacts to S3
+        if: always()
+        env:
+          S3_BUCKET_NAME: jax-ci-amd
+        run: ./ci/upload_artifacts.sh run_artifacts

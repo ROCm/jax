@@ -2,22 +2,59 @@ name: CI - Wheel Benchmarks (Nightly/Release)
 
 on:
   workflow_dispatch:
+    inputs:
+      gcs_download_uri:
+        description: "GCS location URI from where the artifacts should be downloaded"
+        required: true
+        default: 'gs://jax-nightly-artifacts/latest'
+        type: string
+      skip-download-jaxlib-and-plugins-from-gcs:
+        description: "Whether to download only the jax wheel from GCS (e.g for testing a jax only release)"
+        required: true
+        default: '0'
+        type: string
+      halt-for-connection:
+        description: 'Should this workflow run wait for a remote connection? (yes/no)'
+        required: false
+        default: 'no'
+        type: string
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
+permissions: {}
+
+env:
+  UV_DEFAULT_INDEX: "https://us-python.pkg.dev/ml-oss-artifacts-published/pypi-mirror/simple"
 
 jobs:
-  test-runner:
-    runs-on: linux-x86-64-8gpu-amd
-
+  run-benchmark-rocm:
+    permissions:
+      id-token: write
+      contents: read
+      checks: write
+    uses: ./.github/workflows/benchmark_rocm.yml
     strategy:
-      matrix:
-        python-version: ["3.12"]
-        rocm-version: ["7.2.0"]
-
-    steps:
-      - name: Test runner label
-        run: |
-          echo "python=${{ matrix.python-version }}"
-          echo "rocm=${{ matrix.rocm-version }}"
+        fail-fast: false # don't cancel all jobs on failure
+        matrix:
+          runner: ["linux-x86-64-8gpu-amd"]
+          python: ["3.12"]
+          rocm: [
+            {version: "7.2.0", tag: "rocm720"},
+          ]
+          target: ["maxtext"]
+          workload: ["gemma_4b"]
+    name: "Benchmark ROCm (JAX artifacts version = ${{ startsWith(github.ref_name, 'release/') && 'latest release' || 'nightly' }})"
+    with:
+      runner: ${{ matrix.runner }}
+      python: ${{ matrix.python }}
+      rocm-version: ${{ matrix.rocm.version }}
+      rocm-tag: ${{ matrix.rocm.tag }}
+      target: ${{ matrix.target }}
+      workload: ${{ matrix.workload }}
+      jaxlib-version: "head"
+      skip-download-jaxlib-and-plugins-from-gcs: ${{inputs.skip-download-jaxlib-and-plugins-from-gcs}}
+      gcs_download_uri: ${{ inputs.gcs_download_uri }}
+      s3_download_uri: ${{ inputs.s3_download_uri }}
+      use-te: "1"
+      te-wheel-url: "https://github.com/ROCm/maxtext/releases/download/te-rocm-wheels-2026-05-04-86438dc3d04e/transformer_engine-2.12.0.dev0+86438dc3-1.mi355-cp312-cp312-linux_x86_64.whl"
