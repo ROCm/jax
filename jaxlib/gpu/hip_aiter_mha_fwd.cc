@@ -1,4 +1,4 @@
-// Copyright 2025 The JAX Authors.
+// Copyright 2026 The JAX Authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -158,7 +158,7 @@ aiter_mha_fwd_impl(
                       "return_dropout_randval requires dropout_p > 0");
   }
 
-  std::string dtype_str = mha_utils::dtype_to_string(q_dtype);
+  std::string dtype_str(mha_utils::dtype_to_string(q_dtype));
 
   // Bias / ALiBi handling.
   const void *bias_ptr = nullptr;

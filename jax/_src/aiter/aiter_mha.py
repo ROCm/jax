@@ -22,7 +22,7 @@ import os
 import shutil
 import subprocess
 from collections import namedtuple
-from typing import Tuple, Optional
+from typing import Optional
 from functools import partial
 
 import jax
@@ -219,7 +219,7 @@ def _get_rank(t):
 
 def _mha_fwd_raw(q, k, v, cu_sq, cu_skv, out_prov, bias, alibi, gen,
                  config):
-      
+
     is_varlen = (q.ndim == 3)
     if is_varlen:
         total_q, hq, dq = q.shape
@@ -649,7 +649,7 @@ def flash_attn_func(
     dropout_p: float = 0.0,
     softmax_scale: Optional[float] = None,
     causal: bool = False,
-    window_size: Tuple[int, int] = (-1, -1),
+    window_size: tuple[int, int] = (-1, -1),
     bias: Optional[jnp.ndarray] = None,
     alibi_slopes: Optional[jnp.ndarray] = None,
     deterministic: bool = True,
@@ -802,7 +802,7 @@ def flash_attn_varlen(
     dropout_p: float = 0.0,
     softmax_scale: Optional[float] = None,
     causal: bool = False,
-    window_size: Tuple[int, int] = (-1, -1),
+    window_size: tuple[int, int] = (-1, -1),
     deterministic: bool = False,
     return_lse: bool = False,
 ) -> jnp.ndarray:

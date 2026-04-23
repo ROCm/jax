@@ -1,11 +1,23 @@
-// SPDX-License-Identifier: MIT
-// Copyright (C) 2025, Advanced Micro Devices, Inc. All rights reserved.
+// Copyright 2025 The JAX Authors.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #pragma once
 
 #include "absl/log/log.h"
 #include <hip/hip_runtime.h>
 #include <string>
+#include <string_view>
 #include <variant>
 
 #include "xla/ffi/api/c_api.h"
@@ -24,7 +36,7 @@
 namespace jax_aiter {
 namespace mha_utils {
 
-inline std::string dtype_to_string(xla::ffi::DataType dtype) {
+inline std::string_view dtype_to_string(xla::ffi::DataType dtype) {
   switch (dtype) {
   case xla::ffi::DataType::F16:
     return "fp16";
@@ -51,7 +63,7 @@ inline size_t dtype_size(xla::ffi::DataType dtype) {
   case xla::ffi::DataType::S64:
     return 8;
   default:
-    return 4;
+    throw std::runtime_error("Unknown xla::ffi::DataType enum: " + std::to_string(static_cast<int>(dtype)));
   }
 }
 
@@ -73,14 +85,14 @@ inline mask_info create_mask_info(bool is_causal, int window_size_left,
   mask_info mask;
   if (is_causal) {
     window_size_right = 0;
-    std::string mask_identify = "b:" + std::to_string(window_size_left) + ",0";
-    mask = mask_info::decode(mask_identify, seqlen_q, seqlen_k);
+    auto mask_identify = "b:" + std::to_string(window_size_left) + ",0";
+    mask = mask_info::decode(std::move(mask_identify), seqlen_q, seqlen_k);
   } else if (window_size_left == -1 && window_size_right == -1) {
     mask = mask_info::decode("0", seqlen_q, seqlen_k);
   } else {
-    std::string mask_identify = "b:" + std::to_string(window_size_left) + "," +
-                                std::to_string(window_size_right);
-    mask = mask_info::decode(mask_identify, seqlen_q, seqlen_k);
+    auto mask_identify = "b:" + std::to_string(window_size_left) + "," +
+                         std::to_string(window_size_right);
+    mask = mask_info::decode(std::move(mask_identify), seqlen_q, seqlen_k);
   }
   return mask;
 }
@@ -128,7 +140,7 @@ validate_mha_dimensions(const xla::ffi::Span<const int64_t> &q_dims,
 }
 
 inline std::pair<uint64_t *, uint64_t *> get_rng_seed_offset_ptrs(
-    const std::optional<xla::ffi::AnyBuffer> &rng_state_opt, float dropout_p) {
+    std::optional<xla::ffi::AnyBuffer> &rng_state_opt, float dropout_p) {
 
   if (dropout_p == 0.0f) {
     return {nullptr, nullptr};
@@ -138,14 +150,13 @@ inline std::pair<uint64_t *, uint64_t *> get_rng_seed_offset_ptrs(
     throw std::runtime_error("rng_state must be provided when dropout_p > 0");
   }
 
-  const auto &rng_state = *rng_state_opt;
+  auto &rng_state = *rng_state_opt;
   if (rng_state.size_bytes() < 2 * sizeof(uint64_t)) {
     throw std::runtime_error(
         "rng_state buffer too small, need at least 16 bytes");
   }
 
-  auto *base_ptr =
-      static_cast<uint64_t *>(const_cast<void *>(rng_state.untyped_data()));
+  auto *base_ptr = static_cast<uint64_t *>(rng_state.untyped_data());
   return {base_ptr, base_ptr + 1};
 }
 
@@ -216,8 +227,7 @@ struct RngStatePointers {
   uint64_t *offset;
 };
 
-// Prepares RNG state for forward pass: uses gen_ if provided, else generates
-// internally.
+// Prepares RNG state for forward pass: uses gen if provided, else generates internally.
 JAX_AITER_EXPORT
 xla::ffi::Error
 prepare_rng_state_for_fwd(hipStream_t stream, float dropout_p, int dev_idx,

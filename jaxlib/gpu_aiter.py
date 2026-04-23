@@ -1,4 +1,4 @@
-# Copyright 2025 The JAX Authors.
+# Copyright 2026 The JAX Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,19 +15,17 @@
 import importlib
 import logging
 from typing import Any
-
-from .plugin_support import import_from_plugin
+from .plugin_support import _PLUGIN_MODULE_NAMES, import_from_plugin
 
 logger = logging.getLogger(__name__)
-
 _hip_aiter = import_from_plugin("rocm", "_aiter")
 
 def _is_rocm_platform() -> bool:
-  """Return True when *any* ROCm plugin wheel is installed."""
-  for name in ("jax_rocm7_plugin", "jax_rocm6_plugin"):
-    if importlib.util.find_spec(name) is not None:
-      return True
-  return False
+  """Return True when any ROCm plugin wheel is installed."""
+  return any(
+      importlib.util.find_spec(name) is not None
+      for name in _PLUGIN_MODULE_NAMES.get("rocm", [])
+  )
 
 def registrations() -> dict[str, list[tuple[str, Any]]]:
   result: dict[str, list[tuple[str, Any]]] = {
