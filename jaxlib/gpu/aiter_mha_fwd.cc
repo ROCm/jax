@@ -1,4 +1,4 @@
-// Copyright 2025 The JAX Authors.
+// Copyright 2026 The JAX Authors.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -22,7 +22,7 @@
 #include "xla/ffi/api/ffi.h"
 
 #include "aiter/mha_fwd.h"
-#include "hip_aiter_mha_common_utils.h"
+#include "aiter_mha_common_utils.h"
 
 namespace ffi = xla::ffi;
 
@@ -140,6 +140,10 @@ aiter_mha_fwd_impl(
     return ffi::Error(ffi::ErrorCode::kInvalidArgument,
                       "q, k, v must have the same dtype");
   }
+  if (!(dropout_p >= 0.0f && dropout_p < 1.0f)) {
+    return ffi::Error(ffi::ErrorCode::kInvalidArgument,
+                      "dropout_p must be in [0, 1)");
+  }
   if (batch_size <= 0) {
     return ffi::Error(ffi::ErrorCode::kInvalidArgument, "batch size must be positive");
   }
@@ -158,7 +162,7 @@ aiter_mha_fwd_impl(
                       "return_dropout_randval requires dropout_p > 0");
   }
 
-  std::string dtype_str = mha_utils::dtype_to_string(q_dtype);
+  std::string dtype_str(mha_utils::dtype_to_string(q_dtype));
 
   // Bias / ALiBi handling.
   const void *bias_ptr = nullptr;
@@ -382,7 +386,8 @@ aiter_mha_fwd_impl(
 
       .p_drop = dropout_p,
       .s_randval = return_dropout_randval,
-      .drop_seed_offset = std::make_pair(rng_ptrs.seed, rng_ptrs.offset),
+      .drop_seed_offset = std::pair<const void *, const void *>(
+          rng_ptrs.seed, rng_ptrs.offset),
 
       .block_scale_size_q = 0,
       .block_scale_size_kv = 0

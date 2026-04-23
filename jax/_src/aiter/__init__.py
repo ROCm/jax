@@ -1,4 +1,3 @@
-
 # Copyright 2025 The JAX Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -25,15 +24,15 @@ Public API:
 """
 
 try:
-    from .aiter_mha import (
-        flash_attn_func,
-        flash_attn_varlen,
-    )
+  from .aiter_mha import (
+    flash_attn_func,
+    flash_attn_varlen,
+  )
 except (ImportError, RuntimeError, OSError):
-    flash_attn_func = None  # type: ignore[assignment]
-    flash_attn_varlen = None  # type: ignore[assignment]
+  flash_attn_func = None  # type: ignore[assignment]
+  flash_attn_varlen = None  # type: ignore[assignment]
 
 __all__ = [
-    "flash_attn_func",
-    "flash_attn_varlen",
+  "flash_attn_func",
+  "flash_attn_varlen",
 ]

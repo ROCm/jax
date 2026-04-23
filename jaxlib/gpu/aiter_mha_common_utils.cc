@@ -1,17 +1,29 @@
-// SPDX-License-Identifier: MIT
-// Copyright (C) 2025, Advanced Micro Devices, Inc. All rights reserved.
+// Copyright 2025 The JAX Authors.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     https://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 #include "absl/log/log.h"
-#include "hip_aiter_mha_common_utils.h"
+#include "aiter_mha_common_utils.h"
 #include <chrono>
+#include <cstring>
 #include <hip/hip_bfloat16.h>
 #include <hip/hip_fp16.h>
 #include <hip/hip_runtime.h>
 
 #ifdef __HIP_PLATFORM_AMD__
-typedef hip_bfloat16 hip_bf16_type;
+using hip_bf16_type = hip_bfloat16;
 #else
-typedef __hip_bfloat16 hip_bf16_type;
+using hip_bf16_type = __hip_bfloat16;
 #endif
 
 namespace jax_aiter {
@@ -57,11 +69,13 @@ template __global__ void mqa_gqa_reduce_kernel<hip_bf16_type>(
     int64_t, int64_t, int64_t, int64_t, int64_t);
 
 JAX_AITER_EXPORT
-void launch_mqa_gqa_reduction(const void *src, void *dst, int64_t batch_size,
-                              int64_t seqlen_k, int64_t num_heads_q,
-                              int64_t num_heads_k, int64_t head_size,
-                              int64_t groups, xla::ffi::DataType dtype,
-                              hipStream_t stream) {
+xla::ffi::Error launch_mqa_gqa_reduction(const void *src, void *dst,
+                                         int64_t batch_size, int64_t seqlen_k,
+                                         int64_t num_heads_q,
+                                         int64_t num_heads_k,
+                                         int64_t head_size, int64_t groups,
+                                         xla::ffi::DataType dtype,
+                                         hipStream_t stream) {
 
   int64_t total_elements = batch_size * seqlen_k * num_heads_k * head_size;
   int threads = 256;
@@ -76,7 +90,14 @@ void launch_mqa_gqa_reduction(const void *src, void *dst, int64_t batch_size,
         static_cast<const hip_bf16_type *>(src),
         static_cast<hip_bf16_type *>(dst), batch_size, seqlen_k, num_heads_q,
         num_heads_k, head_size, groups);
+  } else {
+    return xla::ffi::Error(
+        xla::ffi::ErrorCode::kInvalidArgument,
+        "launch_mqa_gqa_reduction: unsupported dtype " +
+            std::to_string(static_cast<int>(dtype)) + " (expected F16 or BF16)");
   }
+
+  return xla::ffi::Error::Success();
 }
 
 JAX_AITER_EXPORT
@@ -87,33 +108,43 @@ prepare_rng_state_for_fwd(hipStream_t stream, float dropout_p, int dev_idx,
                           xla::ffi::Result<xla::ffi::AnyBuffer> &rng_state,
                           RngStatePointers &out_ptrs) {
 
-  // Ensure rng_state buffer is valid
-  if (rng_state->size_bytes() < 2 * sizeof(int64_t)) {
+  if (rng_state->size_bytes() < 2 * sizeof(uint64_t)) {
     return xla::ffi::Error(
         xla::ffi::ErrorCode::kInvalidArgument,
-        "rng_state result buffer must have at least 2 int64s");
+        "rng_state result buffer must have at least 2 uint64s (16 bytes)");
   }
 
-  uint64_t *rng_state_ptr =
-      reinterpret_cast<uint64_t *>(rng_state->untyped_data());
+  void *rng_base = rng_state->untyped_data();
 
   if (dropout_p > 0.0f) {
     uint64_t seed_value, offset_value;
 
-    if (gen.has_value() && gen->size_bytes() >= 2 * sizeof(int64_t)) {
-      const auto *gen_data = static_cast<const int64_t *>(gen->untyped_data());
-      seed_value = static_cast<uint64_t>(gen_data[0]);
-      offset_value = static_cast<uint64_t>(gen_data[1]);
-      VLOG(1) <<"[JAX_AITER_CPP] Using provided generator with seed: "<<seed_value<<", offset: "<<offset_value;
+    if (gen.has_value() && gen->size_bytes() >= 2 * sizeof(uint64_t)) {
+      // gen is a device buffer — copy its bytes to the host via memcpy-safe
+      // staging to read seed/offset for logging without forming a typed pointer
+      // to device memory.
+      uint64_t host_gen[2];
+      hipError_t sync_err = hipMemcpy(host_gen, gen->untyped_data(),
+                                      2 * sizeof(uint64_t),
+                                      hipMemcpyDeviceToHost);
+      if (sync_err == hipSuccess) {
+        std::memcpy(&seed_value, &host_gen[0], sizeof(uint64_t));
+        std::memcpy(&offset_value, &host_gen[1], sizeof(uint64_t));
+      } else {
+        seed_value = 0;
+        offset_value = 0;
+      }
+      VLOG(1) << "[JAX_AITER_CPP] Using provided generator with seed: "
+              << seed_value << ", offset: " << offset_value;
+
       hipError_t err = hipMemcpyAsync(
-          rng_state->untyped_data(), gen_data, 2 * sizeof(int64_t),
-          hipMemcpyDeviceToDevice, // Try device-to-device first
-          stream);
+          rng_base, gen->untyped_data(), 2 * sizeof(uint64_t),
+          hipMemcpyDeviceToDevice, stream);
 
       if (err == hipErrorInvalidValue) {
-        err =
-            hipMemcpyAsync(rng_state->untyped_data(), gen_data,
-                           2 * sizeof(int64_t), hipMemcpyHostToDevice, stream);
+        err = hipMemcpyAsync(rng_base, gen->untyped_data(),
+                             2 * sizeof(uint64_t), hipMemcpyHostToDevice,
+                             stream);
       }
 
       if (err != hipSuccess) {
@@ -134,12 +165,12 @@ prepare_rng_state_for_fwd(hipStream_t stream, float dropout_p, int dev_idx,
                                            ck_tile::get_warp_size());
 
       VLOG(1) << "Generated RNG with seed: " << seed_value
-                                           << ", offset: " << offset_value << " (no gen provided)";
+              << ", offset: " << offset_value << " (no gen provided)";
 
       uint64_t host_rng[2] = {seed_value, offset_value};
       hipError_t err =
-          hipMemcpyAsync(rng_state->untyped_data(), host_rng,
-                         2 * sizeof(int64_t), hipMemcpyHostToDevice, stream);
+          hipMemcpyAsync(rng_base, host_rng, 2 * sizeof(uint64_t),
+                         hipMemcpyHostToDevice, stream);
 
       if (err != hipSuccess) {
         return xla::ffi::Error(
@@ -149,17 +180,17 @@ prepare_rng_state_for_fwd(hipStream_t stream, float dropout_p, int dev_idx,
       }
     }
 
-    out_ptrs.seed = rng_state_ptr;
-    out_ptrs.offset = rng_state_ptr + 1;
+    out_ptrs.seed = rng_base;
+    out_ptrs.offset = static_cast<char *>(rng_base) + sizeof(uint64_t);
   } else {
-    hipError_t err = hipMemsetAsync(rng_state->untyped_data(), 0,
-                                    2 * sizeof(int64_t), stream);
+    hipError_t err = hipMemsetAsync(rng_base, 0, 2 * sizeof(uint64_t), stream);
     if (err != hipSuccess) {
-      VLOG(1) << "[JAX_AITER_CPP] Warning: Failed to zero RNG state: "<<hipGetErrorString(err);
+      VLOG(1) << "[JAX_AITER_CPP] Warning: Failed to zero RNG state: "
+              << hipGetErrorString(err);
     }
 
-    out_ptrs.seed = rng_state_ptr;
-    out_ptrs.offset = rng_state_ptr + 1;
+    out_ptrs.seed = rng_base;
+    out_ptrs.offset = static_cast<char *>(rng_base) + sizeof(uint64_t);
   }
 
   return xla::ffi::Error::Success();

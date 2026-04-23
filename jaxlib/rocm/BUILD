@@ -497,15 +497,15 @@ rocm_nanobind_extension(
 )
 
 rocm_library(
-    name = "hip_aiter_mha",
+    name = "aiter_mha",
     srcs = if_rocm_is_configured([
-        "//jaxlib/gpu:hip_aiter_mha_fwd.cc",
-        "//jaxlib/gpu:hip_aiter_mha_bwd.cc",
-        "//jaxlib/gpu:hip_aiter_mha_common_utils.cc",
+        "//jaxlib/gpu:aiter_mha_fwd.cc",
+        "//jaxlib/gpu:aiter_mha_bwd.cc",
+        "//jaxlib/gpu:aiter_mha_common_utils.cc",
     ]),
     hdrs = if_rocm_is_configured([
-        "//jaxlib/gpu:hip_aiter.h",
-        "//jaxlib/gpu:hip_aiter_mha_common_utils.h",
+        "//jaxlib/gpu:aiter.h",
+        "//jaxlib/gpu:aiter_mha_common_utils.h",
     ]),
     deps = [
         ":hip_gpu_kernel_helpers",
@@ -521,7 +521,7 @@ rocm_library(
 
 rocm_nanobind_extension(
     name = "_aiter",
-    srcs = ["//jaxlib/gpu:hip_aiter.cc"],
+    srcs = ["//jaxlib/gpu:aiter.cc"],
     copts = [
         "-fexceptions",
         "-fno-strict-aliasing",
@@ -530,7 +530,7 @@ rocm_nanobind_extension(
     linkopts = ["-Wl,-rpath,$$ORIGIN"],
     module_name = "_aiter",
     deps = [
-        ":hip_aiter_mha",
+        ":aiter_mha",
         ":hip_gpu_kernel_helpers",
         ":hip_vendor",
         "//jaxlib:kernel_nanobind_helpers",
