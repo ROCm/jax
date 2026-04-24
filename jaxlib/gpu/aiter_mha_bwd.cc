@@ -21,7 +21,11 @@
 // kernels can be used on all devices concurrently.
 
 #include <hip/hip_runtime.h>
+#include <cstdint>
+#include <exception>
 #include <set>
+#include <string>
+#include <utility>
 #include <vector>
 
 #include "xla/ffi/api/c_api.h"
@@ -34,40 +38,70 @@ namespace ffi = xla::ffi;
 
 namespace {
 
-  // Persistent workspace pool: reuses device memory across calls to avoid
-  // per-call hipMalloc/hipFree which synchronises the device.
-  // Device-aware: re-allocates when the current device changes.
-  struct WorkspacePool {
-    void *ptr = nullptr;
-    size_t cap = 0;
-    int dev = -1;
+  // Stream-ordered RAII workspace.
+  //
+  // hipMallocAsync / hipFreeAsync use the HIP runtime's per-device memory
+  // pool, so allocations are cheap (cached) but still stream-ordered: the
+  // allocation only becomes visible after the issuing stream reaches the
+  // malloc, and the free happens after the stream reaches it.
+  //
+  // AsyncWorkspace replaces all of that.  Each handler invocation creates
+  // its own AsyncWorkspaces; their destructors enqueue hipFreeAsync on
+  // the same stream that issued the consuming kernel, so the buffer is
+  // only released after the kernel has finished.  HIP errors are checked
+  // and surfaced as ffi::Error rather than aborting.
 
-    void *get(size_t bytes, hipStream_t stream, bool zero = true) {
-      int cur_dev = -1;
-      hipGetDevice(&cur_dev);
-      if (cur_dev != dev || bytes > cap) {
-        if (ptr) { hipSetDevice(dev); hipFree(ptr); hipSetDevice(cur_dev); }
-        hipMalloc(&ptr, bytes);
-        cap = bytes;
-        dev = cur_dev;
+  struct AsyncWorkspace {
+    void *ptr_ = nullptr;
+    size_t bytes_ = 0;
+    hipStream_t stream_ = nullptr;
+
+    AsyncWorkspace() = default;
+    AsyncWorkspace(const AsyncWorkspace &) = delete;
+    AsyncWorkspace &operator=(const AsyncWorkspace &) = delete;
+
+    ~AsyncWorkspace() noexcept {
+      if (ptr_ != nullptr) {
+        // Best-effort: enqueue an async free on the consuming stream and
+        // ignore any error here -- destructors must not throw across an
+        // FFI boundary, and there is no recovery we can do anyway.
+        (void)hipFreeAsync(ptr_, stream_);
       }
-      if (zero) hipMemsetAsync(ptr, 0, bytes, stream);
-      return ptr;
     }
 
-    ~WorkspacePool() {
-      if (ptr) {
-        int cur; hipGetDevice(&cur);
-        hipSetDevice(dev); hipFree(ptr); hipSetDevice(cur);
+    // Allocate `bytes` of device workspace ordered on `stream`.  When
+    // `zero` is true the buffer is zero-initialised on the same stream.
+    // Returns ffi::Error on failure with the workspace left empty.
+    ffi::Error allocate(size_t bytes, hipStream_t stream, bool zero = true) {
+      ptr_ = nullptr;
+      bytes_ = 0;
+      stream_ = stream;
+      if (bytes == 0) return ffi::Error::Success();
+      hipError_t err = hipMallocAsync(&ptr_, bytes, stream);
+      if (err != hipSuccess) {
+        ptr_ = nullptr;
+        return ffi::Error(ffi::ErrorCode::kResourceExhausted,
+                          std::string("hipMallocAsync(") +
+                              std::to_string(bytes) +
+                              ") failed: " + hipGetErrorString(err));
       }
+      bytes_ = bytes;
+      if (zero) {
+        err = hipMemsetAsync(ptr_, 0, bytes, stream);
+        if (err != hipSuccess) {
+          (void)hipFreeAsync(ptr_, stream);
+          ptr_ = nullptr;
+          bytes_ = 0;
+          return ffi::Error(ffi::ErrorCode::kInternal,
+                            std::string("hipMemsetAsync failed: ") +
+                                hipGetErrorString(err));
+        }
+      }
+      return ffi::Error::Success();
     }
+
+    void *ptr() const { return ptr_; }
   };
-
-  thread_local WorkspacePool s_dq_acc_pool;
-  thread_local WorkspacePool s_dk_exp_pool;
-  thread_local WorkspacePool s_dv_exp_pool;
-  thread_local WorkspacePool s_dbias_pool;
-  thread_local WorkspacePool s_rng_pool;
 
   size_t compute_dq_acc_size_unified(
       bool is_varlen, int64_t batch_size, int64_t seqlen_q_or_total,
@@ -135,6 +169,11 @@ ffi::Error aiter_mha_bwd_impl(
     int window_size_left, int window_size_right, bool deterministic,
     bool use_asm_v3, bool is_v3_atomic_fp32, int how_v3_bf16_cvt,
     int max_seqlen_q_attr, int max_seqlen_k_attr, bool zero_tensors) {
+  // Outermost try/catch: AITER and a few utility helpers throw
+  // std::runtime_error.  XLA's FFI handlers are extern "C" thunks, and
+  // unwinding past an extern "C" boundary is undefined behaviour, so we
+  // must convert any exception into an ffi::Error here.
+  try {
 
   if (!q.untyped_data() || !k.untyped_data() || !v.untyped_data() ||
       !out.untyped_data() || !softmax_lse.untyped_data() || !dout.untyped_data()) {
@@ -144,6 +183,13 @@ ffi::Error aiter_mha_bwd_impl(
   const int dev_idx = ::jax_aiter::device_from_ptr(q.untyped_data());
   if (dev_idx < 0)
     return ffi::Error(ffi::ErrorCode::kInvalidArgument, "bad device from q");
+
+  // Pin the HIP device context to the data device BEFORE any device
+  // allocations or kernel launches happen.  Previously hipSetDevice was
+  // called only just before aiter::mha_bwd, after several workspace
+  // allocations had already executed -- which on multi-GPU setups would
+  // place those workspaces on the wrong device.
+  HIP_CHECK(hipSetDevice(dev_idx));
 
   auto q_dims = q.dimensions();
   auto k_dims = k.dimensions();
@@ -182,6 +228,17 @@ ffi::Error aiter_mha_bwd_impl(
     max_sk = seqlen_k;
   }
 
+  auto q_dtype = q.element_type();
+  if (q_dtype != ffi::DataType::F16 && q_dtype != ffi::DataType::BF16) {
+    return ffi::Error(ffi::ErrorCode::kInvalidArgument,
+                      "FlashAttention backward only supports fp16 and bf16");
+  }
+  if (k.element_type() != q_dtype || v.element_type() != q_dtype ||
+      out.element_type() != q_dtype || dout.element_type() != q_dtype) {
+    return ffi::Error(ffi::ErrorCode::kInvalidArgument,
+                      "Q, K, V, OUT, DOUT must have the same dtype");
+  }
+
   if (max_sq == 0) {
     if (dq_ret->size_bytes() > 0)
       HIP_CHECK(hipMemsetAsync(dq_ret->untyped_data(), 0, dq_ret->size_bytes(), stream));
@@ -204,7 +261,7 @@ ffi::Error aiter_mha_bwd_impl(
     return ffi::Error(ffi::ErrorCode::kInvalidArgument, "num_heads_q must be divisible by num_heads_k");
 
   bool is_mqa_gqa = (num_heads != num_heads_k);
-  std::string dtype_str(mha_utils::dtype_to_string(q.element_type()));
+  std::string dtype_str(mha_utils::dtype_to_string(q_dtype));
 
   int ref_sk = is_varlen ? max_sk : seqlen_k;
   if (window_size_left >= ref_sk) window_size_left = -1;
@@ -231,31 +288,35 @@ ffi::Error aiter_mha_bwd_impl(
   bias_enum bias_type = mha_utils::get_bias_type(has_bias, has_alibi);
 
   bool has_dbias = has_bias && (dbias_ret->size_bytes() > 0) && !is_varlen;
+  AsyncWorkspace dbias_ws;
   void *dbias_expanded_ptr = nullptr;
   ck_tile::index_t stride_dbias = 0, nhead_stride_dbias = 0, batch_stride_dbias = 0;
 
   if (has_dbias) {
     size_t dbias_sz = batch_size * seqlen_q * num_heads * seqlen_k * mha_utils::dtype_size(q.element_type());
-    dbias_expanded_ptr = s_dbias_pool.get(dbias_sz, stream);
+    if (auto err = dbias_ws.allocate(dbias_sz, stream); !err.success())
+      return err;
+    dbias_expanded_ptr = dbias_ws.ptr();
     stride_dbias = num_heads * seqlen_k;
     nhead_stride_dbias = seqlen_k;
     batch_stride_dbias = seqlen_q * num_heads * seqlen_k;
   }
 
   // RNG — use void* to avoid forming uint64_t* from untyped storage.
+  AsyncWorkspace dummy_rng_ws;
   void *seed_ptr = nullptr, *offset_ptr = nullptr;
   if (dropout_p > 0.0f) {
     if (!rng_state.has_value() || !mha_utils::is_valid_buffer(*rng_state))
       return ffi::Error(ffi::ErrorCode::kInvalidArgument,
                         "rng_state must be a valid buffer when dropout_p > 0");
-    try {
-      auto [s, o] = mha_utils::get_rng_seed_offset_ptrs(rng_state, dropout_p);
-      seed_ptr = s; offset_ptr = o;
-    } catch (const std::exception &e) {
-      return ffi::Error(ffi::ErrorCode::kInvalidArgument, e.what());
-    }
+    auto [s, o] = mha_utils::get_rng_seed_offset_ptrs(rng_state, dropout_p);
+    seed_ptr = s; offset_ptr = o;
   } else {
-    void *dummy_rng = s_rng_pool.get(2 * sizeof(uint64_t), stream, /*zero=*/false);
+    if (auto err = dummy_rng_ws.allocate(2 * sizeof(uint64_t), stream,
+                                         /*zero=*/false);
+        !err.success())
+      return err;
+    void *dummy_rng = dummy_rng_ws.ptr();
     seed_ptr = dummy_rng;
     offset_ptr = static_cast<char *>(dummy_rng) + sizeof(uint64_t);
   }
@@ -267,7 +328,10 @@ ffi::Error aiter_mha_bwd_impl(
       num_heads, head_size_q, deterministic, use_asm_v3, is_v3_atomic_fp32,
       q.element_type(), dq_acc_shape);
 
-  void *dq_acc_ptr = s_dq_acc_pool.get(dq_acc_bytes, stream);
+  AsyncWorkspace dq_acc_ws;
+  if (auto err = dq_acc_ws.allocate(dq_acc_bytes, stream); !err.success())
+    return err;
+  void *dq_acc_ptr = dq_acc_ws.ptr();
 
   // dq_acc strides
   ck_tile::index_t split_stride_dq_acc = 1, batch_stride_dq_acc = 0;
@@ -304,14 +368,19 @@ ffi::Error aiter_mha_bwd_impl(
   auto dk_dims = dk_ret->dimensions();
   auto dv_dims = dv_ret->dimensions();
 
+  AsyncWorkspace dk_exp_ws, dv_exp_ws;
   void *dk_expanded_ptr = nullptr, *dv_expanded_ptr = nullptr;
   void *dk_final = dk_ret->untyped_data(), *dv_final = dv_ret->untyped_data();
 
   if (is_mqa_gqa) {
     size_t dk_sz = (is_varlen ? seqlen_k : batch_size * seqlen_k) * num_heads * head_size_q * mha_utils::dtype_size(q.element_type());
     size_t dv_sz = (is_varlen ? seqlen_k : batch_size * seqlen_k) * num_heads * head_size_v * mha_utils::dtype_size(v.element_type());
-    dk_expanded_ptr = s_dk_exp_pool.get(dk_sz, stream);
-    dv_expanded_ptr = s_dv_exp_pool.get(dv_sz, stream);
+    if (auto err = dk_exp_ws.allocate(dk_sz, stream); !err.success())
+      return err;
+    if (auto err = dv_exp_ws.allocate(dv_sz, stream); !err.success())
+      return err;
+    dk_expanded_ptr = dk_exp_ws.ptr();
+    dv_expanded_ptr = dv_exp_ws.ptr();
     dk_final = dk_expanded_ptr; dv_final = dv_expanded_ptr;
   }
 
@@ -392,7 +461,7 @@ ffi::Error aiter_mha_bwd_impl(
       .v3_api_check = false,
       .hdim_q = static_cast<int>(head_size_q),
       .hdim_v = static_cast<int>(head_size_v),
-      .data_type = dtype_str,
+      .data_type = std::move(dtype_str),
       .is_group_mode = is_varlen,
       .mask_type = static_cast<int>(mask.type),
       .bias_type = static_cast<int>(bias_type),
@@ -446,12 +515,8 @@ ffi::Error aiter_mha_bwd_impl(
           seed_ptr, offset_ptr)
   };
 
-  // Ensure HIP device context matches the data device.  XLA usually sets
-  // this, but being explicit prevents WorkspacePool and kernel loads from
-  // targeting the wrong device.
-  HIP_CHECK(hipSetDevice(dev_idx));
-
-  args.use_asm_v3 = use_asm_v3;
+  // Note: hipSetDevice(dev_idx) was already called at the top of the
+  // handler so any AITER kernel loads / launches target the data device.
 
   auto stream_config = mha_utils::create_stream_config(stream);
   float runtime = aiter::mha_bwd(args, stream_config);
@@ -478,7 +543,7 @@ ffi::Error aiter_mha_bwd_impl(
         num_heads, num_heads_k, head_size_v, groups, v.element_type(), stream);
     if (!dv_err.success()) return dv_err;
 
-    // dk/dv expanded buffers managed by pool -- no free needed
+    // dk/dv expanded buffers freed asynchronously by AsyncWorkspace dtors
   }
 
   if (has_dbias && dbias_expanded_ptr) {
@@ -486,10 +551,18 @@ ffi::Error aiter_mha_bwd_impl(
     HIP_CHECK(hipMemcpyAsync(dbias_ret->untyped_data(), dbias_expanded_ptr,
                              dbias_sz, hipMemcpyDeviceToDevice, stream));
   }
-  // All workspace buffers managed by pools -- no hipFree needed
+  // All workspace AsyncWorkspaces are freed (stream-ordered) at scope exit.
 
   return ffi::Error::Success();
-}
+
+  } catch (const std::exception &e) {
+    return ffi::Error(ffi::ErrorCode::kInvalidArgument,
+                      std::string("aiter_mha_bwd: ") + e.what());
+  } catch (...) {
+    return ffi::Error(ffi::ErrorCode::kInternal,
+                      "aiter_mha_bwd: unknown C++ exception");
+  }
+} // aiter_mha_bwd_impl
 
 } // namespace jax_aiter
 

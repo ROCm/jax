@@ -18,6 +18,11 @@
 
 #include <hip/hip_runtime.h>
 
+#include <cstdint>
+#include <cstring>
+#include <exception>
+#include <string>
+
 #include "xla/ffi/api/c_api.h"
 #include "xla/ffi/api/ffi.h"
 
@@ -28,23 +33,26 @@ namespace ffi = xla::ffi;
 
 namespace jax_aiter {
 
-// Fill a device float buffer with a constant value using a pinned host staging
-// buffer.  The staging buffer is allocated once and grows as needed, avoiding
-// per-call std::vector + hipMemcpyHostToDevice overhead.
-// Fill a device float buffer with a constant value using a pinned host staging
-// buffer.  The staging buffer is allocated once and grows as needed, avoiding
-// per-call std::vector + hipMemcpyHostToDevice overhead.
-static void fill_float_constant(void *dst, size_t n, float val,
-  hipStream_t stream) {
-  static thread_local float *pinned = nullptr;
-  static thread_local size_t pinned_cap = 0;
-  if (n > pinned_cap) {
-    if (pinned) hipHostFree(pinned);
-    hipHostMalloc(&pinned, n * sizeof(float), hipHostMallocDefault);
-    pinned_cap = n;
+// Fill `n` consecutive float values at device pointer `dst` with `val` on
+// `stream`.  Uses hipMemsetD32Async, which writes a 32-bit pattern entirely
+// on the GPU and is therefore stream-ordered and race-free across streams.
+static ffi::Error fill_float_constant(void *dst, size_t n, float val,
+                                      hipStream_t stream) {
+  if (n == 0) return ffi::Error::Success();
+  // Bit-cast float -> uint32 for hipMemsetD32Async, which takes a
+  // 32-bit pattern.  std::memcpy is the only standards-compliant way
+  // to type-pun without invoking strict-aliasing UB.
+  uint32_t pattern;
+  std::memcpy(&pattern, &val, sizeof(pattern));
+  hipError_t err = hipMemsetD32Async(
+      reinterpret_cast<hipDeviceptr_t>(dst),
+      static_cast<int>(pattern), n, stream);
+  if (err != hipSuccess) {
+    return ffi::Error(ffi::ErrorCode::kInternal,
+                      std::string("hipMemsetD32Async failed: ") +
+                          hipGetErrorString(err));
   }
-  for (size_t i = 0; i < n; i++) pinned[i] = val;
-  hipMemcpyAsync(dst, pinned, n * sizeof(float), hipMemcpyHostToDevice, stream);
+  return ffi::Error::Success();
 }
 
 ffi::Error
@@ -77,6 +85,11 @@ aiter_mha_fwd_impl(
     int min_seqlen_q,
     float logits_soft_cap,
     bool zero_tensors) {
+  // Outermost try/catch: AITER and a few utility helpers throw
+  // std::runtime_error.  XLA's FFI handlers are extern "C" thunks, and
+  // unwinding past an extern "C" boundary is undefined behaviour, so we
+  // must convert any exception into an ffi::Error here.
+  try {
 
   if (!q.untyped_data() || !k.untyped_data() || !v.untyped_data()) {
     return ffi::Error(ffi::ErrorCode::kInvalidArgument,
@@ -87,6 +100,10 @@ aiter_mha_fwd_impl(
   if (dev_idx < 0) {
     return ffi::Error(ffi::ErrorCode::kInvalidArgument, "bad device from q");
   }
+  // Pin the HIP device context to dev_idx for the duration of this
+  // handler so any device allocations or kernel launches issued by AITER
+  // target the correct device on multi-GPU setups.
+  HIP_CHECK(hipSetDevice(dev_idx));
 
   auto q_dims = q.dimensions();
   auto k_dims = k.dimensions();
@@ -202,8 +219,10 @@ aiter_mha_fwd_impl(
   if (zero_tensors) {
     HIP_CHECK(hipMemsetAsync(o->untyped_data(), 0, o->size_bytes(), stream));
     if (return_softmax_lse && lse->size_bytes() > 0) {
-      fill_float_constant(lse->untyped_data(), lse->element_count(),
-                          -std::numeric_limits<float>::infinity(), stream);
+      auto fill_err = fill_float_constant(
+          lse->untyped_data(), lse->element_count(),
+          -std::numeric_limits<float>::infinity(), stream);
+      if (!fill_err.success()) return fill_err;
     }
     if (return_dropout_randval && p->size_bytes() > 0) {
       HIP_CHECK(hipMemsetAsync(p->untyped_data(), 0, p->size_bytes(), stream));
@@ -214,8 +233,10 @@ aiter_mha_fwd_impl(
   if (ref_sk == 0) {
     HIP_CHECK(hipMemsetAsync(o->untyped_data(), 0, o->size_bytes(), stream));
     if (return_softmax_lse && lse->size_bytes() > 0) {
-      fill_float_constant(lse->untyped_data(), lse->element_count(),
-                          std::numeric_limits<float>::infinity(), stream);
+      auto fill_err = fill_float_constant(
+          lse->untyped_data(), lse->element_count(),
+          std::numeric_limits<float>::infinity(), stream);
+      if (!fill_err.success()) return fill_err;
     }
     return ffi::Error::Success();
   }
@@ -402,6 +423,14 @@ aiter_mha_fwd_impl(
   }
 
   return ffi::Error::Success();
+
+  } catch (const std::exception &e) {
+    return ffi::Error(ffi::ErrorCode::kInvalidArgument,
+                      std::string("aiter_mha_fwd: ") + e.what());
+  } catch (...) {
+    return ffi::Error(ffi::ErrorCode::kInternal,
+                      "aiter_mha_fwd: unknown C++ exception");
+  }
 }
 
 } // namespace jax_aiter

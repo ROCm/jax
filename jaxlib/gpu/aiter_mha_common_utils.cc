@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include "absl/log/log.h"
+#include "absl/log/vlog_is_on.h"
 #include "aiter_mha_common_utils.h"
 #include <chrono>
 #include <cstring>
@@ -117,36 +118,27 @@ prepare_rng_state_for_fwd(hipStream_t stream, float dropout_p, int dev_idx,
   void *rng_base = rng_state->untyped_data();
 
   if (dropout_p > 0.0f) {
-    uint64_t seed_value, offset_value;
-
     if (gen.has_value() && gen->size_bytes() >= 2 * sizeof(uint64_t)) {
-      // gen is a device buffer — copy its bytes to the host via memcpy-safe
-      // staging to read seed/offset for logging without forming a typed pointer
-      // to device memory.
-      uint64_t host_gen[2];
-      hipError_t sync_err = hipMemcpy(host_gen, gen->untyped_data(),
-                                      2 * sizeof(uint64_t),
-                                      hipMemcpyDeviceToHost);
-      if (sync_err == hipSuccess) {
-        std::memcpy(&seed_value, &host_gen[0], sizeof(uint64_t));
-        std::memcpy(&offset_value, &host_gen[1], sizeof(uint64_t));
-      } else {
-        seed_value = 0;
-        offset_value = 0;
+      // gen is a device buffer.  Issue an async D->D copy on the compute
+      // stream; do NOT do a synchronous hipMemcpy on the hot path.
+      if (VLOG_IS_ON(1)) {
+        uint64_t host_gen[2] = {0, 0};
+        hipError_t copy_err =
+            hipMemcpy(host_gen, gen->untyped_data(), 2 * sizeof(uint64_t),
+                      hipMemcpyDeviceToHost);
+        if (copy_err == hipSuccess) {
+          VLOG(1) << "[JAX_AITER_CPP] Using provided generator with seed: "
+                  << host_gen[0] << ", offset: " << host_gen[1];
+        } else {
+          VLOG(1) << "[JAX_AITER_CPP] Using provided generator (failed to "
+                     "stage seed/offset for logging: "
+                  << hipGetErrorString(copy_err) << ")";
+        }
       }
-      VLOG(1) << "[JAX_AITER_CPP] Using provided generator with seed: "
-              << seed_value << ", offset: " << offset_value;
 
       hipError_t err = hipMemcpyAsync(
           rng_base, gen->untyped_data(), 2 * sizeof(uint64_t),
           hipMemcpyDeviceToDevice, stream);
-
-      if (err == hipErrorInvalidValue) {
-        err = hipMemcpyAsync(rng_base, gen->untyped_data(),
-                             2 * sizeof(uint64_t), hipMemcpyHostToDevice,
-                             stream);
-      }
-
       if (err != hipSuccess) {
         return xla::ffi::Error(
             xla::ffi::ErrorCode::kInternal,
@@ -159,10 +151,10 @@ prepare_rng_state_for_fwd(hipStream_t stream, float dropout_p, int dev_idx,
                            now.time_since_epoch())
                            .count();
 
-      seed_value =
+      uint64_t seed_value =
           static_cast<uint64_t>(timestamp) ^ static_cast<uint64_t>(dev_idx);
-      offset_value = static_cast<uint64_t>(batch_size * num_heads *
-                                           ck_tile::get_warp_size());
+      uint64_t offset_value = static_cast<uint64_t>(
+          batch_size * num_heads * ck_tile::get_warp_size());
 
       VLOG(1) << "Generated RNG with seed: " << seed_value
               << ", offset: " << offset_value << " (no gen provided)";
