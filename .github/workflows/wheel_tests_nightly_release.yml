@@ -168,6 +168,30 @@ jobs:
       write_to_bazel_remote_cache: 1
       run_multiaccelerator_tests: "true"
 
+  run-bazel-test-cuda:
+    uses: ./.github/workflows/bazel_rocm.yml
+    strategy:
+        fail-fast: false # don't cancel all jobs on failure
+        matrix:
+          # Runner OS and Python values need to match the matrix stategy of our internal CI jobs
+          # that build the wheels.
+          runner: ["linux-x86-g2-48-l4-4gpu"]
+          python: ["3.11", "3.12", "3.13", "3.13-nogil", "3.14", "3.14-nogil"]
+          rocm-version: [7]
+          enable-x64: [0]
+    name: "Bazel ROCM Non-RBE with ${{ format('{0}', 'build_jaxlib=false') }}"
+    with:
+      runner: ${{ matrix.runner }}
+      python: ${{ matrix.python }}
+      rocm-version: ${{ matrix.rocm-version }}
+      enable-x64:  ${{ matrix.enable-x64 }}
+      halt-for-connection: ${{inputs.halt-for-connection}}
+      build_jaxlib: "false"
+      build_jax: "false"
+      jaxlib-version: "head"
+      write_to_bazel_remote_cache: 1
+      run_multiaccelerator_tests: "true"
+
   run-pytest-tpu:
     uses: ./.github/workflows/pytest_tpu.yml
     strategy:
