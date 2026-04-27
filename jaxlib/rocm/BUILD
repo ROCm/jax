@@ -477,6 +477,7 @@ nanobind_extension(
 
 py_library(
     name = "rocm_gpu_support",
+    visibility = ["//visibility:public"],
     deps = [
         ":_hybrid",
         ":_linalg",
@@ -530,6 +531,7 @@ nanobind_extension(
     name = "rocm_plugin_extension",
     srcs = ["rocm_plugin_extension.cc"],
     module_name = "rocm_plugin_extension",
+    visibility = ["//visibility:public"],
     deps = [
         ":py_client_gpu",
         "//jaxlib:kernel_nanobind_helpers",
