@@ -118,7 +118,7 @@ jobs:
     continue-on-error: true
     # Run in ROCm team's GHCR container with GPU access
     container:
-      image: ghcr.io/rocm/jax-base-ubu24.${{ inputs.rocm-tag }}:latest
+      image: ghcr.io/rocm/jax-base-ubu24.rocm722:a7e73b939af180aa034b5b4017e3b506e9c41918
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
