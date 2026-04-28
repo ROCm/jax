@@ -256,6 +256,13 @@ class CoreTest(jtu.JaxTestCase):
     assert jvp(foo, (1.0,), (2.0,)) == (1.0, 2.0)
 
   def test_simple_jit(self):
+    # XLA reduction autotuner produces no valid tile configs for gfx1151 (RDNA3.5,
+    # 32-thread wavefronts). JIT compilation triggers autotuning which fails with
+    # "NOT_FOUND: No valid config found!". See ROCM-21429.
+    if (jtu.is_device_rocm()
+        and "Radeon" in jax.local_devices()[0].device_kind):
+      self.skipTest(
+          "XLA reduction autotuner has no valid config for Navi/RDNA GPUs (gfx11xx)")
     def foo(x):
       if x.shape == ():
         return x + 1.
@@ -403,6 +410,13 @@ class CoreTest(jtu.JaxTestCase):
     self.assertEqual(e1.outvars[0].aval.shape, (3, 3))  # only primal out shape
 
   def test_tracer_reprs(self):
+    # XLA reduction autotuner produces no valid tile configs for gfx1151 (RDNA3.5,
+    # 32-thread wavefronts). JIT compilation triggers autotuning which fails with
+    # "NOT_FOUND: No valid config found!". See ROCM-21429.
+    if (jtu.is_device_rocm()
+        and "Radeon" in jax.local_devices()[0].device_kind):
+      self.skipTest(
+          "XLA reduction autotuner has no valid config for Navi/RDNA GPUs (gfx11xx)")
     def f(x):
       nonlocal x_repr
       x_repr = repr(x)
@@ -425,6 +439,13 @@ class CoreTest(jtu.JaxTestCase):
     self.assertEqual(x_repr, "JVPTracer(primal=[0. 1. 2.], tangent=VmapTracer(aval=float32[3], batched=float32[3,3]))")
 
   def test_verbose_tracer_reprs(self):
+    # XLA reduction autotuner produces no valid tile configs for gfx1151 (RDNA3.5,
+    # 32-thread wavefronts). JIT compilation triggers autotuning which fails with
+    # "NOT_FOUND: No valid config found!". See ROCM-21429.
+    if (jtu.is_device_rocm()
+        and "Radeon" in jax.local_devices()[0].device_kind):
+      self.skipTest(
+          "XLA reduction autotuner has no valid config for Navi/RDNA GPUs (gfx11xx)")
     # Verbose reprs, avaiable via tracer._pretty_print()
     def f(x):
       nonlocal x_repr
