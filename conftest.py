@@ -79,8 +79,8 @@ def pytest_collection() -> None:
     if not xdist_worker_name.startswith("gw"):
       return
     xdist_worker_number = int(xdist_worker_name[len("gw") :])
-    os.environ.setdefault(
-        "ROCR_VISIBLE_DEVICES", str(xdist_worker_number % num_rocm_devices)
+    os.environ["ROCR_VISIBLE_DEVICES"] = str(
+        xdist_worker_number % num_rocm_devices
     )
     # ROCR_VISIBLE_DEVICES filters HSA to a single physical device, which
     # becomes HIP index 0. The container env-file may preset
