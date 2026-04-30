@@ -23,8 +23,11 @@
 #include <hip/hip_runtime.h>
 #include <cstdint>
 #include <exception>
+#include <functional>
+#include <mutex>
 #include <set>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -38,70 +41,164 @@ namespace ffi = xla::ffi;
 
 namespace {
 
-  // Stream-ordered RAII workspace.
+  // Persistent device-workspace cache keyed by (device, stream, slot).
   //
-  // hipMallocAsync / hipFreeAsync use the HIP runtime's per-device memory
-  // pool, so allocations are cheap (cached) but still stream-ordered: the
-  // allocation only becomes visible after the issuing stream reaches the
-  // malloc, and the free happens after the stream reaches it.
+  // The five backward-pass workspace buffers (dq_acc, dk_expanded,
+  // dv_expanded, dbias_expanded, dummy_rng) are allocated lazily on first
+  // use of each (dev, stream, slot) triple, then reused across every
+  // subsequent call with the same key.  When a request asks for more
+  // bytes than the current capacity, the buffer is freed and a larger
+  // one is allocated in its place.
   //
-  // AsyncWorkspace replaces all of that.  Each handler invocation creates
-  // its own AsyncWorkspaces; their destructors enqueue hipFreeAsync on
-  // the same stream that issued the consuming kernel, so the buffer is
-  // only released after the kernel has finished.  HIP errors are checked
-  // and surfaced as ffi::Error rather than aborting.
+  // This replaces the previous per-call hipMallocAsync / hipFreeAsync
+  // pair, which on ROCm did not behave like a sticky pool: stream-
+  // ordered frees cannot be reused by the very next hipMallocAsync on
+  // the same stream until the stream catches up, so each backward call
+  // paid a fresh real allocation for ~GBs of dq_acc workspace.  Caching
+  // the buffer per (dev, stream, slot) restores the ~4x bwd speedup
+  // measured before commit 1d827fcbbf while still fixing the bugs that
+  // commit was originally written to address:
+  //
+  //   - Cross-stream race: distinct streams on the same device get
+  //     distinct cache entries, so a buffer is never aliased between
+  //     two streams that may run concurrently.
+  //   - Multi-GPU misallocation: the data-device index is pinned with
+  //     hipSetDevice(dev) before hipMalloc and the previous device is
+  //     restored on exit, so the buffer always lives on the right GPU.
+  //   - Ignored OOM: hipMalloc failures are surfaced as
+  //     ffi::ErrorCode::kResourceExhausted instead of being silently
+  //     dropped.
+  //
+  // The cache itself is process-wide and intentionally never released:
+  // workspace lifetime tracks XLA executable lifetime in practice, and
+  // the buffers are large enough that re-allocating them per call is
+  // exactly what introduced the regression we are fixing.
 
-  struct AsyncWorkspace {
-    void *ptr_ = nullptr;
-    size_t bytes_ = 0;
-    hipStream_t stream_ = nullptr;
+  enum class WsSlot : int {
+    kDqAcc = 0,
+    kDkExp = 1,
+    kDvExp = 2,
+    kDbias = 3,
+    kDummyRng = 4,
+  };
 
-    AsyncWorkspace() = default;
-    AsyncWorkspace(const AsyncWorkspace &) = delete;
-    AsyncWorkspace &operator=(const AsyncWorkspace &) = delete;
-
-    ~AsyncWorkspace() noexcept {
-      if (ptr_ != nullptr) {
-        // Best-effort: enqueue an async free on the consuming stream and
-        // ignore any error here -- destructors must not throw across an
-        // FFI boundary, and there is no recovery we can do anyway.
-        (void)hipFreeAsync(ptr_, stream_);
-      }
+  struct WsKey {
+    int dev;
+    hipStream_t stream;
+    WsSlot slot;
+    bool operator==(const WsKey &o) const noexcept {
+      return dev == o.dev && stream == o.stream && slot == o.slot;
     }
+  };
 
-    // Allocate `bytes` of device workspace ordered on `stream`.  When
-    // `zero` is true the buffer is zero-initialised on the same stream.
-    // Returns ffi::Error on failure with the workspace left empty.
-    ffi::Error allocate(size_t bytes, hipStream_t stream, bool zero = true) {
-      ptr_ = nullptr;
-      bytes_ = 0;
-      stream_ = stream;
-      if (bytes == 0) return ffi::Error::Success();
-      hipError_t err = hipMallocAsync(&ptr_, bytes, stream);
-      if (err != hipSuccess) {
-        ptr_ = nullptr;
-        return ffi::Error(ffi::ErrorCode::kResourceExhausted,
-                          std::string("hipMallocAsync(") +
-                              std::to_string(bytes) +
-                              ") failed: " + hipGetErrorString(err));
-      }
-      bytes_ = bytes;
-      if (zero) {
-        err = hipMemsetAsync(ptr_, 0, bytes, stream);
-        if (err != hipSuccess) {
-          (void)hipFreeAsync(ptr_, stream);
-          ptr_ = nullptr;
-          bytes_ = 0;
-          return ffi::Error(ffi::ErrorCode::kInternal,
-                            std::string("hipMemsetAsync failed: ") +
-                                hipGetErrorString(err));
-        }
-      }
+  struct WsKeyHash {
+    size_t operator()(const WsKey &k) const noexcept {
+      // boost-style hash combine; quality matters less than determinism here.
+      size_t h = std::hash<int>{}(k.dev);
+      size_t h2 = std::hash<void *>{}(reinterpret_cast<void *>(k.stream));
+      size_t h3 = std::hash<int>{}(static_cast<int>(k.slot));
+      h ^= h2 + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
+      h ^= h3 + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
+      return h;
+    }
+  };
+
+  struct WsEntry {
+    void *ptr = nullptr;
+    size_t cap = 0;
+  };
+
+  std::mutex &workspace_mu() {
+    static std::mutex mu;
+    return mu;
+  }
+
+  std::unordered_map<WsKey, WsEntry, WsKeyHash> &workspace_table() {
+    static std::unordered_map<WsKey, WsEntry, WsKeyHash> tbl;
+    return tbl;
+  }
+
+  // Get a cached device-side workspace for (slot, dev, stream).  Grows
+  // the buffer if `bytes` exceeds the current capacity.  When `zero` is
+  // true the buffer is zero-initialised on `stream` before returning.
+  // *out_ptr is set on success and untouched on failure.
+  //
+  // Multi-stream / multi-GPU safety:
+  //   - The map mutex serialises the (lookup + grow) critical section so
+  //     two threads racing on the same key cannot trample each other.
+  //   - The hipMemsetAsync zero step is stream-ordered and runs outside
+  //     the mutex (a HIP stream is always single-producer by design).
+  //   - hipSetDevice(dev) is issued before hipMalloc and the previous
+  //     device is restored, so allocation lands on the data device on
+  //     multi-GPU even when the map mutex is contended.
+  ffi::Error get_workspace(WsSlot slot, int dev, hipStream_t stream,
+                           size_t bytes, bool zero, void **out_ptr) {
+    if (out_ptr == nullptr) {
+      return ffi::Error(ffi::ErrorCode::kInvalidArgument,
+                        "get_workspace: out_ptr must not be null");
+    }
+    if (bytes == 0) {
+      *out_ptr = nullptr;
       return ffi::Error::Success();
     }
 
-    void *ptr() const { return ptr_; }
-  };
+    void *ptr = nullptr;
+    {
+      std::lock_guard<std::mutex> lock(workspace_mu());
+      auto &entry = workspace_table()[WsKey{dev, stream, slot}];
+      if (bytes > entry.cap) {
+        int prev_dev = -1;
+        hipError_t gerr = hipGetDevice(&prev_dev);
+        if (gerr != hipSuccess) {
+          return ffi::Error(ffi::ErrorCode::kInternal,
+                            std::string("hipGetDevice failed: ") +
+                                hipGetErrorString(gerr));
+        }
+        hipError_t serr = hipSetDevice(dev);
+        if (serr != hipSuccess) {
+          return ffi::Error(ffi::ErrorCode::kInvalidArgument,
+                            std::string("hipSetDevice(") +
+                                std::to_string(dev) +
+                                ") failed: " + hipGetErrorString(serr));
+        }
+        if (entry.ptr != nullptr) {
+          (void)hipFree(entry.ptr);
+          entry.ptr = nullptr;
+          entry.cap = 0;
+        }
+        hipError_t merr = hipMalloc(&entry.ptr, bytes);
+        // Restore the caller's device first so a hipMalloc failure cannot
+        // leak our temporary device switch into the rest of the handler.
+        (void)hipSetDevice(prev_dev);
+        if (merr != hipSuccess) {
+          entry.ptr = nullptr;
+          entry.cap = 0;
+          return ffi::Error(ffi::ErrorCode::kResourceExhausted,
+                            std::string("hipMalloc(") +
+                                std::to_string(bytes) +
+                                ") for workspace slot " +
+                                std::to_string(static_cast<int>(slot)) +
+                                " on dev " + std::to_string(dev) +
+                                " failed: " + hipGetErrorString(merr));
+        }
+        entry.cap = bytes;
+      }
+      ptr = entry.ptr;
+    }
+
+    if (zero) {
+      hipError_t err = hipMemsetAsync(ptr, 0, bytes, stream);
+      if (err != hipSuccess) {
+        return ffi::Error(ffi::ErrorCode::kInternal,
+                          std::string("hipMemsetAsync(") +
+                              std::to_string(bytes) +
+                              ") failed: " + hipGetErrorString(err));
+      }
+    }
+
+    *out_ptr = ptr;
+    return ffi::Error::Success();
+  }
 
   size_t compute_dq_acc_size_unified(
       bool is_varlen, int64_t batch_size, int64_t seqlen_q_or_total,
@@ -288,22 +385,21 @@ ffi::Error aiter_mha_bwd_impl(
   bias_enum bias_type = mha_utils::get_bias_type(has_bias, has_alibi);
 
   bool has_dbias = has_bias && (dbias_ret->size_bytes() > 0) && !is_varlen;
-  AsyncWorkspace dbias_ws;
   void *dbias_expanded_ptr = nullptr;
   ck_tile::index_t stride_dbias = 0, nhead_stride_dbias = 0, batch_stride_dbias = 0;
 
   if (has_dbias) {
     size_t dbias_sz = batch_size * seqlen_q * num_heads * seqlen_k * mha_utils::dtype_size(q.element_type());
-    if (auto err = dbias_ws.allocate(dbias_sz, stream); !err.success())
+    if (auto err = get_workspace(WsSlot::kDbias, dev_idx, stream, dbias_sz,
+                                 /*zero=*/true, &dbias_expanded_ptr);
+        !err.success())
       return err;
-    dbias_expanded_ptr = dbias_ws.ptr();
     stride_dbias = num_heads * seqlen_k;
     nhead_stride_dbias = seqlen_k;
     batch_stride_dbias = seqlen_q * num_heads * seqlen_k;
   }
 
   // RNG — use void* to avoid forming uint64_t* from untyped storage.
-  AsyncWorkspace dummy_rng_ws;
   void *seed_ptr = nullptr, *offset_ptr = nullptr;
   if (dropout_p > 0.0f) {
     if (!rng_state.has_value() || !mha_utils::is_valid_buffer(*rng_state))
@@ -312,11 +408,12 @@ ffi::Error aiter_mha_bwd_impl(
     auto [s, o] = mha_utils::get_rng_seed_offset_ptrs(rng_state, dropout_p);
     seed_ptr = s; offset_ptr = o;
   } else {
-    if (auto err = dummy_rng_ws.allocate(2 * sizeof(uint64_t), stream,
-                                         /*zero=*/false);
+    void *dummy_rng = nullptr;
+    if (auto err = get_workspace(WsSlot::kDummyRng, dev_idx, stream,
+                                 2 * sizeof(uint64_t), /*zero=*/false,
+                                 &dummy_rng);
         !err.success())
       return err;
-    void *dummy_rng = dummy_rng_ws.ptr();
     seed_ptr = dummy_rng;
     offset_ptr = static_cast<char *>(dummy_rng) + sizeof(uint64_t);
   }
@@ -328,10 +425,11 @@ ffi::Error aiter_mha_bwd_impl(
       num_heads, head_size_q, deterministic, use_asm_v3, is_v3_atomic_fp32,
       q.element_type(), dq_acc_shape);
 
-  AsyncWorkspace dq_acc_ws;
-  if (auto err = dq_acc_ws.allocate(dq_acc_bytes, stream); !err.success())
+  void *dq_acc_ptr = nullptr;
+  if (auto err = get_workspace(WsSlot::kDqAcc, dev_idx, stream, dq_acc_bytes,
+                               /*zero=*/true, &dq_acc_ptr);
+      !err.success())
     return err;
-  void *dq_acc_ptr = dq_acc_ws.ptr();
 
   // dq_acc strides
   ck_tile::index_t split_stride_dq_acc = 1, batch_stride_dq_acc = 0;
@@ -368,19 +466,20 @@ ffi::Error aiter_mha_bwd_impl(
   auto dk_dims = dk_ret->dimensions();
   auto dv_dims = dv_ret->dimensions();
 
-  AsyncWorkspace dk_exp_ws, dv_exp_ws;
   void *dk_expanded_ptr = nullptr, *dv_expanded_ptr = nullptr;
   void *dk_final = dk_ret->untyped_data(), *dv_final = dv_ret->untyped_data();
 
   if (is_mqa_gqa) {
     size_t dk_sz = (is_varlen ? seqlen_k : batch_size * seqlen_k) * num_heads * head_size_q * mha_utils::dtype_size(q.element_type());
     size_t dv_sz = (is_varlen ? seqlen_k : batch_size * seqlen_k) * num_heads * head_size_v * mha_utils::dtype_size(v.element_type());
-    if (auto err = dk_exp_ws.allocate(dk_sz, stream); !err.success())
+    if (auto err = get_workspace(WsSlot::kDkExp, dev_idx, stream, dk_sz,
+                                 /*zero=*/true, &dk_expanded_ptr);
+        !err.success())
       return err;
-    if (auto err = dv_exp_ws.allocate(dv_sz, stream); !err.success())
+    if (auto err = get_workspace(WsSlot::kDvExp, dev_idx, stream, dv_sz,
+                                 /*zero=*/true, &dv_expanded_ptr);
+        !err.success())
       return err;
-    dk_expanded_ptr = dk_exp_ws.ptr();
-    dv_expanded_ptr = dv_exp_ws.ptr();
     dk_final = dk_expanded_ptr; dv_final = dv_expanded_ptr;
   }
 
@@ -543,7 +642,8 @@ ffi::Error aiter_mha_bwd_impl(
         num_heads, num_heads_k, head_size_v, groups, v.element_type(), stream);
     if (!dv_err.success()) return dv_err;
 
-    // dk/dv expanded buffers freed asynchronously by AsyncWorkspace dtors
+    // dk/dv expanded buffers stay in the (dev, stream)-keyed workspace
+    // cache and are reused by subsequent backward calls.
   }
 
   if (has_dbias && dbias_expanded_ptr) {
@@ -551,7 +651,10 @@ ffi::Error aiter_mha_bwd_impl(
     HIP_CHECK(hipMemcpyAsync(dbias_ret->untyped_data(), dbias_expanded_ptr,
                              dbias_sz, hipMemcpyDeviceToDevice, stream));
   }
-  // All workspace AsyncWorkspaces are freed (stream-ordered) at scope exit.
+  // Workspace buffers (dq_acc, dk/dv expanded, dbias, dummy_rng) remain
+  // owned by the (dev, stream, slot)-keyed workspace cache; they are
+  // intentionally not freed here so the next backward call on the same
+  // stream can reuse them without re-issuing hipMalloc.
 
   return ffi::Error::Success();
 
