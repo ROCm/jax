@@ -360,8 +360,8 @@ static absl::Status DnnRNNForward_(gpuStream_t stream, void** buffers,
 
   return absl::OkStatus();
 }
-}
 
+static absl::Status DnnRNNBackward_(gpuStream_t stream, void** buffers,
 static absl::Status DnnRNNBackward_(gpuStream_t stream, void** buffers,
                                     const char* opaque, size_t opaque_len) {
   auto s = UnpackDescriptor<RnnDescriptor>(opaque, opaque_len);
