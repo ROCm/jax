@@ -157,7 +157,16 @@ jobs:
           halt-dispatch-input: ${{ inputs.halt-for-connection }}
       - name: Run Pytest ROCm tests
         timeout-minutes: 120
-        run: ./ci/run_pytest_rocm.sh
+        run: |
+          # The ghcr.io/rocm/jax-base-ubu24.* image bakes in
+          # MIOPEN_FIND_ENFORCE=SEARCH_DB_UPDATE as a workaround for the
+          # MIOpen kernels() stack-overflow SIGSEGV that PR
+          # ROCm/rocm-libraries#4472 fixes. The rocm720 image rebuilds
+          # MIOpen from that branch, so the workaround should be redundant.
+          # Empirical test - if CI is green, the rocm-jax follow-up will
+          # remove the ENV line from Dockerfile.base-ubu24 entirely.
+          unset MIOPEN_FIND_ENFORCE
+          ./ci/run_pytest_rocm.sh
       - name: Upload test artifacts
         if: always()
         continue-on-error: true
