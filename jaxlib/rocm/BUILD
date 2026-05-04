@@ -14,6 +14,7 @@
 
 # AMD HIP kernels
 
+load("@plugin_wheel_deps//:deps.bzl", "PLUGIN_WHEEL_DEPS")
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("@rules_python//python:defs.bzl", "py_library")
 load(
@@ -391,6 +392,10 @@ nanobind_extension(
         "-fno-strict-aliasing",
     ],
     features = ["-use_header_modules"],
+    linkopts = [
+        "-L/opt/rocm/lib",
+        "-lamdhip64",
+    ],
     module_name = "_hybrid",
     deps = [
         ":hip_gpu_kernel_helpers",
@@ -403,10 +408,6 @@ nanobind_extension(
         "@local_config_rocm//rocm:rocm_headers",
         "@nanobind",
         "@xla//xla/ffi/api:ffi",
-    ],
-    linkopts = [
-        "-L/opt/rocm/lib",
-        "-lamdhip64",
     ],
 )
 
@@ -551,5 +552,5 @@ py_library(
     deps = if_rocm_is_configured([
         ":rocm_gpu_support",
         ":rocm_plugin_extension",
-    ]),
+    ] + PLUGIN_WHEEL_DEPS),
 )

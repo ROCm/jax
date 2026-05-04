@@ -140,6 +140,7 @@ py_binary(
     main = "build_wheel.py",
     deps = [
         ":build_utils",
+        "//jaxlib:jaxlib_files",
         "@bazel_tools//tools/python/runfiles",
         "@pypi//build",
         "@pypi//setuptools",
@@ -449,6 +450,16 @@ config_setting(
 py_import(
     name = "jaxlib_py_import",
     wheel = ":jaxlib_wheel",
+)
+
+py_import(
+    name = "rocm_plugin_kernels_wheel",
+    wheel = "@jax_rocm_plugin//:jax_rocm7_plugin_wheel",
+)
+
+py_import(
+    name = "rocm_plugin_pjrt_wheel",
+    wheel = "@jax_rocm_plugin//:jax_rocm7_pjrt_wheel",
 )
 
 py_import(

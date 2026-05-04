@@ -47,6 +47,7 @@ string_flag(
         "true",
         "false",
         "wheel",
+        "plugin_wheels",
     ],
 )
 
