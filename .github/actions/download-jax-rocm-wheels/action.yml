@@ -7,8 +7,11 @@ inputs:
     description: "Which python version should the artifact be downloaded for?"
     required: true
   rocm-version:
-    description: "Which ROCm version should the artifact be downloaded for?"
+    description: "ROCm major version for wheel filename matching (e.g., 7)"
     default: "7.2.0"
+  rocm-release-version:
+    description: "Release version for S3 LATEST pointer resolution (e.g., 7.2.0 or therock-latest). Defaults to rocm-version."
+    default: ""
   jaxlib-version:
     description: "Which jaxlib version to download? (head/pypi_latest)"
     default: "head"
@@ -130,7 +133,7 @@ runs:
         INPUTS_JAXLIB_VERSION: ${{ inputs.jaxlib-version }}
         INPUTS_PYTHON: ${{ inputs.python }}
         INPUTS_S3_DOWNLOAD_URI: ${{ inputs.s3_download_uri }}
-        INPUTS_ROCM_FULL_VERSION: ${{ inputs.rocm-version }}
+        INPUTS_ROCM_FULL_VERSION: ${{ inputs.rocm-release-version || inputs.rocm-version }}
     - name: Skip the test run if the wheel artifacts were not downloaded successfully
       shell: bash
       if: steps.download-wheel-artifacts.outcome == 'failure'

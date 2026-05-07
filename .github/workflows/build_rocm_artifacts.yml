@@ -37,6 +37,10 @@ on:
         description: "Full ROCm release version (e.g., 7.2.0) for container image and S3 paths"
         type: string
         default: "7.2.0"
+      manylinux-image:
+        description: "Override the manylinux container image (e.g., ghcr.io/rocm/jax-manylinux_2_28-therock-latest:latest)"
+        type: string
+        default: ""
       clone_main_xla:
         description: "Should latest XLA be used?"
         type: choice
@@ -77,6 +81,10 @@ on:
         description: "Full ROCm release version (e.g., 7.2.0) for container image and S3 paths"
         type: string
         default: "7.2.0"
+      manylinux-image:
+        description: "Override the manylinux container image (e.g., ghcr.io/rocm/jax-manylinux_2_28-therock-latest:latest)"
+        type: string
+        default: ""
       clone_main_xla:
         description: "Should latest XLA be used?"
         type: string
@@ -116,7 +124,7 @@ jobs:
     outputs:
       s3_upload_uri: ${{ steps.store-s3-upload-uri.outputs.s3_upload_uri }}
     container:
-      image: "ghcr.io/rocm/jax-manylinux_2_28-rocm-${{ inputs.rocm-release-version }}:latest"
+      image: "${{ inputs.manylinux-image || format('ghcr.io/rocm/jax-manylinux_2_28-rocm-{0}:latest', inputs.rocm-release-version) }}"
       volumes:
         - /data:/data
       options: >-
