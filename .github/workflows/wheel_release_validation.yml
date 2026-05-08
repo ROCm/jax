@@ -18,7 +18,6 @@ on:
         required: false
         default: "no"
         type: string
-  push:
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
