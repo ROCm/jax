@@ -53,6 +53,7 @@ jobs:
     with:
       runner: ${{ matrix.runner }}
       artifact: ${{ matrix.artifact }}
+      artifact-type: "release"
       python: ${{ matrix.python }}
       rocm-version: ${{ matrix.rocm.wheel-version }}
       rocm-release-version: ${{ matrix.rocm.release-version }}
