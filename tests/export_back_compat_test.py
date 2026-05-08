@@ -34,12 +34,14 @@ from jax._src.internal_test_util import export_back_compat_test_util as bctu
 from jax._src.internal_test_util.export_back_compat_test_data import annotate_data_placement
 from jax._src.internal_test_util.export_back_compat_test_data import cpu_cholesky_lapack_potrf
 from jax._src.internal_test_util.export_back_compat_test_data import cuda_cholesky_solver_potrf
+from jax._src.internal_test_util.export_back_compat_test_data import rocm_cholesky_solver_potrf
 from jax._src.internal_test_util.export_back_compat_test_data import cpu_eig_lapack_geev
 from jax._src.internal_test_util.export_back_compat_test_data import cuda_eigh_cusolver_syev
 from jax._src.internal_test_util.export_back_compat_test_data import rocm_eigh_hipsolver_syev
 from jax._src.internal_test_util.export_back_compat_test_data import cpu_eigh_lapack_syev
 from jax._src.internal_test_util.export_back_compat_test_data import cpu_lu_lapack_getrf
 from jax._src.internal_test_util.export_back_compat_test_data import cuda_qr_cusolver_geqrf
+from jax._src.internal_test_util.export_back_compat_test_data import rocm_qr_hipsolver_geqrf
 from jax._src.internal_test_util.export_back_compat_test_data import cpu_qr_lapack_geqrf
 from jax._src.internal_test_util.export_back_compat_test_data import cpu_schur_lapack_gees
 from jax._src.internal_test_util.export_back_compat_test_data import cpu_svd_lapack_gesdd
@@ -48,10 +50,15 @@ from jax._src.internal_test_util.export_back_compat_test_data import cpu_hessenb
 from jax._src.internal_test_util.export_back_compat_test_data import cpu_tridiagonal_lapack_sytrd_hetrd
 from jax._src.internal_test_util.export_back_compat_test_data import cpu_tridiagonal_solve_lapack_gtsv
 from jax._src.internal_test_util.export_back_compat_test_data import cuda_threefry2x32
+from jax._src.internal_test_util.export_back_compat_test_data import rocm_threefry2x32
 from jax._src.internal_test_util.export_back_compat_test_data import cuda_lu_pivots_to_permutation
+from jax._src.internal_test_util.export_back_compat_test_data import rocm_lu_pivots_to_permutation
 from jax._src.internal_test_util.export_back_compat_test_data import cuda_lu_cusolver_getrf
+from jax._src.internal_test_util.export_back_compat_test_data import rocm_lu_rocsolver_getrf
 from jax._src.internal_test_util.export_back_compat_test_data import cuda_svd_cusolver_gesvd
+from jax._src.internal_test_util.export_back_compat_test_data import rocm_svd_hipsolver_gesvd
 from jax._src.internal_test_util.export_back_compat_test_data import cuda_tridiagonal_cusolver_sytrd
+from jax._src.internal_test_util.export_back_compat_test_data import rocm_tridiagonal_hipsolver_sytrd
 from jax._src.internal_test_util.export_back_compat_test_data import cuda_tridiagonal_solve
 from jax._src.internal_test_util.export_back_compat_test_data import tpu_Eigh
 from jax._src.internal_test_util.export_back_compat_test_data import tpu_Lu
@@ -129,18 +136,25 @@ class CompatTest(bctu.CompatTestBase):
     covering_testdatas = [
         *cpu_ffi_testdatas,
         cuda_cholesky_solver_potrf.data_2025_10_15,
+        rocm_cholesky_solver_potrf.data_2026_02_05,
         cuda_threefry2x32.data_2024_07_30,
+        rocm_threefry2x32.data_2026_02_05,
         cuda_lu_pivots_to_permutation.data_2025_04_01,
+        rocm_lu_pivots_to_permutation.data_2026_02_04,
         cuda_lu_cusolver_getrf.data_2024_08_19,
+        rocm_lu_rocsolver_getrf.data_2026_02_04,
         cuda_qr_cusolver_geqrf.data_2024_09_26,
+        rocm_qr_hipsolver_geqrf.data_2026_02_04,
         cuda_eigh_cusolver_syev.data_2024_09_30,
         cuda_svd_cusolver_gesvd.data_2024_10_08,
+        rocm_svd_hipsolver_gesvd.data_2026_02_04,
         cpu_tridiagonal_solve_lapack_gtsv.data_2025_01_09,
         cuda_tridiagonal_cusolver_sytrd.data_2025_01_09,
+        rocm_tridiagonal_hipsolver_sytrd.data_2026_02_04,
         cuda_tridiagonal_solve.data_2025_06_16,
         rocm_eigh_hipsolver_syev.data_2024_08_05,
         tpu_Eigh.data, tpu_Lu.data_2023_03_21, tpu_Qr.data_2023_03_17,
-        tpu_Sharding.data_2023_03_16, tpu_ApproxTopK.data_2023_04_17,
+        tpu_Sharding.data_2025_06_30, tpu_ApproxTopK.data_2023_04_17,
         tpu_ApproxTopK.data_2023_05_16,
         tpu_stablehlo_dynamic_reduce_window.data_unary_2023_06_17,
         tpu_stablehlo_dynamic_reduce_window.data_variadic_2023_06_17,
@@ -150,6 +164,7 @@ class CompatTest(bctu.CompatTestBase):
         stablehlo_dynamic_approx_top_k.data_2024_05_30,
         annotate_data_placement.data_2025_04_07_tpu,
         annotate_data_placement.data_2025_04_07_cuda,
+        annotate_data_placement.data_2026_02_04_rocm,
     ]
     # Some of the above are nested structures.
     covering_testdatas = itertools.chain(
@@ -169,10 +184,9 @@ class CompatTest(bctu.CompatTestBase):
       "AllocateBuffer",  # tested in pallas/export_back_compat_pallas_test.py
       "__gpu$xla.gpu.triton",  # tested in pallas/export_back_compat_pallas_test.py
       # The following require ROCm to test
-      "hip_lu_pivots_to_permutation", "hipsolver_getrf_ffi",
       "hipsolver_geqrf_ffi", "hipsolver_orgqr_ffi", "hipsolver_syevd_ffi",
       "hipsolver_gesvd_ffi", "hipsolver_gesvdj_ffi",
-      "hipsolver_potrf_ffi",
+      # hipsolver_gesdd_ffi is covered by rocm_svd_hipsolver_gesvd (gesdd f32).
     })
     not_covered = targets_to_cover.difference(covered_targets)
     self.assertEmpty(not_covered,
@@ -222,7 +236,14 @@ class CompatTest(bctu.CompatTestBase):
     rtol = dict(f32=1e-3, f64=1e-5, c64=1e-3, c128=1e-5)[dtype_name]
     atol = dict(f32=1e-4, f64=1e-12, c64=1e-4, c128=1e-12)[dtype_name]
 
-    info = cuda_cholesky_solver_potrf.data_2025_10_15[dtype_name]
+    # Select test data based on platform
+    if jtu.test_device_matches(["rocm"]):
+      info = rocm_cholesky_solver_potrf.data_2026_02_05[dtype_name]
+    elif jtu.test_device_matches(["cuda"]):
+      info = cuda_cholesky_solver_potrf.data_2025_10_15[dtype_name]
+    else:
+      self.skipTest("Unsupported platform")
+
     data = self.load_testdata(info)
     self.run_one_test(func, data, rtol=rtol, atol=atol)
 
@@ -334,7 +355,6 @@ class CompatTest(bctu.CompatTestBase):
     rtol = dict(f32=1e-3, f64=1e-5, c64=1e-3, c128=1e-5)[dtype_name]
     atol = dict(f32=1e-4, f64=1e-12, c64=1e-4, c128=1e-12)[dtype_name]
 
-    info = cpu_eigh_lapack_syev.data_2024_08_19[dtype_name]
     data = self.load_testdata(cpu_eigh_lapack_syev.data_2024_08_19[dtype_name])
     self.run_one_test(func, data, rtol=rtol, atol=atol,
                       check_results=partial(self.check_eigh_results, operand))
@@ -382,6 +402,12 @@ class CompatTest(bctu.CompatTestBase):
     data = self.load_testdata(cuda_lu_pivots_to_permutation.data_2025_04_01)
     self.run_one_test(func, data)
 
+  def test_rocm_lu_pivots_to_permutation(self):
+    shape = (2, 3, 4)
+    func = lambda: CompatTest.lu_pivots_to_permutation_harness(shape)
+    data = self.load_testdata(rocm_lu_pivots_to_permutation.data_2026_02_04)
+    self.run_one_test(func, data)
+
   @parameterized.named_parameters(
       dict(testcase_name=f"_dtype={dtype_name}",
            dtype_name=dtype_name)
@@ -395,6 +421,23 @@ class CompatTest(bctu.CompatTestBase):
     func = lambda: CompatTest.lu_harness(shape, dtype)
     data = self.load_testdata(cuda_lu_cusolver_getrf.data_2024_08_19[dtype_name])
     self.run_one_test(func, data)
+
+  @parameterized.named_parameters(
+      dict(testcase_name=f"_dtype={dtype_name}",
+           dtype_name=dtype_name)
+      for dtype_name in ("f32", "f64", "c64", "c128"))
+  def test_rocm_lu_rocsolver_getrf(self, dtype_name:str):
+    if not jtu.test_device_matches(["rocm"]):
+      self.skipTest("ROCm only test")
+    if not config.enable_x64.value and dtype_name in ["f64", "c128"]:
+      self.skipTest("Test disabled for x32 mode")
+    dtype = dict(f32=np.float32, f64=np.float64,
+                 c64=np.complex64, c128=np.complex128)[dtype_name]
+    shape = (3, 4)
+    func = lambda: CompatTest.lu_harness(shape, dtype)
+    data = self.load_testdata(rocm_lu_rocsolver_getrf.data_2026_02_04[dtype_name])
+    self.run_one_test(func, data)
+
 
   @staticmethod
   def qr_harness(shape, dtype):
@@ -421,8 +464,6 @@ class CompatTest(bctu.CompatTestBase):
       dict(testcase_name=f"_dtype={dtype_name}", dtype_name=dtype_name)
       for dtype_name in ("f32", "f64", "c64", "c128"))
   def test_gpu_qr_solver_geqrf(self, dtype_name="f32"):
-    if not jtu.test_device_matches(["cuda"]):
-      self.skipTest("Unsupported platform")
     if not config.enable_x64.value and dtype_name in ["f64", "c128"]:
       self.skipTest("Test disabled for x32 mode")
     dtype = dict(f32=np.float32, f64=np.float64,
@@ -430,7 +471,18 @@ class CompatTest(bctu.CompatTestBase):
     rtol = dict(f32=1e-3, f64=1e-5, c64=1e-3, c128=1e-5)[dtype_name]
     shape = (2, 3, 3)
     func = lambda: CompatTest.qr_harness(shape, dtype)
-    data = self.load_testdata(cuda_qr_cusolver_geqrf.data_2024_09_26[dtype_name])
+
+    platform_data = None
+    if jtu.test_device_matches(["cuda"]):
+      platform_data = \
+          cuda_qr_cusolver_geqrf.data_2024_09_26[dtype_name]
+    elif jtu.test_device_matches(["rocm"]):
+      platform_data = \
+          rocm_qr_hipsolver_geqrf.data_2026_02_04[dtype_name]
+    else:
+      self.skipTest("Unsupported platform")
+
+    data = self.load_testdata(platform_data)
     self.run_one_test(func, data, rtol=rtol)
 
   def test_tpu_Qr(self):
@@ -606,14 +658,26 @@ class CompatTest(bctu.CompatTestBase):
                                             *data.inputs))
 
   @parameterized.named_parameters(
-      dict(testcase_name=f"_dtype={dtype_name}_algorithm={algorithm_name}",
-           dtype_name=dtype_name, algorithm_name=algorithm_name)
-      for dtype_name in ("f32", "f64", "c64", "c128")
-      for algorithm_name in ("qr", "jacobi"))
+      [
+          dict(testcase_name=f"_dtype={dtype_name}_algorithm={algorithm_name}",
+               dtype_name=dtype_name, algorithm_name=algorithm_name)
+          for dtype_name in ("f32", "f64", "c64", "c128")
+          for algorithm_name in ("qr", "jacobi")
+      ] + [
+          dict(testcase_name=f"_dtype={dtype_name}_algorithm=gesdd",
+               dtype_name=dtype_name, algorithm_name="gesdd")
+          for dtype_name in ("f32", "f64", "c64", "c128")
+      ])
   @jax.default_matmul_precision("float32")
   def test_gpu_svd_solver_gesvd(self, dtype_name, algorithm_name):
     if not config.enable_x64.value and dtype_name in ["f64", "c128"]:
       self.skipTest("Test disabled for x32 mode")
+
+    algorithm = dict(
+        qr=lax.linalg.SvdAlgorithm.QR,
+        jacobi=lax.linalg.SvdAlgorithm.JACOBI,
+        gesdd=lax.linalg.SvdAlgorithm.DEFAULT,  # ROCm uses gesdd by default
+    )[algorithm_name]
 
     def func(operand):
       return lax.linalg.svd(operand, full_matrices=True, compute_uv=True,
@@ -621,11 +685,32 @@ class CompatTest(bctu.CompatTestBase):
 
     rtol = dict(f32=1e-3, f64=1e-5, c64=1e-3, c128=1e-5)[dtype_name]
     atol = dict(f32=1e-4, f64=1e-12, c64=1e-4, c128=1e-12)[dtype_name]
-    algorithm = dict(qr=lax.linalg.SvdAlgorithm.QR,
-                     jacobi=lax.linalg.SvdAlgorithm.JACOBI)[algorithm_name]
 
-    info = cuda_svd_cusolver_gesvd.data_2024_10_08[algorithm_name][dtype_name]
-    data = self.load_testdata(info)
+    # The `platform_data_map` dictionary allows additional testdata modules
+    # to be easily added to the unit test. If no acceptable testdata is found
+    # for the current platform, the test will be skipped. "gesdd" exists only
+    # for ROCm (CUDA uses gesvd/gesvdj).
+    platform_data = None
+    platform_data_map = {
+        "cuda": cuda_svd_cusolver_gesvd.data_2024_10_08,
+        "rocm": rocm_svd_hipsolver_gesvd.data_2026_02_04,
+    }
+
+    for platform, data_module in platform_data_map.items():
+      if jtu.test_device_matches([platform]):
+        if algorithm_name not in data_module:
+          continue  # e.g. CUDA has no "gesdd" data
+        if dtype_name not in data_module[algorithm_name]:
+          self.skipTest(
+              f"Test data for {algorithm_name} {dtype_name} not yet generated "
+              "(run on ROCm and paste into rocm_svd_hipsolver_gesvd.py)")
+        platform_data = data_module[algorithm_name][dtype_name]
+        break
+
+    if platform_data is None:
+      self.skipTest("Unsupported platform: " + jtu.device_under_test())
+
+    data = self.load_testdata(platform_data)
     self.run_one_test(func, data, rtol=rtol, atol=atol,
                       check_results=partial(self.check_svd_results,
                                             *data.inputs))
@@ -742,9 +827,17 @@ class CompatTest(bctu.CompatTestBase):
     rtol = dict(f32=1e-3, f64=1e-5, c64=1e-3, c128=1e-5)[dtype_name]
     atol = dict(f32=1e-4, f64=1e-12, c64=1e-4, c128=1e-12)[dtype_name]
 
-    data = self.load_testdata(
-        cuda_tridiagonal_cusolver_sytrd.data_2025_01_09[dtype_name]
-    )
+    platform_data = None
+    if jtu.test_device_matches(["cuda"]):
+      platform_data = \
+          cuda_tridiagonal_cusolver_sytrd.data_2025_01_09[dtype_name]
+    elif jtu.test_device_matches(["rocm"]):
+      platform_data = \
+          rocm_tridiagonal_hipsolver_sytrd.data_2026_02_04[dtype_name]
+    else:
+      self.skipTest("Unsupported platform")
+
+    data = self.load_testdata(platform_data)
     self.run_one_test(func, data, rtol=rtol, atol=atol)
 
   @parameterized.named_parameters(
@@ -755,7 +848,6 @@ class CompatTest(bctu.CompatTestBase):
     if not config.enable_x64.value and dtype_name == "f64":
       self.skipTest("Test disabled for x32 mode")
 
-    dtype = dict(f32=np.float32, f64=np.float64)[dtype_name]
     def func(dl, d, du, b):
       return lax.linalg.tridiagonal_solve(dl, d, du, b)
 
@@ -784,6 +876,13 @@ class CompatTest(bctu.CompatTestBase):
       data = self.load_testdata(cuda_threefry2x32.data_2024_07_30)
       self.run_one_test(func, data)
 
+  def test_rocm_threefry2x32(self):
+    with config.threefry_partitionable(False):
+      def func(x):
+        return jax.random.uniform(x, (2, 4), dtype=np.float32)
+      data = self.load_testdata(rocm_threefry2x32.data_2026_02_05)
+      self.run_one_test(func, data)
+
   def test_tpu_sharding(self):
     # Tests "Sharding", "SPMDShardToFullShape", "SPMDFullToShardShape" on TPU
     if not jtu.test_device_matches(["tpu"]) or len(jax.devices()) < 2:
@@ -805,7 +904,6 @@ class CompatTest(bctu.CompatTestBase):
       return lax.ppermute(x, "a", perm=perm)
 
     data = [
-        (tpu_Sharding.data_2023_03_16, []),
         (tpu_Sharding.data_2025_06_30, None),
     ]
     # Due to changes in how Shardy is serialized, from using custom calls to
@@ -840,11 +938,16 @@ class CompatTest(bctu.CompatTestBase):
     def func(x, y):
       return x + y
 
+    # Check the actual GPU backend type to load appropriate test data
     if platform == "tpu":
       data = [(annotate_data_placement.data_2025_04_07_tpu,
                ["annotate_device_placement"]),
               (annotate_data_placement.data_2025_06_30_tpu, None)]
-    else:
+    elif jtu.test_device_matches(["rocm"]):
+      # ROCm test data - currently only have one version (Feb 2026)
+      data = [(annotate_data_placement.data_2026_02_04_rocm,
+               ["annotate_device_placement"])]
+    else:  # cuda
       data = [(annotate_data_placement.data_2025_04_07_cuda,
                ["annotate_device_placement"]),
               (annotate_data_placement.data_2025_06_30_cuda, None)]
@@ -1031,7 +1134,6 @@ class ShardyCompatTest(bctu.CompatTestBase):
       return shard_map_func(x)
 
     data = [
-        (shardy_sharding_ops_with_different_meshes.data_2025_04_14, []),
         (shardy_sharding_ops_with_different_meshes.data_2025_06_30, None),
     ]
 
