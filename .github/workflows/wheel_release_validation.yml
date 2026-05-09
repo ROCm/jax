@@ -48,7 +48,7 @@ jobs:
             python: "3.13"
           - artifact: "jax-rocm-pjrt"
             python: "3.14"
-    name: "Build Legacy ROCm 7.2.0 (${{ matrix.artifact }}, py${{ matrix.python }})"
+    name: "Build Legacy ROCm 7.2.0 Artifacts"
     with:
       runner: ${{ matrix.runner }}
       artifact: ${{ matrix.artifact }}
@@ -84,7 +84,7 @@ jobs:
             python: "3.13"
           - artifact: "jax-rocm-pjrt"
             python: "3.14"
-    name: "Build TheRock 7.13.0 (${{ matrix.artifact }}, py${{ matrix.python }})"
+    name: "Build TheRock 7.13.0 Artifacts"
     with:
       runner: ${{ matrix.runner }}
       artifact: ${{ matrix.artifact }}
@@ -117,7 +117,7 @@ jobs:
       matrix:
         runner: ["linux-x86-64-1gpu-amd", "linux-x86-64-4gpu-amd", "linux-x86-64-8gpu-amd"]
         python: ["3.11", "3.12", "3.13", "3.14"]
-    name: "Test Legacy ROCm 7.2.0 (${{ matrix.runner }}, py${{ matrix.python }})"
+    name: "Test Legacy ROCm 7.2.0"
     container:
       image: "ghcr.io/rocm/jax-base-ubu24.rocm720:latest"
       credentials:
@@ -182,7 +182,7 @@ jobs:
       matrix:
         runner: ["linux-x86-64-1gpu-amd", "linux-x86-64-4gpu-amd", "linux-x86-64-8gpu-amd"]
         python: ["3.11", "3.12", "3.13", "3.14"]
-    name: "Test TheRock 7.13.0 (${{ matrix.runner }}, py${{ matrix.python }})"
+    name: "Test TheRock 7.13.0"
     container:
       image: "ghcr.io/rocm/jax-base-ubu24.therock-latest:latest"
       credentials:
