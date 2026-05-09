@@ -25,10 +25,8 @@ concurrency:
 permissions: {}
 
 jobs:
-  # ============================================================
-  # Build Group 1: Legacy ROCm
-  # ============================================================
-  build-rocm-legacy:
+
+  build-rocm-artifacts:
     if: github.repository_owner == 'ROCm'
     uses: ./.github/workflows/build_rocm_artifacts.yml
     permissions:
@@ -41,6 +39,10 @@ jobs:
         runner: ["linux-x86-64-1gpu-amd"]
         artifact: ["jax-rocm-plugin", "jax-rocm-pjrt"]
         python: ["3.11", "3.12", "3.13", "3.14"]
+        rocm: [
+          {label: "ROCm 7.2.0", wheel-version: "7", release-version: "7.2.0", manylinux-image: ""},
+          {label: "TheRock 7.13.0", wheel-version: "7", release-version: "therock-7.13.0", manylinux-image: "ghcr.io/rocm/jax-manylinux_2_28-therock-latest:latest"},
+        ]
         exclude:
           - artifact: "jax-rocm-pjrt"
             python: "3.12"
@@ -48,61 +50,22 @@ jobs:
             python: "3.13"
           - artifact: "jax-rocm-pjrt"
             python: "3.14"
-    name: "Build Legacy ROCm 7.2.0 Artifacts"
+    name: "Build ROCm artifacts (${{ matrix.rocm.label }})"
     with:
       runner: ${{ matrix.runner }}
       artifact: ${{ matrix.artifact }}
       artifact-type: "release"
       python: ${{ matrix.python }}
-      rocm-version: "7"
-      rocm-release-version: "7.2.0"
-      manylinux-image: ""
+      rocm-version: ${{ matrix.rocm.wheel-version }}
+      rocm-release-version: ${{ matrix.rocm.release-version }}
+      manylinux-image: ${{ matrix.rocm.manylinux-image }}
       clone_main_xla: 0
       upload_artifacts_to_s3: true
-      s3_upload_uri: 's3://jax-ci-amd/rocm-wheels/${{ github.repository }}/${{ github.ref_name }}/7.2.0/release-validation/${{ github.run_number }}/${{ github.run_attempt }}'
+      s3_upload_uri: 's3://jax-ci-amd/rocm-wheels/${{ github.repository }}/${{ github.ref_name }}/${{ matrix.rocm.release-version }}/release-validation/${{ github.run_number }}/${{ github.run_attempt }}'
 
-  # ============================================================
-  # Build Group 2: TheRock
-  # ============================================================
-  build-rocm-therock:
-    if: github.repository_owner == 'ROCm'
-    uses: ./.github/workflows/build_rocm_artifacts.yml
-    permissions:
-      id-token: write
-      contents: read
-      actions: read
-    strategy:
-      fail-fast: false
-      matrix:
-        runner: ["linux-x86-64-1gpu-amd"]
-        artifact: ["jax-rocm-plugin", "jax-rocm-pjrt"]
-        python: ["3.11", "3.12", "3.13", "3.14"]
-        exclude:
-          - artifact: "jax-rocm-pjrt"
-            python: "3.12"
-          - artifact: "jax-rocm-pjrt"
-            python: "3.13"
-          - artifact: "jax-rocm-pjrt"
-            python: "3.14"
-    name: "Build TheRock 7.13.0 Artifacts"
-    with:
-      runner: ${{ matrix.runner }}
-      artifact: ${{ matrix.artifact }}
-      artifact-type: "release"
-      python: ${{ matrix.python }}
-      rocm-version: "7"
-      rocm-release-version: "therock-7.13.0"
-      manylinux-image: "ghcr.io/rocm/jax-manylinux_2_28-therock-latest:latest"
-      clone_main_xla: 0
-      upload_artifacts_to_s3: true
-      s3_upload_uri: 's3://jax-ci-amd/rocm-wheels/${{ github.repository }}/${{ github.ref_name }}/therock-7.13.0/release-validation/${{ github.run_number }}/${{ github.run_attempt }}'
-
-  # ============================================================
-  # Test Group 3: Legacy ROCm
-  # ============================================================
-  test-rocm-legacy:
-    if: ${{ !cancelled() && (github.repository_owner == 'ROCm') }}
-    needs: [build-rocm-legacy]
+  run-pytest-rocm:
+    if: ${{ !cancelled() && github.repository_owner == 'ROCm' }}
+    needs: [build-rocm-artifacts]
     defaults:
       run:
         shell: bash
@@ -117,74 +80,13 @@ jobs:
       matrix:
         runner: ["linux-x86-64-1gpu-amd", "linux-x86-64-4gpu-amd", "linux-x86-64-8gpu-amd"]
         python: ["3.11", "3.12", "3.13", "3.14"]
-    name: "Test Legacy ROCm 7.2.0"
+        rocm: [
+          {label: "ROCm 7.2.0", release-version: "7.2.0", image: "ghcr.io/rocm/jax-base-ubu24.rocm720:latest", needs-sysdeps-fix: "false"},
+          {label: "TheRock 7.13.0", release-version: "therock-7.13.0", image: "ghcr.io/rocm/jax-base-ubu24.therock-latest:latest", needs-sysdeps-fix: "true"},
+        ]
+    name: "Pytest ROCm (${{ matrix.rocm.label }})"
     container:
-      image: "ghcr.io/rocm/jax-base-ubu24.rocm720:latest"
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-      options: --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --shm-size 64G --env-file /etc/podinfo/gha-gpu-isolation-settings
-    env:
-      JAXCI_HERMETIC_PYTHON_VERSION: ${{ matrix.python }}
-      JAXCI_PYTHON: "python${{ matrix.python }}"
-      JAXCI_ENABLE_X64: "0"
-      JAXCI_ROCM_VERSION: "7"
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          persist-credentials: false
-      - name: Download jax and jaxlib from PyPI
-        run: |
-          mkdir -p $(pwd)/dist
-          $JAXCI_PYTHON -m pip download jax==${{ inputs.jax-version }} jaxlib==${{ inputs.jax-version }} --no-deps -d $(pwd)/dist/
-      - name: Download ROCm wheels from S3
-        run: |
-          ROCM_WHEELS_BASE_URL="https://d22q5eopkfeftw.cloudfront.net"
-          WHEELS_PATH="rocm-wheels/${{ github.repository }}/${{ github.ref_name }}/7.2.0/release-validation/${{ github.run_number }}/${{ github.run_attempt }}"
-          WHEELS_URL="${ROCM_WHEELS_BASE_URL}/${WHEELS_PATH}"
-          echo "Downloading ROCm wheels from ${WHEELS_URL}..."
-          PYTHON_MAJOR_MINOR=$(echo "${{ matrix.python }}" | tr -d '.')
-          LISTING=$(curl -fsSL "${WHEELS_URL}/")
-          PJRT_FILE=$(echo "$LISTING" | grep -oE 'href="[^"]+\.whl"' | cut -d'"' -f2 | grep "jax_rocm7_pjrt-" | head -n1)
-          PLUGIN_FILE=$(echo "$LISTING" | grep -oE 'href="[^"]+\.whl"' | cut -d'"' -f2 | grep "jax_rocm7_plugin-" | grep "cp${PYTHON_MAJOR_MINOR}" | head -n1)
-          curl -L -o "$(pwd)/dist/${PJRT_FILE}" "${WHEELS_URL}/${PJRT_FILE}"
-          curl -L -o "$(pwd)/dist/${PLUGIN_FILE}" "${WHEELS_URL}/${PLUGIN_FILE}"
-      - name: Install Python dependencies
-        run: |
-          $JAXCI_PYTHON -m pip install uv~=0.11.2
-          $JAXCI_PYTHON -m uv pip install -r build/test-requirements.txt
-          $JAXCI_PYTHON -m pip install pytest-json-report
-      - name: Wait For Connection
-        uses: google-ml-infra/actions/ci_connection@7f5ca0c263a81ed09ea276524c1b9192f1304e3c
-        with:
-          halt-dispatch-input: ${{ inputs.halt-for-connection }}
-      - name: Run Pytest ROCm tests
-        timeout-minutes: 120
-        run: ./ci/run_pytest_rocm.sh
-
-  # ============================================================
-  # Test Group 4: TheRock
-  # ============================================================
-  test-rocm-therock:
-    if: ${{ !cancelled() && (github.repository_owner == 'ROCm') }}
-    needs: [build-rocm-therock]
-    defaults:
-      run:
-        shell: bash
-    runs-on: ${{ matrix.runner }}
-    continue-on-error: true
-    permissions:
-      id-token: write
-      contents: read
-      checks: write
-    strategy:
-      fail-fast: false
-      matrix:
-        runner: ["linux-x86-64-1gpu-amd", "linux-x86-64-4gpu-amd", "linux-x86-64-8gpu-amd"]
-        python: ["3.11", "3.12", "3.13", "3.14"]
-    name: "Test TheRock 7.13.0"
-    container:
-      image: "ghcr.io/rocm/jax-base-ubu24.therock-latest:latest"
+      image: ${{ matrix.rocm.image }}
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -199,6 +101,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Apply TheRock sysdeps fix (hwloc + pciaccess)
+        if: matrix.rocm.needs-sysdeps-fix == 'true'
         run: |
           THEROCK_TARBALL_URL="https://therock-nightly-tarball.s3.amazonaws.com/therock-dist-linux-gfx950-dcgpu-7.13.0a20260501.tar.gz"
           mkdir -p /tmp/therock-fix && cd /tmp/therock-fix
@@ -214,7 +117,7 @@ jobs:
       - name: Download ROCm wheels from S3
         run: |
           ROCM_WHEELS_BASE_URL="https://d22q5eopkfeftw.cloudfront.net"
-          WHEELS_PATH="rocm-wheels/${{ github.repository }}/${{ github.ref_name }}/therock-7.13.0/release-validation/${{ github.run_number }}/${{ github.run_attempt }}"
+          WHEELS_PATH="rocm-wheels/${{ github.repository }}/${{ github.ref_name }}/${{ matrix.rocm.release-version }}/release-validation/${{ github.run_number }}/${{ github.run_attempt }}"
           WHEELS_URL="${ROCM_WHEELS_BASE_URL}/${WHEELS_PATH}"
           echo "Downloading ROCm wheels from ${WHEELS_URL}..."
           PYTHON_MAJOR_MINOR=$(echo "${{ matrix.python }}" | tr -d '.')
