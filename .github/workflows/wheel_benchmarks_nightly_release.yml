@@ -1,3 +1,9 @@
+# CI - Wheel Tests (Nightly/Release)
+#
+# This workflow is used to benchmark the JAX wheels that were built by internal CI jobs.
+#
+# 1. run-benchmark-rocm: Calls the `benchmark_rocm.yml` workflow which downloads the JAX wheels and
+#                     ROCm plugins from S3 and runs ROCm benchmarks.
 name: CI - Wheel Benchmarks (Nightly/Release)
 
 on:
@@ -55,6 +61,4 @@ jobs:
       jaxlib-version: "head"
       skip-download-jaxlib-and-plugins-from-gcs: ${{inputs.skip-download-jaxlib-and-plugins-from-gcs}}
       gcs_download_uri: ${{ inputs.gcs_download_uri }}
-      s3_download_uri: ${{ inputs.s3_download_uri }}
       use-te: "1"
-      te-wheel-url: "https://github.com/ROCm/maxtext/releases/download/te-rocm-wheels-2026-05-04-86438dc3d04e/transformer_engine-2.12.0.dev0+86438dc3-1.mi355-cp312-cp312-linux_x86_64.whl"

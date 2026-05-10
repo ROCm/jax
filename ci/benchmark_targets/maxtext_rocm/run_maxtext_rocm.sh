@@ -43,11 +43,27 @@ source ./ci/utilities/install_wheels_locally.sh
 
 [[ -f "${ENV_FILE}" ]] && source "${ENV_FILE}"
 
-[[ "${USE_TE:-0}" == "1" ]] && {
-  : "${TE_WHEEL_URL:?TE_WHEEL_URL must be set when USE_TE=1}"
-  echo "[setup] installing Transformer Engine"
+if [[ "${USE_TE:-0}" == "1" ]]; then
+  echo "[setup] resolving latest Transformer Engine wheel"
+  PY_TAG="cp$(echo "${JAXCI_HERMETIC_PYTHON_VERSION:-3.12}" | tr -d '.')"
+  TE_WHEEL_URL="$(
+    curl -fsSL https://api.github.com/repos/ROCm/maxtext/releases \
+      | grep "browser_download_url:" \
+      | grep "te-rocm-wheels-" \
+      | grep "${PY_TAG}" \
+      | grep linux_x86_64.whl \
+      | head -n1 \
+      | cut -d '"' -f4
+  )"
+
+  [[ -n "${TE_WHEEL_URL}" ]] || {
+    echo "failed to resolve Transformer Engine wheel for ${PY_TAG}" >&2
+    exit 1
+  }
+  
+  echo "[setup] installing Transformer Engine from ${TE_WHEEL_URL}"
   "${PYTHON_BIN}" -m pip install --no-deps "${TE_WHEEL_URL}"
-}
+fi
 
 export PY_COLORS=1
 export NCCL_DEBUG=WARN

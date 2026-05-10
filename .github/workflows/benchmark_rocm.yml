@@ -1,14 +1,14 @@
 # CI - Benchmark ROCm
 #
-# This workflow runs ROCm benchmarks in ROCm team's GHCR containers.
+# This workflow runs the ROCm benchmarks in ROCm team's GHCR containers.
 # It can be triggered manually via workflow_dispatch or called by other workflows
 # via workflow_call.
 #
 # It consists of the following job:
-# run-benchmark:
+# run-benchmarks:
 #    - Runs in ROCm team's container (ghcr.io/rocm/jax-base-ubu24-rocm*:latest)
 #    - Downloads the JAX and jaxlib wheels from GCS, and ROCm plugins from S3.
-#    - Executes the target benchmark runner script at `targets/<target>/run.sh`.
+#    - Executes the target benchmark scripts at `targets/<target>/run.sh`.
 name: CI - Benchmark ROCm
 on:
   workflow_dispatch:
@@ -135,7 +135,7 @@ env:
   UV_DEFAULT_INDEX: "https://us-python.pkg.dev/ml-oss-artifacts-published/pypi-mirror/simple"
 
 jobs:
-  run-benchmark:
+  run-benchmarks:
     defaults:
       run:
         # Set the shell to bash as GitHub actions run with /bin/sh by default
@@ -144,7 +144,7 @@ jobs:
     continue-on-error: true
     # Run in ROCm team's GHCR container with GPU access
     container:
-      image: ghcr.io/rocm/jax-base-ubu24.rocm722:2d65281b00de2bcafc811247d563b6e5e7c887af
+      image: ghcr.io/rocm/jax-base-ubu24.${{ inputs.rocm-tag }}:latest  # zizmor: ignore[unpinned-images]
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
@@ -187,7 +187,7 @@ jobs:
           TARGET: ${{ inputs.target }}
           WORKLOAD: ${{ inputs.workload }}
         timeout-minutes: 120
-        run: ./ci/benchmark_targets/${TARGET}/run_${TARGET}_rocm.sh" --workload "${WORKLOAD}"
+        run: ./ci/benchmark_targets/${TARGET}_rocm/run_${TARGET}_rocm.sh --workload "${WORKLOAD}"
       - name: Upload GitHub artifacts
         if: always()
         continue-on-error: true
