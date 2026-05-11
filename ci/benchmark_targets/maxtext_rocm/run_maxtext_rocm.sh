@@ -8,16 +8,11 @@ WORKLOAD="gemma3-4b"
 }
 [[ $# -eq 2 ]] && WORKLOAD="$2"
 
-ROOT="${ROOT:-$PWD}"
-TARGET_DIR="${ROOT}/benchmark_targets/rocm_maxtext"
-RUN_DIR="${ROOT}/run_artifacts"
-REPO_DIR="${ROOT}/maxtext"
+JAX_DIR="${JAX_DIR:-$PWD}"
+TARGET_DIR="${JAX_DIR}/ci/benchmark_targets/maxtext_rocm"
+RUN_DIR="${TARGET_DIR}/run_artifacts"
+REPO_DIR="${TARGET_DIR}/maxtext"
 WORK_DIR="${REPO_DIR}/src"
-
-CFG_FILE="${REPO_DIR}/configs/models/${WORKLOAD}.yml"
-ENV_FILE="${REPO_DIR}/configs/models/${WORKLOAD}.env.sh"
-REQ_FILE="${WORK_DIR}/dependencies/requirements/requirements_rocm_jax_0.8.2.txt"
-EXPECTED_FILE="${TARGET_DIR}/expected.json"
 
 RUN_LOG="${RUN_DIR}/maxtext.log"
 BENCHMARK_JSON="${RUN_DIR}/benchmark.json"
@@ -31,27 +26,28 @@ source ci/envs/default.env
 source ./ci/utilities/install_wheels_locally.sh
 
 [[ -d "${REPO_DIR}/.git" ]] || \
-  git clone --depth 1 --branch main https://github.com/ROCm/maxtext.git "${REPO_DIR}"
+  git clone --depth 1 --branch add-rocm-benchmark-configs https://github.com/ROCm/maxtext.git "${REPO_DIR}"
+
+CFG_FILE="${REPO_DIR}/src/maxtext/configs/gpu/models/${WORKLOAD}-rocm.yml"
+REQ_FILE="${REPO_DIR}/src/dependencies/requirements/requirements_rocm_benchmark.txt"
+EXP_FILE="${TARGET_DIR}/exp_maxtext_rocm.yml"
 
 [[ -f "${CFG_FILE}" ]] || { echo "missing config file: ${CFG_FILE}" >&2; exit 2; }
-[[ -f "${EXPECTED_FILE}" ]] || { echo "missing expected file: ${EXPECTED_FILE}" >&2; exit 2; }
+[[ -f "${EXP_FILE}" ]] || { echo "missing expected file: ${EXP_FILE}" >&2; exit 2; }
 
 [[ -f "${REQ_FILE}" ]] && {
   echo "[setup] installing MaxText requirements"
   "${PYTHON_BIN}" -m pip install -r "${REQ_FILE}"
 }
 
-[[ -f "${ENV_FILE}" ]] && source "${ENV_FILE}"
-
 if [[ "${USE_TE:-0}" == "1" ]]; then
   echo "[setup] resolving latest Transformer Engine wheel"
   PY_TAG="cp$(echo "${JAXCI_HERMETIC_PYTHON_VERSION:-3.12}" | tr -d '.')"
   TE_WHEEL_URL="$(
     curl -fsSL https://api.github.com/repos/ROCm/maxtext/releases \
-      | grep "browser_download_url:" \
+      | grep "browser_download_url" \
       | grep "te-rocm-wheels-" \
       | grep "${PY_TAG}" \
-      | grep linux_x86_64.whl \
       | head -n1 \
       | cut -d '"' -f4
   )"
@@ -60,7 +56,7 @@ if [[ "${USE_TE:-0}" == "1" ]]; then
     echo "failed to resolve Transformer Engine wheel for ${PY_TAG}" >&2
     exit 1
   }
-  
+
   echo "[setup] installing Transformer Engine from ${TE_WHEEL_URL}"
   "${PYTHON_BIN}" -m pip install --no-deps "${TE_WHEEL_URL}"
 fi
@@ -90,9 +86,8 @@ CMP_CODE=1
   --log "${RUN_LOG}" \
   --expected "${EXPECTED_FILE}" \
   --config "${CFG_FILE}" \
-  --env-file "${ENV_FILE}" \
   --requirements "${REQ_FILE}" \
-  --target rocm_maxtext \
+  --target maxtext_rocm \
   --workload "${WORKLOAD}" \
   --run-code "${RUN_CODE}" \
   --model-run-started-at "${MODEL_RUN_STARTED_AT}" \

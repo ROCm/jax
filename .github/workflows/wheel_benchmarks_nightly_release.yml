@@ -49,7 +49,7 @@ jobs:
             {version: "7.2.0", tag: "rocm720"},
           ]
           target: ["maxtext"]
-          workload: ["gemma_4b"]
+          workload: ["gemma3-4b"]
     name: "Benchmark ROCm (JAX artifacts version = ${{ startsWith(github.ref_name, 'release/') && 'latest release' || 'nightly' }})"
     with:
       runner: ${{ matrix.runner }}
