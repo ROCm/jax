@@ -107,9 +107,11 @@ jobs:
           mkdir -p /tmp/therock-fix && cd /tmp/therock-fix
           curl -L "$THEROCK_TARBALL_URL" | tar -xz \
             "./lib/rocm_sysdeps/lib/librocm_sysdeps_hwloc.so.5" \
-            "./lib/rocm_sysdeps/lib/librocm_sysdeps_pciaccess.so.0"
+            "./lib/rocm_sysdeps/lib/librocm_sysdeps_pciaccess.so.0" \
+            "./lib/rocm_sysdeps/lib/librocm_sysdeps_asm.so.1"
           cp lib/rocm_sysdeps/lib/librocm_sysdeps_hwloc.so.5 /opt/rocm/lib/rocm_sysdeps/lib/
           cp lib/rocm_sysdeps/lib/librocm_sysdeps_pciaccess.so.0 /opt/rocm/lib/rocm_sysdeps/lib/
+          cp lib/rocm_sysdeps/lib/librocm_sysdeps_asm.so.1 /opt/rocm/lib/rocm_sysdeps/lib/
       - name: Download jax and jaxlib from PyPI
         run: |
           mkdir -p $(pwd)/dist
