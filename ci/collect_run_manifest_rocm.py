@@ -162,7 +162,7 @@ def main():
         if path.exists():
             manifest.update(json.loads(path.read_text()))
 
-    Path(args.out).write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+    Path(args.out).write_text(json.dumps(manifest, indent=2) + "\n")
 
 
 if __name__ == "__main__":

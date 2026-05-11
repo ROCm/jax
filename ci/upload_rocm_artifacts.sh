@@ -1,29 +1,37 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-: "${S3_BUCKET_NAME:?}"
-ARTIFACT_DIR="${1:-run_artifacts}"
-RESULT_FILE="${ARTIFACT_DIR}/result.json"
+# Uploads a file or directory to S3.
+#
+# Usage:
+#   upload_rocm_artifacts.sh <source_path> <s3_dest_prefix> [success]
+#
+# If the optional third argument is "success", an empty _SUCCESS marker is
+# written after the upload completes.
 
-[[ -f "${RESULT_FILE}" ]] || {
-  echo "missing result.json" >&2
-  exit 2
+: "${S3_BUCKET_NAME:?}"
+
+SRC="${1:?missing source path}"
+DEST_PREFIX="${2:?missing S3 destination prefix}"
+WRITE_SUCCESS="${3:-}"
+
+[[ -e "${SRC}" ]] || {
+ echo "missing source path: ${SRC}" >&2
+ exit 2
 }
 
-RUN_KEY="${DATE}_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}"
-COMBO="py$(norm "${INPUT_PYTHON}")-rocm$(norm "${INPUT_ROCM_VERSION}")-${GPU_PART}"
-PREFIX="${GITHUB_REPOSITORY}/${GITHUB_REF_NAME}/${IS_NIGHTLY}/${RUN_KEY}/${COMBO}"
+DEST="s3://${S3_BUCKET_NAME}/${DEST_PREFIX}"
 
-DEST="s3://${S3_BUCKET_NAME}/${TEST_LOGS_ROOT}/${PREFIX}"
+echo "[upload] ${SRC} -> ${DEST}"
 
-echo "[upload] ${DEST}"
-
-aws s3 cp --only-show-errors "${RESULT_FILE}" "${DEST}/result.json"
-
-if [[ -f "${ARTIFACT_DIR}/logs.tar.gz" ]]; then
-  aws s3 cp --only-show-errors "${ARTIFACT_DIR}/logs.tar.gz" "${DEST}/logs.tar.gz"
+if [[ -d "${SRC}" ]]; then
+  aws s3 cp --only-show-errors "${SRC}" "${DEST}" --recursive
+else
+  aws s3 cp --only-show-errors "${SRC}" "${DEST}/$(basename "${SRC}")"
 fi
 
-printf '' | aws s3 cp --only-show-errors - "${DEST}/_SUCCESS"
+if [[ "${WRITE_SUCCESS}" == "success" ]]; then
+  printf '' | aws s3 cp --only-show-errors - "${DEST}/_SUCCESS"
+fi
 
 echo "[done]"

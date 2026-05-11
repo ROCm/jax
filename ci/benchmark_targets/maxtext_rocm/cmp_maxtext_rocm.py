@@ -80,7 +80,7 @@ def main():
         "expected_config_raw": read(args.expected),
     }
 
-    Path(args.out).write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
+    Path(args.out).write_text(json.dumps(result, indent=2) + "\n")
     return cmp_code
 
 

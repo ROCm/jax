@@ -197,8 +197,14 @@ jobs:
           name: benchmark-artifacts-${{ inputs.target }}-${{ inputs.workload }}-${{ inputs.runner }}-py${{ inputs.python }}-rocm${{ inputs.rocm-version }}
           path: ci/benchmark_targets/${{ inputs.target }}_rocm/run_artifacts/${{ inputs.workload }}/result.json
           if-no-files-found: warn
-      - name: Upload CI artifacts to S3
-        if: always()
-        env:
-          S3_BUCKET_NAME: jax-ci-amd
-        run: ./ci/upload_artifacts.sh run_artifacts
+      # - name: Upload CI artifacts to S3
+      #   if: always()
+      #   env:
+      #     S3_BUCKET_NAME: jax-ci-amd
+      #   run: |
+      #     RUN_KEY="$(date -u +%F)_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}"
+      #     PREFIX="jax-ci-bench-logs/${GITHUB_REPOSITORY}/${GITHUB_REF_NAME}/${RUN_KEY}"
+      #     ./ci/upload_rocm_artifacts.sh \
+      #       "ci/benchmark_targets/${{ inputs.target }}_rocm/run_artifacts/${{ inputs.workload }}" \
+      #       "${PREFIX}" \
+      #       success

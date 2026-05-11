@@ -101,7 +101,7 @@ export XLA_PYTHON_CLIENT_PREALLOCATE=false
 
 MODEL_RUN_STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
-echo "Starting MaxText workload: ${WORKLOAD}"
+echo "Running MaxText workload: ${WORKLOAD}.."
 
 set +e
 pushd "${MAXTEXT_SRC_DIR}" >/dev/null
@@ -115,7 +115,7 @@ RUN_CODE=$?
 popd >/dev/null
 set -e
 
-echo "Completed MaxText workload: ${WORKLOAD}"
+echo "..Completed MaxText workload: ${WORKLOAD}"
 
 MODEL_RUN_COMPLETED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
