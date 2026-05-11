@@ -1,17 +1,23 @@
 #!/usr/bin/env python3
+
+# Evaluates benchmark results against expected thresholds and writes
+# benchmark-specific result metadata for inclusion in the final ROCm
+# CI run manifest.
+
 import argparse
 import json
 import statistics
 from pathlib import Path
 
 METRIC_FIELD_INDEX = 3
-WARMUP_STEPS = 2
+WARMUP_STEPS = 4
 
 
 def read(path):
-    return (
-        Path(path).read_text(errors="replace") if path and Path(path).exists() else ""
-    )
+    path = Path(path)
+    if not path.exists():
+        return ""
+    return path.read_text(errors="replace")
 
 
 def parse_metric_values(log_text):
@@ -30,27 +36,26 @@ def parse_metric_values(log_text):
 
 
 def main():
-    p = argparse.ArgumentParser()
-    p.add_argument("--log", required=True)
-    p.add_argument("--expected", required=True)
-    p.add_argument("--config", required=True)
-    p.add_argument("--env-file", default="")
-    p.add_argument("--requirements", required=True)
-    p.add_argument("--target", required=True)
-    p.add_argument("--workload", required=True)
-    p.add_argument("--run-code", required=True)
-    p.add_argument("--model-run-started-at", required=True)
-    p.add_argument("--model-run-completed-at", required=True)
-    p.add_argument("--out", required=True)
-    args = p.parse_args()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--log", required=True)
+    parser.add_argument("--expected", required=True)
+    parser.add_argument("--config", required=True)
+    parser.add_argument("--requirements", required=True)
+    parser.add_argument("--target", required=True)
+    parser.add_argument("--workload", required=True)
+    parser.add_argument("--run-code", required=True)
+    parser.add_argument("--model-run-started-at", required=True)
+    parser.add_argument("--model-run-completed-at", required=True)
+    parser.add_argument("--out", required=True)
+    args = parser.parse_args()
 
-    expected = json.loads(Path(args.expected).read_text())
+    expected = json.loads(read(args.expected))
     values = parse_metric_values(read(args.log))
 
     samples = values[WARMUP_STEPS:]
     observed = statistics.median(samples) if samples else None
 
-    baseline = float(expected["baseline"])
+    baseline = float(expected["baseline_ms"])
     threshold = float(expected["threshold_percent"])
 
     distance = None
@@ -59,20 +64,18 @@ def main():
     if int(args.run_code) == 0 and observed is not None and baseline != 0:
         raw = ((observed - baseline) / baseline) * 100.0
         distance = abs(raw)
-        cmp_code = 0 if raw >= -threshold else 1
+        cmp_code = 0 if raw <= threshold else 1
 
     result = {
         "benchmark_schema_version": 1,
-        "kind": "benchmark",
         "target": args.target,
         "workload": args.workload,
         "run_code": int(args.run_code),
         "cmp_code": cmp_code,
-        "distance_percent": round(distance, 4) if distance is not None else None,
+        "distance_percent": (round(distance, 4) if distance is not None else None),
         "model_run_started_at": args.model_run_started_at,
         "model_run_completed_at": args.model_run_completed_at,
         "workload_config_raw": read(args.config),
-        "workload_env_raw": read(args.env_file),
         "requirements_raw": read(args.requirements),
         "expected_config_raw": read(args.expected),
     }

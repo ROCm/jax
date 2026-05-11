@@ -157,8 +157,11 @@ jobs:
       JAXCI_HERMETIC_PYTHON_VERSION: "${{ inputs.python }}"
       JAXCI_PYTHON: "python${{ inputs.python }}"
       JAXCI_ENABLE_X64: "0"
-      USE_TE: "${{ inputs.use-te }}"
       INPUT_ROCM_VERSION: "${{ inputs.rocm-version }}"
+      INPUT_RUNNER: "${{ inputs.runner }}"
+      INPUT_ROCM_TAG: "${{ inputs.rocm-tag }}"
+      USE_TE: "${{ inputs.use-te }}"
+      
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -175,8 +178,6 @@ jobs:
       - name: Install Python dependencies
         run: |
           $JAXCI_PYTHON -m pip install uv~=0.11.2
-          $JAXCI_PYTHON -m uv pip install -r build/test-requirements.txt
-          $JAXCI_PYTHON -m pip install pytest-json-report
       # Halt for testing
       - name: Wait For Connection
         uses: google-ml-infra/actions/ci_connection@7f5ca0c263a81ed09ea276524c1b9192f1304e3c
@@ -187,14 +188,14 @@ jobs:
           TARGET: ${{ inputs.target }}
           WORKLOAD: ${{ inputs.workload }}
         timeout-minutes: 120
-        run: ./ci/benchmark_targets/${TARGET}_rocm/run_${TARGET}_rocm.sh --workload "${WORKLOAD}"
+        run: ./ci/benchmark_targets/${TARGET}_rocm/run_${TARGET}_rocm.sh "${WORKLOAD}"
       - name: Upload GitHub artifacts
         if: always()
         continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: benchmark-artifacts-${{ inputs.target }}-${{ inputs.workload }}-${{ inputs.runner }}-py${{ inputs.python }}-rocm${{ inputs.rocm-version }}
-          path: run_artifacts/result.json
+          path: ci/benchmark_targets/${{ inputs.target }}_rocm/run_artifacts/${{ inputs.workload }}/result.json
           if-no-files-found: warn
       - name: Upload CI artifacts to S3
         if: always()

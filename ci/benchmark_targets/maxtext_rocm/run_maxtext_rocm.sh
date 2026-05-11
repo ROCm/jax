@@ -1,48 +1,79 @@
 #!/usr/bin/env bash
+# Runs a MaxText ROCm benchmark workload and produces benchmark-specific
+# result metadata for inclusion in the final ROCm CI run manifest.
+#
+# The benchmark result payload is written to benchmark.json and later
+# merged into the final result.json by collect_rocm_run_metadata.py.
+#
+# This script:
+#   - installs MaxText benchmark dependencies
+#   - optionally installs Transformer Engine
+#   - runs the benchmark workload
+#   - evaluates benchmark results against expected thresholds
+#   - writes benchmark-specific metadata to benchmark.json
+#
+# The final ROCm CI result manifest is produced separately by
+# collect_rocm_run_metadata.py.
 set -euo pipefail
 
-WORKLOAD="gemma3-4b"
-[[ $# -eq 0 || ( $# -eq 2 && "$1" == "--workload" ) ]] || {
-  echo "usage: $0 [--workload NAME]" >&2
-  exit 2
-}
-[[ $# -eq 2 ]] && WORKLOAD="$2"
+WORKLOAD="${1:-gemma3-4b}"
 
 JAX_DIR="${JAX_DIR:-$PWD}"
-TARGET_DIR="${JAX_DIR}/ci/benchmark_targets/maxtext_rocm"
-RUN_DIR="${TARGET_DIR}/run_artifacts"
-REPO_DIR="${TARGET_DIR}/maxtext"
-WORK_DIR="${REPO_DIR}/src"
-
-RUN_LOG="${RUN_DIR}/maxtext.log"
-BENCHMARK_JSON="${RUN_DIR}/benchmark.json"
-RESULT_JSON="${RUN_DIR}/result.json"
 
 PYTHON_BIN="${JAXCI_PYTHON:-python3}"
+PYTHON_VERSION="${JAXCI_HERMETIC_PYTHON_VERSION:-3.12}"
+JAX_ENABLE_X64="${JAXCI_ENABLE_X64:-0}"
+USE_TE="${USE_TE:-0}"
+
+TARGET_DIR="${JAX_DIR}/ci/benchmark_targets/maxtext_rocm"
+MAXTEXT_DIR="${TARGET_DIR}/maxtext"
+MAXTEXT_SRC_DIR="${MAXTEXT_DIR}/src"
+
+RUN_DIR="${TARGET_DIR}/run_artifacts/${WORKLOAD}"
+RUN_LOG="${RUN_DIR}/model_run.log"
+BENCH_JSON="${RUN_DIR}/benchmark.json"
+RESULT_JSON="${RUN_DIR}/result.json"
+
+CFG_FILE="${MAXTEXT_DIR}/src/maxtext/configs/gpu/models/${WORKLOAD}-rocm.yml"
+REQ_FILE="${MAXTEXT_DIR}/src/dependencies/requirements/requirements_rocm_benchmark.txt"
+EXP_FILE="${TARGET_DIR}/exp_maxtext_rocm.yml"
 
 mkdir -p "${RUN_DIR}"
 
-source ci/envs/default.env
-source ./ci/utilities/install_wheels_locally.sh
+source "${JAX_DIR}/ci/envs/default.env"
+source "${JAX_DIR}/ci/utilities/install_wheels_locally.sh"
 
-[[ -d "${REPO_DIR}/.git" ]] || \
-  git clone --depth 1 --branch add-rocm-benchmark-configs https://github.com/ROCm/maxtext.git "${REPO_DIR}"
+if [[ ! -d "${MAXTEXT_DIR}/.git" ]]; then
+  git clone \
+    --depth 1 \
+    --branch add-rocm-benchmark-configs \
+    https://github.com/ROCm/maxtext.git \
+    "${MAXTEXT_DIR}"
+fi
 
-CFG_FILE="${REPO_DIR}/src/maxtext/configs/gpu/models/${WORKLOAD}-rocm.yml"
-REQ_FILE="${REPO_DIR}/src/dependencies/requirements/requirements_rocm_benchmark.txt"
-EXP_FILE="${TARGET_DIR}/exp_maxtext_rocm.yml"
-
-[[ -f "${CFG_FILE}" ]] || { echo "missing config file: ${CFG_FILE}" >&2; exit 2; }
-[[ -f "${EXP_FILE}" ]] || { echo "missing expected file: ${EXP_FILE}" >&2; exit 2; }
-
-[[ -f "${REQ_FILE}" ]] && {
-  echo "[setup] installing MaxText requirements"
-  "${PYTHON_BIN}" -m pip install -r "${REQ_FILE}"
+[[ -f "${CFG_FILE}" ]] || {
+  echo "missing config file: ${CFG_FILE}" >&2
+  exit 2
 }
 
-if [[ "${USE_TE:-0}" == "1" ]]; then
-  echo "[setup] resolving latest Transformer Engine wheel"
-  PY_TAG="cp$(echo "${JAXCI_HERMETIC_PYTHON_VERSION:-3.12}" | tr -d '.')"
+[[ -f "${REQ_FILE}" ]] || {
+  echo "missing requirements file: ${REQ_FILE}" >&2
+  exit 2
+}
+
+[[ -f "${EXP_FILE}" ]] || {
+ echo "missing expected file: ${EXP_FILE}" >&2
+ exit 2
+}
+
+echo "Installing MaxText ROCm benchmark requirements"
+"${PYTHON_BIN}" -m pip install -r "${REQ_FILE}"
+
+if [[ "${USE_TE}" == "1" ]]; then
+  echo "Resolving latest Transformer Engine wheel"
+
+  PY_TAG="cp$(echo "${PYTHON_VERSION}" | tr -d '.')"
+
   TE_WHEEL_URL="$(
     curl -fsSL https://api.github.com/repos/ROCm/maxtext/releases \
       | grep "browser_download_url" \
@@ -53,11 +84,11 @@ if [[ "${USE_TE:-0}" == "1" ]]; then
   )"
 
   [[ -n "${TE_WHEEL_URL}" ]] || {
-    echo "failed to resolve Transformer Engine wheel for ${PY_TAG}" >&2
+    echo "Failed to resolve Transformer Engine wheel" >&2
     exit 1
   }
 
-  echo "[setup] installing Transformer Engine from ${TE_WHEEL_URL}"
+  echo "Installing Transformer Engine from ${TE_WHEEL_URL}"
   "${PYTHON_BIN}" -m pip install --no-deps "${TE_WHEEL_URL}"
 fi
 
@@ -70,21 +101,29 @@ export XLA_PYTHON_CLIENT_PREALLOCATE=false
 
 MODEL_RUN_STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
+echo "Starting MaxText workload: ${WORKLOAD}"
+
 set +e
-pushd "${WORK_DIR}" >/dev/null
+pushd "${MAXTEXT_SRC_DIR}" >/dev/null
+
 "${PYTHON_BIN}" -m maxtext.trainers.pre_train.train \
   "$(realpath "${CFG_FILE}")" \
 > "${RUN_LOG}" 2>&1
+
 RUN_CODE=$?
+
 popd >/dev/null
 set -e
 
+echo "Completed MaxText workload: ${WORKLOAD}"
+
 MODEL_RUN_COMPLETED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
-CMP_CODE=1
-"${PYTHON_BIN}" "${TARGET_DIR}/benchmark_result.py" \
+CMP_CODE=0
+
+"${PYTHON_BIN}" "${TARGET_DIR}/cmp_maxtext_rocm.py" \
   --log "${RUN_LOG}" \
-  --expected "${EXPECTED_FILE}" \
+  --expected "${EXP_FILE}" \
   --config "${CFG_FILE}" \
   --requirements "${REQ_FILE}" \
   --target maxtext_rocm \
@@ -92,13 +131,18 @@ CMP_CODE=1
   --run-code "${RUN_CODE}" \
   --model-run-started-at "${MODEL_RUN_STARTED_AT}" \
   --model-run-completed-at "${MODEL_RUN_COMPLETED_AT}" \
-  --out "${BENCHMARK_JSON}" || CMP_CODE=$?
+  --out "${BENCH_JSON}" || CMP_CODE=$?
 
-"${PYTHON_BIN}" ci/make_ci_manifest.py \
-  --extra "${BENCHMARK_JSON}" \
+"${PYTHON_BIN}" "${JAX_DIR}/ci/collect_run_manifest_rocm.py" \
+  --runner "${INPUT_RUNNER}" \
+  --python-version "${PYTHON_VERSION}" \
+  --python-bin "${PYTHON_BIN}" \
+  --rocm-version "${INPUT_ROCM_VERSION}" \
+  --rocm-tag "${INPUT_ROCM_TAG}" \
+  --extra "${BENCH_JSON}" \
   --out "${RESULT_JSON}"
 
-rm -f "${RUN_LOG}" "${BENCHMARK_JSON}"
+rm -f "${RUN_LOG}" "${BENCH_JSON}"
 
 [[ -s "${RESULT_JSON}" ]] && touch "${RUN_DIR}/_SUCCESS"
 
