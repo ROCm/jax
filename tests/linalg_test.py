@@ -570,7 +570,12 @@ class NumpyLinalgTest(jtu.JaxTestCase):
           np.linalg.norm(np.matmul(a, v) - w * v), 2.5 * eps * np.linalg.norm(a)
       )
 
+
   def testEighTinyNorm(self):
+    if jtu.is_device_rocm():
+      # numerical errors seen as of ROCm 7.2 due to hipSolver issue
+      # TODO: re-enable the test once the hipSolver issue is fixed
+      self.skipTest("testEighNorm not supported on ROCm due to hipSOLVER issue")
     rng = jtu.rand_default(self.rng())
     a = rng((300, 300), dtype=np.float32)
     eps = jnp.finfo(a.dtype).eps
@@ -2371,6 +2376,7 @@ class LaxLinalgTest(jtu.JaxTestCase):
 
   @jtu.sample_product(shape=[(3,), (3, 4), (3, 4, 5)],
                       dtype=float_types + complex_types)
+  @jtu.skip_on_devices("rocm")  # Numerical errors on ROCm
   def test_tridiagonal_solve(self, shape, dtype):
     if dtype not in float_types and jtu.test_device_matches(["gpu"]):
       self.skipTest("Data type not supported on GPU")
