@@ -100,11 +100,13 @@ jobs:
       - name: Apply TheRock sysdeps fix (hwloc + pciaccess)
         if: matrix.rocm.needs-sysdeps-fix == 'true'
         run: |
-          THEROCK_TARBALL_URL="https://therock-nightly-tarball.s3.amazonaws.com/therock-dist-linux-gfx950-dcgpu-7.13.0a20260501.tar.gz"
-          mkdir -p /tmp/therock-fix && cd /tmp/therock-fix
-          curl -L "$THEROCK_TARBALL_URL" | tar -xz --wildcards "./lib/rocm_sysdeps/lib/*"
-          cp lib/rocm_sysdeps/lib/*.so* /opt/rocm/lib/rocm_sysdeps/lib/
-          cp lib/rocm_sysdeps/lib/*.so* /opt/rocm/lib/
+          apt-get update -qq && apt-get install -y -qq hwloc libpciaccess0 libnuma1
+          ROCM_SDK_TARGET_FAMILY=gfx950-dcgpu rocm-sdk init --quiet
+          ROCM_SDK_ROOT="$(ROCM_SDK_TARGET_FAMILY=gfx950-dcgpu rocm-sdk path --root)"
+          rm -rf /opt/rocm && ln -s "${ROCM_SDK_ROOT}" /opt/rocm
+          ln -sf "$(readlink -f /usr/lib/x86_64-linux-gnu/libhwloc.so.15)" /opt/rocm/lib/rocm_sysdeps/lib/librocm_sysdeps_hwloc.so.5
+          ln -sf "$(readlink -f /usr/lib/x86_64-linux-gnu/libpciaccess.so.0)" /opt/rocm/lib/rocm_sysdeps/lib/librocm_sysdeps_pciaccess.so.0
+          cp /opt/rocm/lib/rocm_sysdeps/lib/*.so* /opt/rocm/lib/
       - name: Download JAX/Jaxlib/JAX-ROCm wheels
         uses: ./.github/actions/download-jax-rocm-wheels
         with:
