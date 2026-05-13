@@ -109,6 +109,9 @@ jobs:
           cp lib/rocm_sysdeps/lib/librocm_sysdeps_hwloc.so.5 /opt/rocm/lib/rocm_sysdeps/lib/
           cp lib/rocm_sysdeps/lib/librocm_sysdeps_pciaccess.so.0 /opt/rocm/lib/rocm_sysdeps/lib/
           cp lib/rocm_sysdeps/lib/librocm_sysdeps_asm.so.1 /opt/rocm/lib/rocm_sysdeps/lib/
+          cp lib/rocm_sysdeps/lib/librocm_sysdeps_hwloc.so.5 /opt/rocm/lib/
+          cp lib/rocm_sysdeps/lib/librocm_sysdeps_pciaccess.so.0 /opt/rocm/lib/
+          cp lib/rocm_sysdeps/lib/librocm_sysdeps_asm.so.1 /opt/rocm/lib/
       - name: Download JAX/Jaxlib/JAX-ROCm wheels
         uses: ./.github/actions/download-jax-rocm-wheels
         with:
