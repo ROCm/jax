@@ -62,7 +62,7 @@ def main():
     cmp_code = 1
 
     if int(args.run_code) == 0 and observed is not None and baseline != 0:
-        raw = ((observed - baseline) / baseline) * 100.0
+        raw = ((baseline - observed) / baseline) * 100.0
         distance = abs(raw)
         cmp_code = 0 if raw <= threshold else 1
 

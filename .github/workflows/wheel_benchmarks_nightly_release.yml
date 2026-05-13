@@ -61,4 +61,3 @@ jobs:
       jaxlib-version: "head"
       skip-download-jaxlib-and-plugins-from-gcs: ${{inputs.skip-download-jaxlib-and-plugins-from-gcs}}
       gcs_download_uri: ${{ inputs.gcs_download_uri }}
-      use-te: "1"

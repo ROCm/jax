@@ -7,7 +7,6 @@
 #
 # This script:
 #   - installs MaxText benchmark dependencies
-#   - optionally installs Transformer Engine
 #   - runs the benchmark workload
 #   - evaluates benchmark results against expected thresholds
 #   - writes benchmark-specific metadata to benchmark.json
@@ -23,7 +22,6 @@ JAX_DIR="${JAX_DIR:-$PWD}"
 PYTHON_BIN="${JAXCI_PYTHON:-python3}"
 PYTHON_VERSION="${JAXCI_HERMETIC_PYTHON_VERSION:-3.12}"
 JAX_ENABLE_X64="${JAXCI_ENABLE_X64:-0}"
-USE_TE="${USE_TE:-0}"
 
 TARGET_DIR="${JAX_DIR}/ci/benchmark_targets/maxtext_rocm"
 MAXTEXT_DIR="${TARGET_DIR}/maxtext"
@@ -68,29 +66,6 @@ fi
 
 echo "Installing MaxText ROCm benchmark requirements"
 "${PYTHON_BIN}" -m pip install -r "${REQ_FILE}"
-
-if [[ "${USE_TE}" == "1" ]]; then
-  echo "Resolving latest Transformer Engine wheel"
-
-  PY_TAG="cp$(echo "${PYTHON_VERSION}" | tr -d '.')"
-
-  TE_WHEEL_URL="$(
-    curl -fsSL https://api.github.com/repos/ROCm/maxtext/releases \
-      | grep "browser_download_url" \
-      | grep "te-rocm-wheels-" \
-      | grep "${PY_TAG}" \
-      | head -n1 \
-      | cut -d '"' -f4
-  )"
-
-  [[ -n "${TE_WHEEL_URL}" ]] || {
-    echo "Failed to resolve Transformer Engine wheel" >&2
-    exit 1
-  }
-
-  echo "Installing Transformer Engine from ${TE_WHEEL_URL}"
-  "${PYTHON_BIN}" -m pip install --no-deps "${TE_WHEEL_URL}"
-fi
 
 export PY_COLORS=1
 export NCCL_DEBUG=WARN

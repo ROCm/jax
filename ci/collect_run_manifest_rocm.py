@@ -107,7 +107,7 @@ def package_snapshot(python_bin):
     return "|".join(
         line
         for line in pkgs.splitlines()
-        if re.search(r"^(jax|jaxlib)==|pjrt|plugin|transformer[-_]engine", line)
+        if re.search(r"^(jax|jaxlib)==|pjrt|plugin", line)
     )
 
 
