@@ -9,10 +9,6 @@ name: CI - Release Validation (ROCm)
 on:
   workflow_dispatch:
     inputs:
-      jax-version:
-        description: "JAX/jaxlib version to install from PyPI"
-        type: string
-        default: "0.10.0"
       halt-for-connection:
         description: "Should this workflow run wait for a remote connection? (yes/no)"
         required: false
@@ -113,22 +109,15 @@ jobs:
           cp lib/rocm_sysdeps/lib/librocm_sysdeps_hwloc.so.5 /opt/rocm/lib/rocm_sysdeps/lib/
           cp lib/rocm_sysdeps/lib/librocm_sysdeps_pciaccess.so.0 /opt/rocm/lib/rocm_sysdeps/lib/
           cp lib/rocm_sysdeps/lib/librocm_sysdeps_asm.so.1 /opt/rocm/lib/rocm_sysdeps/lib/
-      - name: Download jax and jaxlib from PyPI
-        run: |
-          mkdir -p $(pwd)/dist
-          $JAXCI_PYTHON -m pip download jax==${{ inputs.jax-version }} jaxlib==${{ inputs.jax-version }} --no-deps -d $(pwd)/dist/
-      - name: Download ROCm wheels from S3
-        run: |
-          ROCM_WHEELS_BASE_URL="https://d22q5eopkfeftw.cloudfront.net"
-          WHEELS_PATH="rocm-wheels/${{ github.repository }}/${{ github.ref_name }}/${{ matrix.rocm.release-version }}/release-validation/${{ github.run_number }}/${{ github.run_attempt }}"
-          WHEELS_URL="${ROCM_WHEELS_BASE_URL}/${WHEELS_PATH}"
-          echo "Downloading ROCm wheels from ${WHEELS_URL}..."
-          PYTHON_MAJOR_MINOR=$(echo "${{ matrix.python }}" | tr -d '.')
-          LISTING=$(curl -fsSL "${WHEELS_URL}/")
-          PJRT_FILE=$(echo "$LISTING" | grep -oE 'href="[^"]+\.whl"' | cut -d'"' -f2 | grep "jax_rocm7_pjrt-" | head -n1)
-          PLUGIN_FILE=$(echo "$LISTING" | grep -oE 'href="[^"]+\.whl"' | cut -d'"' -f2 | grep "jax_rocm7_plugin-" | grep "cp${PYTHON_MAJOR_MINOR}" | head -n1)
-          curl -L -o "$(pwd)/dist/${PJRT_FILE}" "${WHEELS_URL}/${PJRT_FILE}"
-          curl -L -o "$(pwd)/dist/${PLUGIN_FILE}" "${WHEELS_URL}/${PLUGIN_FILE}"
+      - name: Download JAX/Jaxlib/JAX-ROCm wheels
+        uses: ./.github/actions/download-jax-rocm-wheels
+        with:
+          python: ${{ matrix.python }}
+          rocm-version: "7"
+          rocm-release-version: ${{ matrix.rocm.release-version }}
+          jaxlib-version: "release"
+          download-jax-from-gcs: '0'
+          s3_download_uri: 's3://jax-ci-amd/rocm-wheels/${{ github.repository }}/${{ github.ref_name }}/${{ matrix.rocm.release-version }}/release-validation/${{ github.run_number }}/${{ github.run_attempt }}'
       - name: Install Python dependencies
         run: |
           $JAXCI_PYTHON -m pip install uv~=0.11.2
