@@ -34,7 +34,13 @@ source ./ci/utilities/install_wheels_locally.sh
 echo "Installed packages:"
 "$JAXCI_PYTHON" -m uv pip freeze
 
-"$JAXCI_PYTHON" -c "import jax; print(jax.default_backend()); print(jax.devices()); print(len(jax.devices()))"
+backend=$("$JAXCI_PYTHON" -c "import jax; print(jax.default_backend())")
+echo "Detected backend: $backend"
+if [[ "$backend" != "gpu" ]]; then
+  echo "ERROR: ROCm plugin not loaded. Expected backend 'gpu', got '$backend'"
+  exit 1
+fi
+"$JAXCI_PYTHON" -c "import jax; print(jax.devices()); print(len(jax.devices()))"
 
 rocm-smi
 
