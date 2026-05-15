@@ -1,87 +1,121 @@
-#!/usr/bin/env python3
+# Copyright 2026 The JAX Authors.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ==============================================================================
 
-# Evaluates benchmark results against expected thresholds and writes
-# benchmark-specific result metadata for inclusion in the final ROCm
-# CI run manifest.
-
+# Compares workload benchmark metrics against configured baselines.
+#
+# Each workload defines:
+#   - which metrics are evaluated
+#   - how metric values are extracted from logs
+#   - whether lower or higher values are better
+#   - acceptable regression thresholds
+#
+# The output contains one comparison result per metric.
 import argparse
 import json
 import statistics
 from pathlib import Path
-
-METRIC_FIELD_INDEX = 3
-WARMUP_STEPS = 4
+import yaml
 
 
 def read(path):
-    path = Path(path)
-    if not path.exists():
-        return ""
-    return path.read_text(errors="replace")
+    return Path(path).read_text(errors="replace")
 
 
-def parse_metric_values(log_text):
+def load_workload_config(path, workload):
+    config = yaml.safe_load(read(path)) or {}
+    if workload not in config:
+        raise KeyError(f"Missing workload in baseline config: {workload}")
+    return config[workload]
+
+
+def parse_metric_values(log, metric_config):
     values = []
-    for line in log_text.splitlines():
-        if "completed step:" not in line:
-            continue
-        fields = line.split(",")
-        if len(fields) <= METRIC_FIELD_INDEX:
+    pattern = metric_config["log_pattern"]
+    field_index = int(metric_config["field_index"])
+    warmup_steps = int(metric_config.get("warmup_steps", 0))
+    for line in log.splitlines():
+        if pattern not in line:
             continue
         try:
-            values.append(float(fields[METRIC_FIELD_INDEX].split(":", 1)[1].strip()))
-        except Exception:
-            pass
-    return values
+            value = line.split(",")[field_index]
+            values.append(float(value.split(":", 1)[1].strip()))
+        except (IndexError, ValueError):
+            continue
+
+    return values[warmup_steps:]
+
+
+def regression_percent(value, baseline, direction):
+    if direction == "lower_is_better":
+        regression = ((value - baseline) / baseline) * 100.0
+    elif direction == "higher_is_better":
+        regression((baseline - value) / baseline) * 100.0
+    else:
+        raise ValueError(f"Unknown comparison direction: {direction}")
+
+    return abs(regression)
+
+
+def evaluate_metric(log, name, metric_config):
+    values = parse_metric_values(log, metric_config)
+    value = statistics.median(values) if values else None
+
+    baseline = float(metric_config["baseline"])
+    threshold = float(metric_config["threshold_percent"])
+    direction = metric_config["direction"]
+
+    regression = None
+    cmp_code = 1
+    if value is not None and baseline != 0:
+        regression = regression_percent(value, baseline, direction)
+        cmp_code = int(regression > threshold)
+
+    return {
+        "name": name,
+        "value": round(value, 2) if value is not None else None,
+        "baseline": baseline,
+        "threshold_percent": threshold,
+        "direction": direction,
+        "regression_percent": (
+            round(regression, 4) if regression is not None else None
+        ),
+        "cmp_code": cmp_code,
+    }
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--log", required=True)
-    parser.add_argument("--expected", required=True)
-    parser.add_argument("--config", required=True)
-    parser.add_argument("--requirements", required=True)
-    parser.add_argument("--target", required=True)
+    parser.add_argument("--baseline", required=True)
     parser.add_argument("--workload", required=True)
-    parser.add_argument("--run-code", required=True)
-    parser.add_argument("--model-run-started-at", required=True)
-    parser.add_argument("--model-run-completed-at", required=True)
     parser.add_argument("--out", required=True)
     args = parser.parse_args()
 
-    expected = json.loads(read(args.expected))
-    values = parse_metric_values(read(args.log))
+    log = read(args.log)
+    workload = load_workload_config(args.baseline, args.workload)
 
-    samples = values[WARMUP_STEPS:]
-    observed = statistics.median(samples) if samples else None
-
-    baseline = float(expected["baseline_ms"])
-    threshold = float(expected["threshold_percent"])
-
-    distance = None
-    cmp_code = 1
-
-    if int(args.run_code) == 0 and observed is not None and baseline != 0:
-        raw = ((baseline - observed) / baseline) * 100.0
-        distance = abs(raw)
-        cmp_code = 0 if raw <= threshold else 1
-
-    result = {
-        "benchmark_schema_version": 1,
-        "target": args.target,
-        "workload": args.workload,
-        "run_code": int(args.run_code),
-        "cmp_code": cmp_code,
-        "distance_percent": (round(distance, 4) if distance is not None else None),
-        "model_run_started_at": args.model_run_started_at,
-        "model_run_completed_at": args.model_run_completed_at,
-        "workload_config_raw": read(args.config),
-        "requirements_raw": read(args.requirements),
-        "expected_config_raw": read(args.expected),
+    metrics = {
+        evaluate_metric(log, name, config)
+        for name, config in workload["metrics"].items()
     }
 
-    Path(args.out).write_text(json.dumps(result, indent=2) + "\n")
-    return cmp_code
+    Path(args.out).write_text(
+        json.dumps({"benchmark": {"metrics": metrics}}, indent=2) + "\n"
+    )
+
+    return max(metric["cmp_code"] for metric in metrics)
 
 
 if __name__ == "__main__":

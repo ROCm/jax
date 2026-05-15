@@ -1,124 +1,129 @@
-#!/usr/bin/env bash
-# Runs a MaxText ROCm benchmark workload and produces benchmark-specific
-# result metadata for inclusion in the final ROCm CI run manifest.
+#!/bin/bash
+# Copyright 2026 The JAX Authors.
 #
-# The benchmark result payload is written to benchmark.json and later
-# merged into the final result.json by collect_rocm_run_metadata.py.
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+# ==============================================================================
+
+# Runs a MaxText ROCm benchmark workload.
 #
 # This script:
-#   - installs MaxText benchmark dependencies
-#   - runs the benchmark workload
-#   - evaluates benchmark results against expected thresholds
-#   - writes benchmark-specific metadata to benchmark.json
-#
-# The final ROCm CI result manifest is produced separately by
-# collect_rocm_run_metadata.py.
+#   - prepares the benchmark environment
+#   - executes the workload
+#   - collects benchmark run metadata
+#   - evaluates benchmark metrics
+#   - generates the final ROCm run manifest
 set -euo pipefail
 
-WORKLOAD="${1:-gemma3-4b}"
+WORKLOAD="${1:-gemma3_4b}"
 
 JAX_DIR="${JAX_DIR:-$PWD}"
 
-PYTHON_BIN="${JAXCI_PYTHON:-python3}"
+PYTHON="${JAXCI_PYTHON:-python3}"
 PYTHON_VERSION="${JAXCI_HERMETIC_PYTHON_VERSION:-3.12}"
-JAX_ENABLE_X64="${JAXCI_ENABLE_X64:-0}"
 
-TARGET_DIR="${JAX_DIR}/ci/benchmark_targets/maxtext_rocm"
-MAXTEXT_DIR="${TARGET_DIR}/maxtext"
-MAXTEXT_SRC_DIR="${MAXTEXT_DIR}/src"
+TARGET="maxtext_rocm"
+TARGET_DIR="${JAX_DIR}/ci/benchmark_targets/${TARGET}"
 
+MAXTEXT="${TARGET_DIR}/maxtext"
 RUN_DIR="${TARGET_DIR}/run_artifacts/${WORKLOAD}"
-RUN_LOG="${RUN_DIR}/model_run.log"
-BENCH_JSON="${RUN_DIR}/benchmark.json"
-RESULT_JSON="${RUN_DIR}/result.json"
-
-CFG_FILE="${MAXTEXT_DIR}/src/maxtext/configs/gpu/models/${WORKLOAD}-rocm.yml"
-REQ_FILE="${MAXTEXT_DIR}/src/dependencies/requirements/requirements_rocm_benchmark.txt"
-EXP_FILE="${TARGET_DIR}/exp_maxtext_rocm.yml"
 
 mkdir -p "${RUN_DIR}"
 
 source "${JAX_DIR}/ci/envs/default.env"
 source "${JAX_DIR}/ci/utilities/install_wheels_locally.sh"
 
-if [[ ! -d "${MAXTEXT_DIR}/.git" ]]; then
+if [[ ! -d "${MAXTEXT}/.git" ]]; then
   git clone \
     --depth 1 \
     --branch add-rocm-benchmark-configs \
     https://github.com/ROCm/maxtext.git \
-    "${MAXTEXT_DIR}"
+    "${MAXTEXT}"
 fi
 
-[[ -f "${CFG_FILE}" ]] || {
-  echo "missing config file: ${CFG_FILE}" >&2
-  exit 2
-}
+for file in \
+  "${MAXTEXT}/src/maxtext/configs/gpu/models/${WORKLOAD}-rocm.yml" \
+  "${MAXTEXT}/src/dependencies/requirements/requirements_rocm_benchmark.txt" \
+  "${TARGET_DIR}/baseline.yml"; do
+  [[ -f "${file}" ]] || {
+    echo "missing required file: ${file}" >&2
+    exit 2
+  }
+done
 
-[[ -f "${REQ_FILE}" ]] || {
-  echo "missing requirements file: ${REQ_FILE}" >&2
-  exit 2
-}
-
-[[ -f "${EXP_FILE}" ]] || {
- echo "missing expected file: ${EXP_FILE}" >&2
- exit 2
-}
-
-echo "Installing MaxText ROCm benchmark requirements"
-"${PYTHON_BIN}" -m pip install -r "${REQ_FILE}"
+"${PYTHON}" -m pip install -r \
+  "${MAXTEXT}/src/dependencies/requirements/requirements_rocm_benchmark.txt"
 
 export PY_COLORS=1
 export NCCL_DEBUG=WARN
 export TF_CPP_MIN_LOG_LEVEL=0
-export JAX_ENABLE_X64="${JAXCI_ENABLE_X64}"
+
+export JAX_ENABLE_X64="${JAXCI_ENABLE_X64:-0}"
+
 export XLA_PYTHON_CLIENT_ALLOCATOR=platform
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
 
-MODEL_RUN_STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-
-echo "Running MaxText workload: ${WORKLOAD}.."
+RUN_STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 set +e
-pushd "${MAXTEXT_SRC_DIR}" >/dev/null
 
-"${PYTHON_BIN}" -m maxtext.trainers.pre_train.train \
-  "$(realpath "${CFG_FILE}")" \
-> "${RUN_LOG}" 2>&1
+pushd "${MAXTEXT}/src" >/dev/null
+
+"${PYTHON}" -m maxtext.trainers.pre_train.train \
+  "$(realpath "maxtext/configs/gpu/models/${WORKLOAD}-rocm.yml")" \
+> "${RUN_DIR}/run.log" 2>&1
 
 RUN_CODE=$?
 
 popd >/dev/null
+
 set -e
 
-echo "..Completed MaxText workload: ${WORKLOAD}"
+RUN_COMPLETED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
-MODEL_RUN_COMPLETED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+"${PYTHON}" "${JAX_DIR}/ci/collect_bench_manifest_rocm.py" \
+  --target "${TARGET}" \
+  --workload "${WORKLOAD}" \
+  --run-code "${RUN_CODE}" \
+  --run-started-at "${RUN_STARTED_AT}" \
+  --run-completed-at "${RUN_COMPLETED_AT}" \
+  --raw workload_config="${MAXTEXT}/src/maxtext/configs/gpu/models/${WORKLOAD}-rocm.yml" \
+  --raw requirements="${MAXTEXT}/src/dependencies/requirements/requirements_rocm_benchmark.txt" \
+  --raw baseline_config="${TARGET_DIR}/baseline.yml" \
+  --out "${RUN_DIR}/benchmark_meta.json"
 
 CMP_CODE=0
 
-"${PYTHON_BIN}" "${TARGET_DIR}/cmp_maxtext_rocm.py" \
-  --log "${RUN_LOG}" \
-  --expected "${EXP_FILE}" \
-  --config "${CFG_FILE}" \
-  --requirements "${REQ_FILE}" \
-  --target maxtext_rocm \
+"${PYTHON}" "${TARGET_DIR}/cmp_maxtext_rocm.py" \
+  --log "${RUN_DIR}/run.log" \
+  --baseline "${TARGET_DIR}/baseline.yml" \
   --workload "${WORKLOAD}" \
-  --run-code "${RUN_CODE}" \
-  --model-run-started-at "${MODEL_RUN_STARTED_AT}" \
-  --model-run-completed-at "${MODEL_RUN_COMPLETED_AT}" \
-  --out "${BENCH_JSON}" || CMP_CODE=$?
+  --out "${RUN_DIR}/benchmark_metrics.json" || CMP_CODE=$?
 
-"${PYTHON_BIN}" "${JAX_DIR}/ci/collect_run_manifest_rocm.py" \
+"${PYTHON}" "${JAX_DIR}/ci/collect_run_manifest_rocm.py" \
   --runner "${INPUT_RUNNER}" \
   --python-version "${PYTHON_VERSION}" \
-  --python-bin "${PYTHON_BIN}" \
+  --python-bin "${PYTHON}" \
   --rocm-version "${INPUT_ROCM_VERSION}" \
   --rocm-tag "${INPUT_ROCM_TAG}" \
-  --extra "${BENCH_JSON}" \
-  --out "${RESULT_JSON}"
+  --extra "${RUN_DIR}/benchmark_meta.json" \
+  --extra "${RUN_DIR}/benchmark_metrics.json" \
+  --out "${RUN_DIR}/result.json"
 
-rm -f "${RUN_LOG}" "${BENCH_JSON}"
+rm -f \
+  "${RUN_DIR}/run.log" \
+  "${RUN_DIR}/benchmark_meta.json" \
+  "${RUN_DIR}/benchmark_metrics.json"
 
-[[ -s "${RESULT_JSON}" ]] && touch "${RUN_DIR}/_SUCCESS"
+[[ -s "${RUN_DIR}/result.json" ]] && touch "${RUN_DIR}/_SUCCESS"
 
 exit $(( RUN_CODE != 0 || CMP_CODE != 0 ))
