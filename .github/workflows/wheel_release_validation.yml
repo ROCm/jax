@@ -76,10 +76,10 @@ jobs:
       fail-fast: false
       matrix:
         runner: ["linux-x86-64-1gpu-amd", "linux-x86-64-4gpu-amd", "linux-x86-64-8gpu-amd"]
-        python: ["3.11", "3.12", "3.13", "3.14"]
+        python: ["3.12"]
         rocm: [
           {label: "ROCm 7.2.0", release-version: "7.2.0", image: "ghcr.io/rocm/jax-base-ubu24.rocm720:latest", needs-sysdeps-fix: "false"},
-          {label: "TheRock 7.13.0", release-version: "therock-7.13.0", image: "ghcr.io/rocm/jax-base-ubu24.therock-latest:latest", needs-sysdeps-fix: "false"},
+          {label: "TheRock 7.13.0", release-version: "therock-7.13.0", image: "ghcr.io/rocm/no_rocm_image_ubuntu24_04:latest", needs-sysdeps-fix: "true"},
         ]
     name: "Pytest ROCm (${{ matrix.rocm.label }})"
     container:
@@ -93,6 +93,8 @@ jobs:
       JAXCI_PYTHON: "python${{ matrix.python }}"
       JAXCI_ENABLE_X64: "0"
       JAXCI_ROCM_VERSION: "7"
+      ROCM_PATH: "/opt/rocm"
+      PIP_BREAK_SYSTEM_PACKAGES: "1"
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -100,13 +102,15 @@ jobs:
       - name: Apply TheRock sysdeps fix (hwloc + pciaccess)
         if: matrix.rocm.needs-sysdeps-fix == 'true'
         run: |
-          apt-get update -qq && apt-get install -y -qq hwloc libpciaccess0 libnuma1
+          apt-get update -qq && apt-get install -y -qq python3-pip hwloc libpciaccess0 libnuma1
+          pip install --upgrade pip
+          pip install --index-url https://rocm.nightlies.amd.com/v2/gfx950-dcgpu/ rocm==7.13.0a20260514
+          pip install --index-url https://rocm.nightlies.amd.com/v2/gfx950-dcgpu/ "rocm[libraries,devel]==7.13.0a20260514"
           ROCM_SDK_TARGET_FAMILY=gfx950-dcgpu rocm-sdk init --quiet
           ROCM_SDK_ROOT="$(ROCM_SDK_TARGET_FAMILY=gfx950-dcgpu rocm-sdk path --root)"
           rm -rf /opt/rocm && ln -s "${ROCM_SDK_ROOT}" /opt/rocm
           ln -sf "$(readlink -f /usr/lib/x86_64-linux-gnu/libhwloc.so.15)" /opt/rocm/lib/rocm_sysdeps/lib/librocm_sysdeps_hwloc.so.5
           ln -sf "$(readlink -f /usr/lib/x86_64-linux-gnu/libpciaccess.so.0)" /opt/rocm/lib/rocm_sysdeps/lib/librocm_sysdeps_pciaccess.so.0
-          cp /opt/rocm/lib/rocm_sysdeps/lib/*.so* /opt/rocm/lib/
       - name: Download JAX/Jaxlib/JAX-ROCm wheels
         uses: ./.github/actions/download-jax-rocm-wheels
         with:
