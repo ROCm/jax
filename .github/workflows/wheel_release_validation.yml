@@ -101,7 +101,7 @@ jobs:
       - name: Apply TheRock sysdeps fix (hwloc + pciaccess)
         if: matrix.rocm.needs-sysdeps-fix == 'true'
         run: |
-          mv /usr/lib/python3.12/EXTERNALLY-MANAGED /usr/lib/python3.12/EXTERNALLY-MANAGED.old
+          rm /usr/lib/python3.12/EXTERNALLY-MANAGED
           apt-get update -qq && apt-get install -y -qq \
             python3-pip curl hwloc libpciaccess0 libnuma1 \
             apt-transport-https ca-certificates gnupg
