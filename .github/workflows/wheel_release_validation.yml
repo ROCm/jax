@@ -101,7 +101,6 @@ jobs:
       - name: Apply TheRock sysdeps fix (hwloc + pciaccess)
         if: matrix.rocm.needs-sysdeps-fix == 'true'
         run: |
-          rm /usr/lib/python3.12/EXTERNALLY-MANAGED
           apt-get update -qq && apt-get install -y -qq \
             python3-pip curl hwloc libpciaccess0 libnuma1 \
             apt-transport-https ca-certificates gnupg
@@ -113,6 +112,8 @@ jobs:
             | tee /etc/apt/sources.list.d/google-cloud-sdk.list
           apt-get update -qq && apt-get install -y -qq google-cloud-cli
           
+          rm -f /usr/lib/python3.12/EXTERNALLY-MANAGED
+
           # Install TheRock from gfx950-dcgpu index
           pip install --break-system-packages --index-url https://rocm.nightlies.amd.com/v2/gfx950-dcgpu/ rocm
           pip install --break-system-packages --index-url https://rocm.nightlies.amd.com/v2/gfx950-dcgpu/ "rocm[libraries,devel]"
@@ -134,6 +135,7 @@ jobs:
           s3_download_uri: 's3://jax-ci-amd/rocm-wheels/${{ github.repository }}/${{ github.ref_name }}/${{ matrix.rocm.release-version }}/release-validation/${{ github.run_number }}/${{ github.run_attempt }}'
       - name: Install Python dependencies
         run: |
+          rm -f /usr/lib/python3.12/EXTERNALLY-MANAGED
           $JAXCI_PYTHON -m pip install uv~=0.11.2
           $JAXCI_PYTHON -m uv pip install -r build/test-requirements.txt
           $JAXCI_PYTHON -m pip install pytest-json-report
