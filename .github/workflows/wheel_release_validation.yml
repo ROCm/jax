@@ -121,6 +121,7 @@ jobs:
           $JAXCI_PYTHON -m pip install uv~=0.11.2
           $JAXCI_PYTHON -m uv pip install -r build/test-requirements.txt
           $JAXCI_PYTHON -m pip install pytest-json-report
+          pip show rocm 2>/dev/null | grep Version
       - name: Wait For Connection
         uses: google-ml-infra/actions/ci_connection@7f5ca0c263a81ed09ea276524c1b9192f1304e3c
         with:
