@@ -116,7 +116,7 @@ jobs:
 
           # Install TheRock from gfx950-dcgpu index
           pip install --break-system-packages --index-url https://rocm.nightlies.amd.com/v2/gfx950-dcgpu/ rocm
-          pip install --break-system-packages --index-url https://rocm.nightlies.amd.com/v2/gfx950-dcgpu/ "rocm[libraries,devel]"
+          pip install --break-system-packages --index-url https://rocm.nightlies.amd.com/v2/gfx950-dcgpu/ "rocm[libraries,devel]==7.13.0a20260514"
           ROCM_SDK_TARGET_FAMILY=gfx950-dcgpu rocm-sdk init --quiet
           ROCM_SDK_ROOT="$(ROCM_SDK_TARGET_FAMILY=gfx950-dcgpu rocm-sdk path --root)"
           rm -rf /opt/rocm && ln -s "${ROCM_SDK_ROOT}" /opt/rocm
