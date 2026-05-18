@@ -101,7 +101,19 @@ jobs:
       - name: Apply TheRock sysdeps fix (hwloc + pciaccess)
         if: matrix.rocm.needs-sysdeps-fix == 'true'
         run: |
-          apt-get update -qq && apt-get install -y -qq python3-pip hwloc libpciaccess0 libnuma1
+
+          apt-get update -qq && apt-get install -y -qq \
+            python3-pip curl hwloc libpciaccess0 libnuma1 \
+            apt-transport-https ca-certificates gnupg
+
+          # Install gcloud CLI (needed by download-jax-rocm-wheels action)
+          curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg \
+            | gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg
+          echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" \
+            | tee /etc/apt/sources.list.d/google-cloud-sdk.list
+          apt-get update -qq && apt-get install -y -qq google-cloud-cli
+          
+          # Install TheRock from gfx950-dcgpu index
           pip install --break-system-packages --index-url https://rocm.nightlies.amd.com/v2/gfx950-dcgpu/ rocm
           pip install --break-system-packages --index-url https://rocm.nightlies.amd.com/v2/gfx950-dcgpu/ "rocm[libraries,devel]"
           ROCM_SDK_TARGET_FAMILY=gfx950-dcgpu rocm-sdk init --quiet
@@ -110,6 +122,7 @@ jobs:
           ln -sf "$(readlink -f /usr/lib/x86_64-linux-gnu/libhwloc.so.15)" /opt/rocm/lib/rocm_sysdeps/lib/librocm_sysdeps_hwloc.so.5
           ln -sf "$(readlink -f /usr/lib/x86_64-linux-gnu/libpciaccess.so.0)" /opt/rocm/lib/rocm_sysdeps/lib/librocm_sysdeps_pciaccess.so.0
           cp /opt/rocm/lib/rocm_sysdeps/lib/*.so* /opt/rocm/lib/
+
       - name: Download JAX/Jaxlib/JAX-ROCm wheels
         uses: ./.github/actions/download-jax-rocm-wheels
         with:
