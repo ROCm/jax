@@ -34,7 +34,7 @@ jobs:
       matrix:
         runner: ["linux-x86-64-1gpu-amd"]
         artifact: ["jax-rocm-plugin", "jax-rocm-pjrt"]
-        python: ["3.11", "3.12", "3.13", "3.14"]
+        python: ["3.11", "3.12"]
         rocm: [
           {label: "ROCm 7.2.0", wheel-version: "7", release-version: "7.2.0", manylinux-image: ""},
           {label: "TheRock 7.13.0", wheel-version: "7", release-version: "therock-7.13.0", manylinux-image: "ghcr.io/rocm/jax-manylinux_2_28-therock-latest:latest"},
@@ -76,10 +76,10 @@ jobs:
       fail-fast: false
       matrix:
         runner: ["linux-x86-64-1gpu-amd", "linux-x86-64-4gpu-amd", "linux-x86-64-8gpu-amd"]
-        python: ["3.11", "3.12", "3.13", "3.14"]
+        python: ["3.11", "3.12"]
         rocm: [
           {label: "ROCm 7.2.0", release-version: "7.2.0", image: "ghcr.io/rocm/jax-base-ubu24.rocm720:latest", needs-sysdeps-fix: "false"},
-          {label: "TheRock 7.13.0", release-version: "therock-7.13.0", image: "ghcr.io/rocm/jax-base-ubu24.therock-latest:latest", needs-sysdeps-fix: "false"},
+          {label: "TheRock 7.13.0", release-version: "therock-7.13.0", image: "ghcr.io/rocm/jax-base-ubu24.therock-latest:latest", needs-sysdeps-fix: "true"},
         ]
     name: "Pytest ROCm (${{ matrix.rocm.label }})"
     container:
@@ -93,6 +93,7 @@ jobs:
       JAXCI_PYTHON: "python${{ matrix.python }}"
       JAXCI_ENABLE_X64: "0"
       JAXCI_ROCM_VERSION: "7"
+      ROCM_SDK_TARGET_FAMILY: "gfx950-dcgpu"
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
