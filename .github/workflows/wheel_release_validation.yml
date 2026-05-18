@@ -123,6 +123,10 @@ jobs:
           ln -sf "$(readlink -f /usr/lib/x86_64-linux-gnu/libhwloc.so.15)" /opt/rocm/lib/rocm_sysdeps/lib/librocm_sysdeps_hwloc.so.5
           ln -sf "$(readlink -f /usr/lib/x86_64-linux-gnu/libpciaccess.so.0)" /opt/rocm/lib/rocm_sysdeps/lib/librocm_sysdeps_pciaccess.so.0
 
+          # Workaround
+          cd /opt/rocm/lib/hipblaslt/library/gfx950/
+          for f in *ID75a0*; do ln -sf "$f" "${f//ID75a0/ID75b0}"; done
+
       - name: Download JAX/Jaxlib/JAX-ROCm wheels
         uses: ./.github/actions/download-jax-rocm-wheels
         with:
