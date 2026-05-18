@@ -34,14 +34,14 @@ jobs:
       matrix:
         runner: ["linux-x86-64-1gpu-amd"]
         artifact: ["jax-rocm-plugin", "jax-rocm-pjrt"]
-        python: ["3.11", "3.12"]
+        python: ["3.12"]
         rocm: [
           {label: "ROCm 7.2.0", wheel-version: "7", release-version: "7.2.0", manylinux-image: ""},
           {label: "TheRock 7.13.0", wheel-version: "7", release-version: "therock-7.13.0", manylinux-image: "ghcr.io/rocm/jax-manylinux_2_28-therock-latest:latest"},
         ]
         exclude:
           - artifact: "jax-rocm-pjrt"
-            python: "3.12"
+            python: "3.11"
           - artifact: "jax-rocm-pjrt"
             python: "3.13"
           - artifact: "jax-rocm-pjrt"
@@ -76,10 +76,10 @@ jobs:
       fail-fast: false
       matrix:
         runner: ["linux-x86-64-1gpu-amd", "linux-x86-64-4gpu-amd", "linux-x86-64-8gpu-amd"]
-        python: ["3.11", "3.12"]
+        python: ["3.12"]
         rocm: [
           {label: "ROCm 7.2.0", release-version: "7.2.0", image: "ghcr.io/rocm/jax-base-ubu24.rocm720:latest", needs-sysdeps-fix: "false"},
-          {label: "TheRock 7.13.0", release-version: "therock-7.13.0", image: "ghcr.io/rocm/jax-base-ubu24.therock-latest:latest", needs-sysdeps-fix: "true"},
+          {label: "TheRock 7.13.0", release-version: "therock-7.13.0", image: "ghcr.io/rocm/no_rocm_image_ubuntu24_04:latest", needs-sysdeps-fix: "true"},
         ]
     name: "Pytest ROCm (${{ matrix.rocm.label }})"
     container:
@@ -87,7 +87,7 @@ jobs:
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
-      options: --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --shm-size 64G --env-file /etc/podinfo/gha-gpu-isolation-settings
+      options: --user root --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --shm-size 64G --env-file /etc/podinfo/gha-gpu-isolation-settings
     env:
       JAXCI_HERMETIC_PYTHON_VERSION: ${{ matrix.python }}
       JAXCI_PYTHON: "python${{ matrix.python }}"
@@ -101,7 +101,9 @@ jobs:
       - name: Apply TheRock sysdeps fix (hwloc + pciaccess)
         if: matrix.rocm.needs-sysdeps-fix == 'true'
         run: |
-          apt-get update -qq && apt-get install -y -qq hwloc libpciaccess0 libnuma1
+          apt-get update -qq && apt-get install -y -qq python3-pip hwloc libpciaccess0 libnuma1
+          pip install --break-system-packages --index-url https://rocm.nightlies.amd.com/v2/gfx950-dcgpu/ rocm
+          pip install --break-system-packages --index-url https://rocm.nightlies.amd.com/v2/gfx950-dcgpu/ "rocm[libraries,devel]"
           ROCM_SDK_TARGET_FAMILY=gfx950-dcgpu rocm-sdk init --quiet
           ROCM_SDK_ROOT="$(ROCM_SDK_TARGET_FAMILY=gfx950-dcgpu rocm-sdk path --root)"
           rm -rf /opt/rocm && ln -s "${ROCM_SDK_ROOT}" /opt/rocm
