@@ -25,7 +25,6 @@ def repo():
         patch_file = [
             "//third_party/xla:shardy_temporary.patch",
             "//third_party/xla:xla_gpu_cublaslt_default.patch",
-            "//third_party/xla:xla_gpu_cublaslt_algorithm3.patch",
 	    "//third_party/xla:xla_nccl_comm_split_deadlock.patch",
         ],
     )
