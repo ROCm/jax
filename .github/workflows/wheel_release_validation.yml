@@ -37,7 +37,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       suffix: ${{ steps.compute.outputs.suffix }}
-      jax-version: ${{ steps.compute.outputs.jax_version }}
+      jax_version: ${{ steps.compute.outputs.jax_version }}
     steps:
       - id: compute
         run: |
