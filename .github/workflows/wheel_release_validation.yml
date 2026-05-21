@@ -14,6 +14,16 @@ on:
         required: false
         default: "no"
         type: string
+      jax-version:
+        description: "JAX version to validate against (e.g., 0.10.0). Leave empty for latest."
+        required: false
+        default: "auto"
+        type: string
+      wheel-version-suffix:
+        description: "Version suffix (e.g., .post1). Use 'auto' to compute from PyPI."
+        required: false
+        default: "auto"
+        type: string
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
@@ -21,6 +31,62 @@ concurrency:
 permissions: {}
 
 jobs:
+
+  compute-post-suffix:
+    if: github.repository_owner == 'ROCm'
+    runs-on: ubuntu-latest
+    outputs:
+      suffix: ${{ steps.compute.outputs.suffix }}
+      jax-version: ${{ steps.compute.outputs.jax_version }}
+    steps:
+      - id: compute
+        run: |
+
+          # Validate jax-version input ("auto", or a valid PEP 440 version)
+          JAX_INPUT="${{ inputs.jax-version }}"
+          if [[ "$JAX_INPUT" != "auto" ]]; then
+            if ! echo "$JAX_INPUT" | grep -qP '^\d+\.\d+\.\d+([a-z]+\d+)?$'; then
+              echo "ERROR: Invalid jax-version format: '$JAX_INPUT'. Use 'auto' or a version (e.g., 0.10.0)"
+              exit 1
+            fi
+          fi
+
+          # Validate wheel-version-suffix input (must be "auto" or a valid
+          # suffix like .post1, .rc1)
+          SUFFIX_INPUT="${{ inputs.wheel-version-suffix }}"
+          if [[ "$SUFFIX_INPUT" != "auto" ]]; then
+            if ! echo "$SUFFIX_INPUT" | grep -qP '^\.(post|rc)\d+$'; then
+              echo "ERROR: Invalid wheel-version-suffix format: '$SUFFIX_INPUT'. Use 'auto' or a suffix (e.g., .post1)"
+              exit 1
+            fi
+          fi
+
+          # Determine JAX version
+          if [[ -n "${{ inputs.jax-version }}" ]]; then
+            BASE_VERSION="${{ inputs.jax-version }}"
+          else
+            BASE_VERSION=$(pip index versions jax 2>/dev/null | head -1 | grep -oP '\(.*?\)' | tr -d '()')
+          fi
+          echo "jax_version=${BASE_VERSION}" >> $GITHUB_OUTPUT
+
+          # Determine suffix
+          if [[ "${{ inputs.wheel-version-suffix }}" != "auto" ]]; then
+            echo "suffix=${{ inputs.wheel-version-suffix }}" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # Auto-detect from PyPI
+          VERSIONS=$(pip index versions jax-rocm7-plugin 2>/dev/null | grep "Available versions" | sed 's/.*: //')
+          LATEST_POST=$(echo "$VERSIONS" | tr ',' '\n' | tr -d ' ' | grep "^${BASE_VERSION}\.post" | sort -V | tail -1)
+
+          if [[ -n "$LATEST_POST" ]]; then
+            N=$(echo "$LATEST_POST" | grep -oP 'post\K\d+')
+            echo "suffix=.post$((N+1))" >> $GITHUB_OUTPUT
+          elif echo "$VERSIONS" | tr ',' '\n' | tr -d ' ' | grep -q "^${BASE_VERSION}$"; then
+            echo "suffix=.post1" >> $GITHUB_OUTPUT
+          else
+            echo "suffix=" >> $GITHUB_OUTPUT
+          fi
 
   build-rocm-artifacts:
     if: github.repository_owner == 'ROCm'
@@ -51,7 +117,7 @@ jobs:
       runner: ${{ matrix.runner }}
       artifact: ${{ matrix.artifact }}
       artifact-type: "release"
-      wheel-version-suffix: ".post1"
+      wheel-version-suffix: ${{ needs.compute-post-suffix.outputs.suffix }}
       python: ${{ matrix.python }}
       rocm-version: ${{ matrix.rocm.wheel-version }}
       rocm-release-version: ${{ matrix.rocm.release-version }}
@@ -134,6 +200,7 @@ jobs:
           rocm-version: "7"
           rocm-release-version: ${{ matrix.rocm.release-version }}
           jaxlib-version: "release"
+          jax-version: ${{ needs.compute-post-suffix.outputs.jax_version }}
           download-jax-from-gcs: '0'
           s3_download_uri: 's3://jax-ci-amd/rocm-wheels/${{ github.repository }}/${{ github.ref_name }}/${{ matrix.rocm.release-version }}/release-validation/${{ github.run_number }}/${{ github.run_attempt }}'
       - name: Install Python dependencies
