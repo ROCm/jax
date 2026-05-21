@@ -145,8 +145,8 @@ jobs:
         runner: ["linux-x86-64-1gpu-amd", "linux-x86-64-4gpu-amd", "linux-x86-64-8gpu-amd"]
         python: ["3.12"]
         rocm: [
-          {label: "ROCm 7.2.0", release-version: "7.2.0", image: "ghcr.io/rocm/jax-base-ubu24.rocm720:latest", needs-sysdeps-fix: "false"},
-          {label: "TheRock 7.13.0", release-version: "therock-7.13.0", image: "ghcr.io/rocm/no_rocm_image_ubuntu24_04:latest", needs-sysdeps-fix: "true"},
+          {label: "ROCm 7.2.0", release-version: "7.2.0", image: "ghcr.io/rocm/jax-base-ubu24.rocm720:latest"},
+          {label: "TheRock 7.13.0", release-version: "therock-7.13.0", image: "ghcr.io/rocm/jax-base-ubu24.therock-7.13.0a20260515:latest"},
         ]
     name: "Pytest ROCm (${{ matrix.rocm.label }})"
     container:
@@ -165,35 +165,6 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
-      - name: Apply TheRock sysdeps fix (hwloc + pciaccess)
-        if: matrix.rocm.needs-sysdeps-fix == 'true'
-        run: |
-          apt-get update -qq && apt-get install -y -qq \
-            python3-pip curl hwloc libpciaccess0 libnuma1 \
-            apt-transport-https ca-certificates gnupg
-
-          # Install gcloud CLI (needed by download-jax-rocm-wheels action)
-          curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg \
-            | gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg
-          echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" \
-            | tee /etc/apt/sources.list.d/google-cloud-sdk.list
-          apt-get update -qq && apt-get install -y -qq google-cloud-cli
-          
-          rm -f /usr/lib/python3.12/EXTERNALLY-MANAGED
-
-          # Install TheRock from gfx950-dcgpu index
-          pip install --break-system-packages --index-url https://rocm.nightlies.amd.com/v2/gfx950-dcgpu/ rocm
-          pip install --break-system-packages --index-url https://rocm.nightlies.amd.com/v2/gfx950-dcgpu/ "rocm[libraries,devel]"
-          ROCM_SDK_TARGET_FAMILY=gfx950-dcgpu rocm-sdk init --quiet
-          ROCM_SDK_ROOT="$(ROCM_SDK_TARGET_FAMILY=gfx950-dcgpu rocm-sdk path --root)"
-          rm -rf /opt/rocm && ln -s "${ROCM_SDK_ROOT}" /opt/rocm
-          ln -sf "$(readlink -f /usr/lib/x86_64-linux-gnu/libhwloc.so.15)" /opt/rocm/lib/rocm_sysdeps/lib/librocm_sysdeps_hwloc.so.5
-          ln -sf "$(readlink -f /usr/lib/x86_64-linux-gnu/libpciaccess.so.0)" /opt/rocm/lib/rocm_sysdeps/lib/librocm_sysdeps_pciaccess.so.0
-
-          # Workaround
-          cd /opt/rocm/lib/hipblaslt/library/gfx950/
-          for f in *ID75a0*; do ln -sf "$f" "${f//ID75a0/ID75b0}"; done
-
       - name: Download JAX/Jaxlib/JAX-ROCm wheels
         uses: ./.github/actions/download-jax-rocm-wheels
         with:
