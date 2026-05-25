@@ -679,6 +679,11 @@ async def main():
       wheel_build_command_base.append(
           f"--action_env=TF_ROCM_AMDGPU_TARGETS={args.rocm_amdgpu_targets}"
       )
+    if not args.rocm_version:
+      logging.debug("ROCm version not supplied")
+      args.rocm_verion = str(utils.detect_rocm_major_version(args.rocm_path or
+                                                       "/opt/rocm"))
+
 
   if "oneapi" in args.wheels:
     wheel_build_command_base.append("--config=oneapi")

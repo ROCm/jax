@@ -288,3 +288,27 @@ def is_linux_x86_64(arch: str, os_name: str):
 def is_linux_aarch64(arch: str, os_name: str):
   """Returns true if the architecture is Linux aarch64."""
   return arch == "aarch64" and os_name == "linux"
+
+def detect_rocm_major_version(rocm_path: str = "/opt/rocm") -> int:
+  """Read the ROCm install's version file and return the major version.
+  Raise:
+    RuntimeError: if the version file cannot be read or parsed
+  """
+  version_file = os.path.join(rocm_path, ".info", "version")
+  try:
+    with open(version_file) as f:
+      version_str = f.read().strip()
+  except OSError as e:
+    raise RuntimeError(
+      f"Could not read ROCm version from {version_file}: {e}. "
+      "Pass --rocm_version explicitly or ensure ROCm is installed at "
+      f"{rocm_path}."
+    ) from e
+  major_str = version_str.split(".", 1)[0].split("-", 1)[0]
+  try:
+    return int(major_str)
+  except ValueError as e:
+    raise RuntimeError(
+      f"Could not parse ROCm major version from {version_file!r} "
+      f"(contents: {version_str!r})."
+    ) from e

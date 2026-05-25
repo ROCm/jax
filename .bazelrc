@@ -584,3 +584,5 @@ try-import %workspace%/.jax_configure.bazelrc
 
 # Load rc file with user-specific options.
 try-import %workspace%/.bazelrc.user
+# Load the ROCm RC file to make the rocm bazel targets available
+try-import %workspace%/build/rocm/rocm.bazelrc
