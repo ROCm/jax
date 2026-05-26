@@ -27,13 +27,10 @@ common:rocm_clang_hermetic --@rules_ml_toolchain//common:enable_cuda=False
 common:rocm_clang_hermetic --@rules_ml_toolchain//common:enable_sycl=False
 common:rocm_clang_hermetic --@rules_ml_toolchain//common:enable_hermetic_cc=True
 common:rocm_clang_hermetic --strategy=CppLink=local
+common:rocm_clang_hermetic --repo_env=SYSROOT_DIST=linux_glibc_2_35
+common:rocm_clang_hermetic --@rules_ml_toolchain//common:static_libcxx=True
 
-# ROCm with hermetic clang but local (system) sysroot
-# Use this when ROCm libraries are built against system libstdc++ to avoid ABI mismatches
-common:rocm_clang_hermetic_local_sysroot --config=rocm_clang_hermetic
-common:rocm_clang_hermetic_local_sysroot --@rules_ml_toolchain//cc/sysroots:use_local_sysroot=True
-
-build:rocm_release_wheel --config=rocm_clang_hermetic_local_sysroot
+build:rocm_release_wheel --config=rocm_clang_hermetic
 build:rocm_release_wheel --@local_config_rocm//rocm:rocm_path_type=link_only
 
 test:rocm --test_timeout=920,2400,7200,9600
