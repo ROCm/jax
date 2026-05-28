@@ -21,6 +21,8 @@ import argparse
 import functools
 import os
 import pathlib
+import stat
+import subprocess
 import tempfile
 
 from python.runfiles import runfiles
@@ -155,6 +157,80 @@ def prepare_wheel_cuda(
   )
 
 
+# Every known TheRock target family produced by the per-GPU-family pip index
+# (e.g. https://rocm.nightlies.amd.com/v2/<family>/). The multi-arch index
+# (whl-multi-arch) instead ships a single _rocm_sdk_libraries package and a
+# split _rocm_sdk_{core,devel,libraries} layout. Loader silently skips
+# entries whose dirs don't exist, so one wheel covers all variants.
+_THEROCK_TARGET_FAMILIES = (
+    "gfx950-dcgpu",
+    "gfx94X-dcgpu",
+    "gfx90a",
+    "gfx90X-dcgpu",
+    "gfx908",
+    "gfx906",
+    "gfx900",
+    "gfx120X-all",
+    "gfx1153",
+    "gfx1152",
+    "gfx1151",
+    "gfx1150",
+    "gfx110X-all",
+    "gfx103X-all",
+    "gfx101X-dgpu",
+)
+
+
+def _set_rocm_runpath(so_path: str):
+  """Patch RUNPATH on a ROCm consumer .so so it resolves ROCm libs across
+  per-GPU-family and multi-arch TheRock pip wheels, /opt/rocm-<ver> tarballs,
+  legacy /opt/rocm, and cross-Python pip installs where TheRock and the JAX
+  wheel live under different python<X.Y>/dist-packages directories."""
+  # _rocm_sdk_libraries/lib is listed before _rocm_sdk_devel/lib so that
+  # libs hard-linked into both packages (e.g. libhipblaslt.so.1) resolve to
+  # the libraries copy, where their sibling library/<arch>/ kernel-data dirs
+  # actually live; the devel copy only holds a partial library/ tree.
+  multi_arch_libs = (
+      "_rocm_sdk_core/lib",
+      "_rocm_sdk_libraries/lib",
+      "_rocm_sdk_devel/lib",
+  )
+  family_libs = tuple(
+      f"_rocm_sdk_libraries_{f.replace('-', '_')}/lib"
+      for f in _THEROCK_TARGET_FAMILIES
+  )
+  # Same-Python: kernels are 1-deep ($ORIGIN/..), pjrt is 2-deep
+  # ($ORIGIN/../..); include both since loader silently skips wrong-depth.
+  same_py = ("$ORIGIN/..", "$ORIGIN/../..")
+  # Cross-Python: same depths +1 (to reach the lib root above pythonX.Y), with
+  # python3.<m>/dist-packages appended. The minor range covers currently
+  # supported CPython releases.
+  cross_py = tuple(
+      f"{up}/python3.{m}/dist-packages"
+      for up in ("$ORIGIN/../../..", "$ORIGIN/../../../..")
+      for m in range(9, 16)
+  )
+
+  entries = []
+  for p in same_py:
+    entries += [f"{p}/{r}" for r in multi_arch_libs + family_libs]
+  # Per-family installs are arch-pinned and always single-Python, so the
+  # cross-Python prefix only needs the multi-arch package roots.
+  for p in cross_py:
+    entries += [f"{p}/{r}" for r in multi_arch_libs]
+  entries.append("/opt/rocm/lib")
+
+  runpath = ":".join(entries)
+  fix_perms = False
+  perms = os.stat(so_path).st_mode
+  if not perms & stat.S_IWUSR:
+    fix_perms = True
+    os.chmod(so_path, perms | stat.S_IWUSR)
+  subprocess.check_call(["patchelf", "--set-rpath", runpath, so_path])
+  if fix_perms:
+    os.chmod(so_path, perms)
+
+
 def prepare_wheel_rocm(
     wheel_sources_path: pathlib.Path, *, cpu, rocm_version, wheel_sources
 ):
@@ -204,6 +280,18 @@ def prepare_wheel_rocm(
           f"{source_file_prefix}jaxlib/version.py",
       ],
   )
+
+  for so_file in [
+      f"_linalg.{pyext}",
+      f"_prng.{pyext}",
+      f"_solver.{pyext}",
+      f"_sparse.{pyext}",
+      f"_hybrid.{pyext}",
+      f"_rnn.{pyext}",
+      f"_triton.{pyext}",
+      f"rocm_plugin_extension.{pyext}",
+  ]:
+    _set_rocm_runpath(str(plugin_dir / so_file))
 
 
 def prepare_wheel_oneapi(
