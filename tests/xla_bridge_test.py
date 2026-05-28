@@ -32,6 +32,20 @@ mock = absltest.mock
 
 class XlaBridgeTest(jtu.JaxTestCase):
 
+  def setUp(self):
+    super().setUp()
+    self._orig_pjrt_env = os.environ.get("PJRT_NAMES_AND_LIBRARY_PATHS")
+    self._orig_factories = xb._backend_factories
+    xb._backend_factories = dict(self._orig_factories)
+
+  def tearDown(self):
+    super().tearDown()
+    xb._backend_factories = self._orig_factories
+    if self._orig_pjrt_env is None:
+      os.environ.pop("PJRT_NAMES_AND_LIBRARY_PATHS", None)
+    else:
+      os.environ["PJRT_NAMES_AND_LIBRARY_PATHS"] = self._orig_pjrt_env
+
   def test_set_device_assignment_no_partition(self):
     compile_options = compiler.get_compile_options(
         num_replicas=4, num_partitions=1, device_assignment=[0, 1, 2, 3])
