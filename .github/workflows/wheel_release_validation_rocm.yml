@@ -146,7 +146,7 @@ jobs:
         python: ["3.11", "3.12", "3.13", "3.14"]
         rocm: [
           {label: "ROCm 7.2.0", release-version: "7.2.0", image: "ghcr.io/rocm/jax-base-ubu24.rocm720:latest"},
-          {label: "TheRock 7.13.0", release-version: "therock-7.13.0", image: "ghcr.io/rocm/jax-base-ubu24.therock-7.13.0a20260515:latest"},
+          {label: "TheRock 7.13.0", release-version: "therock-7.13.0", image: "ghcr.io/rocm/jax-base-ubu24.therock-7.13.0:latest"},
         ]
     name: "Pytest ROCm (${{ matrix.rocm.label }})"
     container:
