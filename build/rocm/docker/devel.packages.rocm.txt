@@ -1,0 +1,7 @@
+# All required ROCM packages
+rocm-ml-sdk
+rocm-dev
+
+# Other build-related tools
+libtool
+zlib1g-dev

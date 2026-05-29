@@ -1,0 +1,59 @@
+################################################################################
+ARG BASE_IMAGE=ubuntu:22.04@sha256:58b87898e82351c6cf9cf5b9f3c20257bb9e2dcf33af051e12ce532d7f94e3fe
+FROM $BASE_IMAGE AS devel
+# See https://docs.docker.com/reference/dockerfile/#understand-how-arg-and-from-interact
+# on why we cannot reference BASE_IMAGE again unless we declare it again.
+################################################################################
+
+# Install devtoolset build dependencies
+COPY setup.sources.sh /setup.sources.sh
+COPY setup.packages.sh /setup.packages.sh
+COPY builder.packages.txt /builder.packages.txt
+
+RUN /setup.sources.sh && /setup.packages.sh /builder.packages.txt
+
+# Setup Python
+COPY setup.python.sh /setup.python.sh
+COPY builder.requirements.txt /builder.requirements.txt
+
+# Since we are using python3.12 as the default python version, we need to
+# install python3.12 last for now.
+# TODO(b/376338367): switch to pyenv.
+RUN /setup.python.sh python3.12 /builder.requirements.txt
+
+# bazelisk
+RUN wget https://github.com/bazelbuild/bazelisk/releases/download/v1.21.0/bazelisk-linux-amd64 -O /usr/local/bin/bazel && chmod +x /usr/local/bin/bazel
+
+# Install ROCm packages
+ARG GPU_DEVICE_TARGETS="gfx908,gfx90a,gfx942,gfx950,gfx1030,gfx1100,gfx1101,gfx1102,gfx1200,gfx1201"
+ENV GPU_DEVICE_TARGETS=${GPU_DEVICE_TARGETS}
+ENV TF_ROCM_AMDGPU_TARGETS=${GPU_DEVICE_TARGETS}
+ARG ROCM_VERSION=6.2.0
+ARG CUSTOM_INSTALL
+ARG ROCM_PATH=/opt/rocm-${ROCM_VERSION}
+ENV ROCM_PATH=${ROCM_PATH}
+COPY ${CUSTOM_INSTALL} /${CUSTOM_INSTALL}
+COPY setup.rocm.sh /setup.rocm.sh
+COPY devel.packages.rocm.txt /devel.packages.rocm.txt
+RUN /setup.rocm.sh $ROCM_VERSION jammy
+
+
+
+
+# Setup links for TensorFlow to compile.
+# Referenced in devel.usertools/*.bazelrc.
+# Set python3.12 as the default python version.
+# TF does not support python3.13.
+RUN ln -sf /usr/bin/python3.12 /usr/bin/python3
+RUN ln -sf /usr/bin/python3.12 /usr/bin/python
+RUN ln -sf /usr/lib/python3.12 /usr/lib/tf_python
+
+
+# Setup ENV variables for tensorflow pip build
+ENV TF_NEED_ROCM=1
+ENV TF_ROCM_GCC=1
+ENV ROCM_TOOLKIT_PATH=${ROCM_PATH}
+
+# Don't use the bazel cache when a new docker image is created.
+RUN echo build --action_env=DOCKER_CACHEBUSTER=$(date +%s%N)$RANDOM >> /etc/bazel.bazelrc
+RUN echo build --host_action_env=DOCKER_HOST_CACHEBUSTER=$(date +%s%N)$RANDOM >> /etc/bazel.bazelrc
