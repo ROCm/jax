@@ -12,8 +12,11 @@ inputs:
   rocm-release-version:
     description: "Release version for S3 LATEST pointer resolution (e.g., 7.2.0 or therock-latest). Defaults to rocm-version."
     default: ""
+  jax-version:
+    description: "JAX/jaxlib version to download (empty for latest release from PyPI)"
+    default: ""
   jaxlib-version:
-    description: "Which jaxlib version to download? (head/pypi_latest)"
+    description: "Which jaxlib version to download? (head/pypi_latest/release)"
     default: "head"
   download-jax-from-gcs:
     description: "Whether to download the jax wheel from GCS"
@@ -116,6 +119,40 @@ runs:
           elif [[ ${INPUTS_JAXLIB_VERSION} == "pypi_latest" ]]; then
             PYTHON=python${INPUTS_PYTHON}
             $PYTHON -m pip download jaxlib jax-rocm${JAXCI_ROCM_VERSION}-pjrt jax-rocm${JAXCI_ROCM_VERSION}-plugin --dest $(pwd)/dist/
+          elif [[ ${INPUTS_JAXLIB_VERSION} == "release" ]]; then
+            PYTHON_BIN="python${INPUTS_PYTHON}"
+            if [[ -n "${INPUTS_JAX_VERSION}" ]]; then
+              "${PYTHON_BIN}" -m pip download "jax==${INPUTS_JAX_VERSION}" "jaxlib==${INPUTS_JAX_VERSION}" --no-deps --dest "$(pwd)/dist/"
+            else
+              "${PYTHON_BIN}" -m pip download jax jaxlib --no-deps --dest "$(pwd)/dist/"
+            fi
+
+            # Resolve ROCm plugin/PJRT wheels path via CloudFront.
+            ROCM_WHEELS_BASE_URL="https://d22q5eopkfeftw.cloudfront.net"
+            if [[ "${INPUTS_S3_DOWNLOAD_URI}" == "latest" ]]; then
+              LATEST_KEY="rocm-wheels/${GITHUB_REPOSITORY}/${GITHUB_REF_NAME}/${INPUTS_ROCM_FULL_VERSION}/LATEST"
+              RESOLVED_S3_URI=$(curl -fsSL "${ROCM_WHEELS_BASE_URL}/${LATEST_KEY}" | tr -d '[:space:]')
+              WHEELS_PATH="${RESOLVED_S3_URI#s3://jax-ci-amd/}"
+              echo "Resolved LATEST pointer to: ${WHEELS_PATH}"
+            else
+              WHEELS_PATH="${INPUTS_S3_DOWNLOAD_URI#s3://jax-ci-amd/}"
+            fi
+
+            WHEELS_URL="${ROCM_WHEELS_BASE_URL}/${WHEELS_PATH%/}"
+            echo "Downloading ROCm wheels from ${WHEELS_URL}..."
+
+            LISTING=$(curl -fsSL "${WHEELS_URL}/")
+            FILES=$(echo "$LISTING" | grep -oE 'href="[^"]+\.whl"' | cut -d'"' -f2 || true)
+            PJRT_FILE=$(echo "$FILES" | grep "jax_rocm${JAXCI_ROCM_VERSION}_pjrt-" | head -n1 || true)
+            PLUGIN_FILE=$(echo "$FILES" | grep "jax_rocm${JAXCI_ROCM_VERSION}_plugin-" | grep "${PYTHON_MAJOR_MINOR}" | head -n1 || true)
+
+            if [[ -z "${PJRT_FILE}" || -z "${PLUGIN_FILE}" ]]; then
+              echo "Could not find ROCm PJRT or plugin wheels in ${WHEELS_URL}"
+              exit 1
+            fi
+
+            "${PYTHON_BIN}" -m pip download --dest "$(pwd)/dist" "${WHEELS_URL}/${PJRT_FILE}" "${WHEELS_URL}/${PLUGIN_FILE}"
+
           else
             echo "Invalid jaxlib version: ${INPUTS_JAXLIB_VERSION}"
             exit 1
@@ -125,6 +162,7 @@ runs:
         INPUTS_DOWNLOAD_JAX_FROM_GCS: ${{ inputs.download-jax-from-gcs }}
         INPUTS_GCS_DOWNLOAD_URI: ${{ inputs.gcs_download_uri }}
         INPUTS_SKIP_DOWNLOAD_JAXLIB_AND_PLUGINS_FROM_GCS: ${{ inputs.skip-download-jaxlib-and-plugins-from-gcs }}
+        INPUTS_JAX_VERSION: ${{ inputs.jax-version }}
         INPUTS_JAXLIB_VERSION: ${{ inputs.jaxlib-version }}
         INPUTS_PYTHON: ${{ inputs.python }}
         INPUTS_S3_DOWNLOAD_URI: ${{ inputs.s3_download_uri }}
