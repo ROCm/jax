@@ -59,6 +59,14 @@ on:
         options:
         - 'yes'
         - 'no'
+      artifact-type:
+        description: "Artifact type (default/nightly/release)"
+        type: choice
+        default: "default"
+        options:
+        - "default"
+        - "nightly"
+        - "release"
   workflow_call:
     inputs:
       runner:
@@ -105,6 +113,10 @@ on:
         description: 'Should this workflow run wait for a remote connection?'
         type: string
         default: 'no'
+      artifact-type:
+        description: "Artifact type (default/nightly/release)"
+        type: string
+        default: "default"
     outputs:
       s3_upload_uri:
         description: "S3 location prefix to where the artifacts were uploaded"
@@ -138,6 +150,7 @@ jobs:
       JAXCI_HERMETIC_PYTHON_VERSION: "${{ inputs.python }}"
       JAXCI_CLONE_MAIN_XLA: "${{ inputs.clone_main_xla }}"
       JAXCI_OUTPUT_DIR: "${{ github.workspace }}/dist"
+      JAXCI_ARTIFACT_TYPE: ${{ inputs.artifact-type }}
 
     name: "${{ inputs.artifact }}, py ${{ inputs.python }}, ROCm ${{ inputs.rocm-version }}"
 

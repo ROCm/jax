@@ -1,0 +1,189 @@
+# CI - Release Validation (ROCm)
+#
+# Standalone workflow for validating ROCm release wheels.
+# Builds ROCm plugin/PJRT wheels, installs jax/jaxlib from PyPI,
+# downloads ROCm wheels from S3, and runs the pytest suite.
+# Supports both Legacy ROCm and TheRock.
+name: CI - Release Validation (ROCm)
+
+on:
+  workflow_dispatch:
+    inputs:
+      halt-for-connection:
+        description: "Should this workflow run wait for a remote connection? (yes/no)"
+        required: false
+        default: "no"
+        type: string
+      jax-version:
+        description: "JAX version to validate against (e.g., 0.10.0). Leave empty for latest."
+        required: false
+        default: "auto"
+        type: string
+      wheel-version-suffix:
+        description: "Version suffix (e.g., .post1). Use 'auto' to compute from PyPI."
+        required: false
+        default: "auto"
+        type: string
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+
+  compute-post-suffix:
+    if: github.repository_owner == 'ROCm'
+    runs-on: ubuntu-latest
+    outputs:
+      suffix: ${{ steps.compute.outputs.suffix }}
+      jax_version: ${{ steps.compute.outputs.jax_version }}
+    steps:
+      - id: compute
+        run: |
+
+          # Validate jax-version input ("auto", or a valid PEP 440 version)
+          JAX_INPUT="${{ inputs.jax-version }}"
+          if [[ "$JAX_INPUT" != "auto" ]]; then
+            if ! echo "$JAX_INPUT" | grep -qP '^\d+\.\d+\.\d+([a-z]+\d+)?$'; then
+              echo "ERROR: Invalid jax-version format: '$JAX_INPUT'. Use 'auto' or a version (e.g., 0.10.0)"
+              exit 1
+            fi
+          fi
+
+          # Validate wheel-version-suffix input (must be "auto" or a valid
+          # suffix like .post1, .rc1)
+          SUFFIX_INPUT="${{ inputs.wheel-version-suffix }}"
+          if [[ "$SUFFIX_INPUT" != "auto" ]]; then
+            if ! echo "$SUFFIX_INPUT" | grep -qP '^\.(post|rc)\d+$'; then
+              echo "ERROR: Invalid wheel-version-suffix format: '$SUFFIX_INPUT'. Use 'auto' or a suffix (e.g., .post1)"
+              exit 1
+            fi
+          fi
+
+          # Determine JAX version
+          if [[ "${{ inputs.jax-version }}" != "auto" ]]; then
+            BASE_VERSION="${{ inputs.jax-version }}"
+          else
+            BASE_VERSION=$(pip index versions jax 2>/dev/null | head -1 | grep -oP '\(.*?\)' | tr -d '()')
+          fi
+          echo "jax_version=${BASE_VERSION}" >> $GITHUB_OUTPUT
+
+          # Determine suffix
+          if [[ "${{ inputs.wheel-version-suffix }}" != "auto" ]]; then
+            echo "suffix=${{ inputs.wheel-version-suffix }}" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # Auto-detect from PyPI
+          VERSIONS=$(pip index versions jax-rocm7-plugin 2>/dev/null | grep "Available versions" | sed 's/.*: //')
+          LATEST_POST=$(echo "$VERSIONS" | tr ',' '\n' | tr -d ' ' | grep "^${BASE_VERSION}\.post" | sort -V | tail -1)
+
+          if [[ -n "$LATEST_POST" ]]; then
+            N=$(echo "$LATEST_POST" | grep -oP 'post\K\d+')
+            echo "suffix=.post$((N+1))" >> $GITHUB_OUTPUT
+          elif echo "$VERSIONS" | tr ',' '\n' | tr -d ' ' | grep -q "^${BASE_VERSION}$"; then
+            echo "suffix=.post1" >> $GITHUB_OUTPUT
+          else
+            echo "suffix=" >> $GITHUB_OUTPUT
+          fi
+
+  build-rocm-artifacts:
+    if: github.repository_owner == 'ROCm'
+    needs: [compute-post-suffix]
+    uses: ./.github/workflows/build_rocm_artifacts.yml
+    permissions:
+      id-token: write
+      contents: read
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: ["linux-x86-64-1gpu-amd"]
+        artifact: ["jax-rocm-plugin", "jax-rocm-pjrt"]
+        python: ["3.11", "3.12", "3.13", "3.14"]
+        rocm: [
+          {label: "ROCm 7.2.0", wheel-version: "7", release-version: "7.2.0", manylinux-image: ""},
+          {label: "TheRock 7.13.0", wheel-version: "7", release-version: "therock-7.13.0", manylinux-image: "ghcr.io/rocm/jax-manylinux_2_28-therock-latest:latest"},
+        ]
+        exclude:
+          - artifact: "jax-rocm-pjrt"
+            python: "3.12"
+          - artifact: "jax-rocm-pjrt"
+            python: "3.13"
+          - artifact: "jax-rocm-pjrt"
+            python: "3.14"
+    name: "Build ROCm artifacts (${{ matrix.rocm.label }})"
+    with:
+      runner: ${{ matrix.runner }}
+      artifact: ${{ matrix.artifact }}
+      artifact-type: "release"
+      wheel-version-suffix: ${{ needs.compute-post-suffix.outputs.suffix }}
+      python: ${{ matrix.python }}
+      rocm-version: ${{ matrix.rocm.wheel-version }}
+      rocm-release-version: ${{ matrix.rocm.release-version }}
+      manylinux-image: ${{ matrix.rocm.manylinux-image }}
+      clone_main_xla: 0
+      upload_artifacts_to_s3: true
+      s3_upload_uri: 's3://jax-ci-amd/rocm-wheels/${{ github.repository }}/${{ github.ref_name }}/${{ matrix.rocm.release-version }}/release-validation/${{ github.run_number }}/${{ github.run_attempt }}'
+
+  run-pytest-rocm:
+    if: ${{ !cancelled() && github.repository_owner == 'ROCm' }}
+    needs: [compute-post-suffix, build-rocm-artifacts]
+    defaults:
+      run:
+        shell: bash
+    runs-on: ${{ matrix.runner }}
+    continue-on-error: true
+    permissions:
+      id-token: write
+      contents: read
+      checks: write
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: ["linux-x86-64-1gpu-amd", "linux-x86-64-4gpu-amd", "linux-x86-64-8gpu-amd"]
+        python: ["3.11", "3.12", "3.13", "3.14"]
+        rocm: [
+          {label: "ROCm 7.2.0", release-version: "7.2.0", image: "ghcr.io/rocm/jax-base-ubu24.rocm720:latest"},
+          {label: "TheRock 7.13.0", release-version: "therock-7.13.0", image: "ghcr.io/rocm/jax-base-ubu24.therock-7.13.0a20260515:latest"},
+        ]
+    name: "Pytest ROCm (${{ matrix.rocm.label }})"
+    container:
+      image: ${{ matrix.rocm.image }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+      options: --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --shm-size 64G --env-file /etc/podinfo/gha-gpu-isolation-settings
+    env:
+      JAXCI_HERMETIC_PYTHON_VERSION: ${{ matrix.python }}
+      JAXCI_PYTHON: "python${{ matrix.python }}"
+      JAXCI_ENABLE_X64: "0"
+      JAXCI_ROCM_VERSION: "7"
+      ROCM_SDK_TARGET_FAMILY: "gfx950-dcgpu"
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Download JAX/Jaxlib/JAX-ROCm wheels
+        uses: ./.github/actions/download-jax-rocm-wheels
+        with:
+          python: ${{ matrix.python }}
+          rocm-version: "7"
+          rocm-release-version: ${{ matrix.rocm.release-version }}
+          jaxlib-version: "release"
+          jax-version: ${{ needs.compute-post-suffix.outputs.jax_version }}
+          download-jax-from-gcs: '0'
+          s3_download_uri: 's3://jax-ci-amd/rocm-wheels/${{ github.repository }}/${{ github.ref_name }}/${{ matrix.rocm.release-version }}/release-validation/${{ github.run_number }}/${{ github.run_attempt }}'
+      - name: Install Python dependencies
+        run: |
+          $JAXCI_PYTHON -m pip install uv~=0.11.2
+          $JAXCI_PYTHON -m uv pip install -r build/test-requirements.txt
+          $JAXCI_PYTHON -m pip install pytest-json-report
+      - name: Wait For Connection
+        uses: google-ml-infra/actions/ci_connection@7f5ca0c263a81ed09ea276524c1b9192f1304e3c
+        with:
+          halt-dispatch-input: ${{ inputs.halt-for-connection }}
+      - name: Run Pytest ROCm tests
+        timeout-minutes: 120
+        run: ./ci/run_pytest_rocm.sh
