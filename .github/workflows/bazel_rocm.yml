@@ -169,6 +169,29 @@ jobs:
             grep -i docker-content-digest | awk '{print $2}' | tr -d '\r\n')
           echo "RBE image: ${IMAGE}@${DIGEST}"
           echo "rbe_image=${IMAGE}@${DIGEST}" >> "$GITHUB_OUTPUT"
+      - name: Strip /opt/rocm symlink (TEST-ONLY, verifies wheel rpath resolution)
+        # On TheRock dev images /opt/rocm is a symlink to the rocm-sdk install
+        # tree. Remove it so tests exercise only the $ORIGIN-relative RUNPATH
+        # entries baked into the rocm plugin/pjrt wheels by
+        # build/rocm/.../prepare_wheel_rocm. On non-TheRock (apt-installed)
+        # images /opt/rocm is a real directory and we leave it alone.
+        run: |
+          set -x
+          ls -la /opt/rocm || true
+          # Gate on `rocm-sdk` being available, not just on /opt/rocm being a
+          # symlink. Legacy apt-installed ROCm images (e.g. rocm720) point
+          # /opt/rocm at /etc/alternatives/rocm via update-alternatives, so the
+          # symlink test alone matches there too even though no rocm-sdk pip
+          # package is installed and the strip is not applicable.
+          if ! command -v rocm-sdk >/dev/null 2>&1; then
+            echo "SKIP: rocm-sdk not on PATH (not a TheRock image); leaving /opt/rocm intact"
+          elif [ -L /opt/rocm ]; then
+            SDK_ROOT=$(rocm-sdk path --root)
+            rm -f /opt/rocm
+            test ! -e /opt/rocm && echo "OK: /opt/rocm symlink removed"
+          else
+            echo "SKIP: /opt/rocm is not a symlink (likely apt-installed ROCm); leaving intact"
+          fi
       - name: "Bazel ROCm tests with build_jax=${{ inputs.build_jax }}, build_jaxlib=${{ inputs.build_jaxlib }}"
         timeout-minutes: 120
         env:
