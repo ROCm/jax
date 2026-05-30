@@ -174,12 +174,23 @@ jobs:
             grep -i docker-content-digest | awk '{print $2}' | tr -d '\r\n')
           echo "RBE image: ${IMAGE}@${DIGEST}"
           echo "rbe_image=${IMAGE}@${DIGEST}" >> "$GITHUB_OUTPUT"
-      - name: Strip /opt/rocm symlink (TEST-ONLY, verifies wheel rpath resolution)
+      - name: Strip /opt/rocm symlink + RCCL HSA workaround (TEST-ONLY)
         # On TheRock dev images /opt/rocm is a symlink to the rocm-sdk install
         # tree. Remove it so tests exercise only the $ORIGIN-relative RUNPATH
         # entries baked into the rocm plugin/pjrt wheels by
         # build/rocm/.../prepare_wheel_rocm. On non-TheRock (apt-installed)
         # images /opt/rocm is a real directory and we leave it alone.
+        #
+        # RCCL bug workaround: rccl/src/misc/rocmwrap.cc:~98 calls
+        # dlopen("libhsa-runtime64.so") with the unversioned name. The
+        # unversioned symlink only ships in _rocm_sdk_devel/lib (i.e. /opt/rocm/lib)
+        # in TheRock's multi-arch packaging; the runtime _rocm_sdk_core/lib
+        # only has the versioned libhsa-runtime64.so.1 (the SONAME). Without
+        # /opt/rocm, RCCL's dlopen returns NULL and every multi-GPU collective
+        # fails with "Failed to find ROCm runtime library in (null)
+        # (RCCL_ROCR_PATH=(null))". Mirror the unversioned name into
+        # _rocm_sdk_core/lib so RCCL finds it via librccl's RUNPATH.
+        # Permanent fix is upstream: ROCm/rccl should dlopen libhsa-runtime64.so.1.
         run: |
           set -x
           ls -la /opt/rocm || true
@@ -194,6 +205,12 @@ jobs:
             SDK_ROOT=$(rocm-sdk path --root)
             rm -f /opt/rocm
             test ! -e /opt/rocm && echo "OK: /opt/rocm symlink removed"
+            CORE_LIB="$(dirname "$SDK_ROOT")/_rocm_sdk_core/lib"
+            if [ -e "$CORE_LIB/libhsa-runtime64.so.1" ] && [ ! -e "$CORE_LIB/libhsa-runtime64.so" ]; then
+              ln -s libhsa-runtime64.so.1 "$CORE_LIB/libhsa-runtime64.so"
+              echo "OK: created $CORE_LIB/libhsa-runtime64.so -> libhsa-runtime64.so.1"
+            fi
+            ls -la "$CORE_LIB"/libhsa-runtime64.so* 2>/dev/null || true
           else
             echo "SKIP: /opt/rocm is not a symlink (likely apt-installed ROCm); leaving intact"
           fi
