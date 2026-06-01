@@ -29,16 +29,11 @@ ARG GPU_DEVICE_TARGETS="gfx908,gfx90a,gfx942,gfx950,gfx1030,gfx1100,gfx1101,gfx1
 ENV GPU_DEVICE_TARGETS=${GPU_DEVICE_TARGETS}
 ENV TF_ROCM_AMDGPU_TARGETS=${GPU_DEVICE_TARGETS}
 ARG ROCM_VERSION=6.2.0
-ARG CUSTOM_INSTALL
 ARG ROCM_PATH=/opt/rocm-${ROCM_VERSION}
 ENV ROCM_PATH=${ROCM_PATH}
-COPY ${CUSTOM_INSTALL} /${CUSTOM_INSTALL}
 COPY setup.rocm.sh /setup.rocm.sh
 COPY devel.packages.rocm.txt /devel.packages.rocm.txt
 RUN /setup.rocm.sh $ROCM_VERSION jammy
-
-
-
 
 # Setup links for TensorFlow to compile.
 # Referenced in devel.usertools/*.bazelrc.
@@ -47,7 +42,6 @@ RUN /setup.rocm.sh $ROCM_VERSION jammy
 RUN ln -sf /usr/bin/python3.12 /usr/bin/python3
 RUN ln -sf /usr/bin/python3.12 /usr/bin/python
 RUN ln -sf /usr/lib/python3.12 /usr/lib/tf_python
-
 
 # Setup ENV variables for tensorflow pip build
 ENV TF_NEED_ROCM=1

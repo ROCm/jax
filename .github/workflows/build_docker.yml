@@ -1,40 +1,43 @@
 name: Build docker
 
 on:
+  push:
+    branches:
+      - hhs/add_docker_for_jax_xla
   workflow_call:
     inputs:
       rocm-version:
-        required: true
+        required: false
         type: string
       runner-label:
         required: false
+        default: linux-x86-64-1gpu-amd
         type: string
-      artifact-prefix:
-        required: false
-        default: 'plugin_wheels'
-        type: string
-      extra-cr-tag:
-        required: false
-        type: string
+
+permissions:
+  contents: read
+  packages: write
 
 jobs:
   build-docker:
-    runs-on: ${{ fromJSON(inputs.runner-label) }}
+    runs-on: ${{ inputs.runner-label || 'linux-x86-64-1gpu-amd' }}
+    env:
+      ROCM_VERSION: ${{ inputs.rocm-version || '7.2.4' }}
     steps:
       - name: Clean up old runs
         run: |
           ls -lah
           # Make sure that we own all of the files so that we have permissions to delete them
-          docker run --rm -v "./:/rocm-jax" ubuntu \
+          docker run --rm -v "${PWD}:/rocm-jax" ubuntu \
             /bin/bash -c "shopt -s dotglob; chown -R $UID /rocm-jax/* || true"
           # Remove any old work directories from this machine
           rm -rf * || true
           ls -lah
           # Clean up any docker stuff that's more than a week old
-          docker system prune -a --filter "until=168h"
+          docker system prune -af --filter "until=168h"
           # Stop any containers running for more than 12 hours. No CI job should take this long.
           docker ps --format="{{.RunningFor}} {{.Names}}" | grep hours \
-              | awk -F: '{if($1>12)print$1}' | awk ' {print $4} ' | xargs docker stop || true
+              | awk -F: '{if($1>12)print$1}' | awk ' {print $4} ' | xargs -r docker stop || true
       - name: Print system info
         run: |
           whoami
@@ -42,20 +45,20 @@ jobs:
           df -h
           rocm-smi -a || true
           rocminfo | grep gfx || true
-      - uses: actions/checkout@v4
-      - name: Download wheel artifacts
-        uses: actions/download-artifact@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          name: ${{ inputs.artifact-prefix }}_r${{ inputs.rocm-version }}
-          path: ./wheelhouse
+          persist-credentials: false
       - name: Authenticate to GitHub Container Registry
         run: |
           echo "${{ secrets.GITHUB_TOKEN }}" \
             | docker login ghcr.io -u ${{ github.actor }} --password-stdin
       - name: Build and push JAX docker image
+        working-directory: ./build/rocm/docker
         run: |
-          working-directory: ./build/rocm/docker/
-          docker build  -f Dockerfile.rocm \
-          --build-arg ROCM_VERSION="${{ inputs.rocm-version }}" \
-          -t "ghcr.io/rocm/jax-ubu22.rocm"${{ inputs.rocm-version }}":latest" .
-          docker push "ghcr.io/rocm/jax-ubu22.rocm"${{ inputs.rocm-version }}":latest"
+          IMAGE="ghcr.io/rocm/jax-ubu22.rocm${ROCM_VERSION}"
+
+          docker build -f Dockerfile.rocm \
+            --build-arg ROCM_VERSION="${ROCM_VERSION}" \
+            -t "${IMAGE}:latest" .
+
+          docker push "${IMAGE}:latest"

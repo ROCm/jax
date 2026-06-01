@@ -20,33 +20,35 @@
 # Supported Distros:
 #   - focal
 #   - jammy
+#   - noble
 #   - el7
 #   - el8
-set -x
+set -euxo pipefail
 
 # Get arguments (or defaults)
 ROCM_VERSION=6.2.0
 DISTRO=focal
-if [[ -n $1 ]]; then
+if [[ -n "${1:-}" ]]; then
     ROCM_VERSION=$1
 fi
-if [[ -n $2 ]]; then
+if [[ -n "${2:-}" ]]; then
     if [[ "$2" == "focal" ]] || [[ "$2" == "jammy" ]] || [[ "$2" == "noble" ]] || [[ "$2" == "el7" ]] || [[ "$2" == "el8" ]]; then
         DISTRO=$2
     else
         echo "Distro not supported"
         echo "Supported distros are:\n focal\n jammy\n noble\n el7\n el8"
-	exit 1
+        exit 1
     fi
 fi
 
 ROCM_PATH=${ROCM_PATH:-/opt/rocm-${ROCM_VERSION}}
-# Intial release don't have the trialing '.0'
+CUSTOM_INSTALL=${CUSTOM_INSTALL:-}
+# Initial releases don't have the trailing '.0'
 # For example ROCM 5.4.0 is at https://repo.radeon.com/rocm/apt/5.4/
-if [ ${ROCM_VERSION##*[^0-9]} -eq '0' ]; then
-        ROCM_VERS=${ROCM_VERSION%.*}
+if [[ "${ROCM_VERSION##*[^0-9]}" == "0" ]]; then
+    ROCM_VERS=${ROCM_VERSION%.*}
 else
-        ROCM_VERS=$ROCM_VERSION
+    ROCM_VERS=$ROCM_VERSION
 fi
 
 # hardcode to 7.0.2
@@ -62,11 +64,11 @@ if [[ "$DISTRO" == "focal" ]] || [[ "$DISTRO" == "jammy" ]] || [[ "$DISTRO" == "
     ROCM_DEB_REPO=${ROCM_DEB_REPO_HOME}${ROCM_VERS}/
     AMDGPU_DEB_REPO=${AMDGPU_DEB_REPO_HOME}${AMDGPU_REPO_VERS}/
 
-    DEBIAN_FRONTEND=noninteractive apt-get --allow-unauthenticated update 
+    DEBIAN_FRONTEND=noninteractive apt-get --allow-unauthenticated update
     DEBIAN_FRONTEND=noninteractive apt install -y wget software-properties-common
     DEBIAN_FRONTEND=noninteractive apt-get clean all
 
-    if [ ! -f "/${CUSTOM_INSTALL}" ]; then
+    if [[ -z "${CUSTOM_INSTALL}" || ! -f "/${CUSTOM_INSTALL}" ]]; then
         # Add rocm repository
         #chmod 1777 /tmp
         #wget -qO - https://repo.radeon.com/rocm/rocm.gpg.key | apt-key add -;
@@ -92,18 +94,21 @@ if [[ "$DISTRO" == "focal" ]] || [[ "$DISTRO" == "jammy" ]] || [[ "$DISTRO" == "
     # install rocm
     /setup.packages.sh /devel.packages.rocm.txt
 
-    MIOPENKERNELS=$( \
-                        apt-cache search --names-only miopen-hip-gfx | \
-                        awk '{print $1}' | \
-                        grep -F -v . || \
-		        true )
-    DEBIAN_FRONTEND=noninteractive apt-get install -y --allow-unauthenticated ${MIOPENKERNELS}
+    mapfile -t MIOPENKERNELS < <(
+        apt-cache search --names-only miopen-hip-gfx | \
+            awk '{print $1}' | \
+            grep -F -v . || \
+            true
+    )
+    if [[ ${#MIOPENKERNELS[@]} -gt 0 ]]; then
+        DEBIAN_FRONTEND=noninteractive apt-get install -y --allow-unauthenticated "${MIOPENKERNELS[@]}"
+    fi
 
     #install hipblasLT if available
     DEBIAN_FRONTEND=noninteractive apt-get install -y --allow-unauthenticated hipblaslt-dev || true
 
 elif [[ "$DISTRO" == "el7" ]]; then
-    if [ ! -f "/${CUSTOM_INSTALL}" ]; then
+    if [[ -z "${CUSTOM_INSTALL}" || ! -f "/${CUSTOM_INSTALL}" ]]; then
         RPM_ROCM_REPO=http://repo.radeon.com/rocm/yum/${ROCM_VERS}/main
         echo -e "[ROCm]\nname=ROCm\nbaseurl=$RPM_ROCM_REPO\nenabled=1\ngpgcheck=0" >>/etc/yum.repos.d/rocm.repo
         echo -e "[amdgpu]\nname=amdgpu\nbaseurl=https://repo.radeon.com/amdgpu/${AMDGPU_REPO_VERS}/rhel/7/main/x86_64/\nenabled=1\ngpgcheck=0" >>/etc/yum.repos.d/amdgpu.repo
@@ -119,7 +124,7 @@ elif [[ "$DISTRO" == "el7" ]]; then
     yum --enablerepo=extras install -y hipblaslt-devel || true
 
 elif [[ "$DISTRO" == "el8" ]]; then
-    if [ ! -f "/${CUSTOM_INSTALL}" ]; then
+    if [[ -z "${CUSTOM_INSTALL}" || ! -f "/${CUSTOM_INSTALL}" ]]; then
         RPM_ROCM_REPO=http://repo.radeon.com/rocm/rhel8/${ROCM_VERS}/main
         echo -e "[ROCm]\nname=ROCm\nbaseurl=$RPM_ROCM_REPO\nenabled=1\ngpgcheck=1\ngpgkey=https://repo.radeon.com/rocm/rocm.gpg.key" >>/etc/yum.repos.d/rocm.repo
         echo -e "[amdgpu]\nname=amdgpu\nbaseurl=https://repo.radeon.com/amdgpu/${AMDGPU_REPO_VERS}/rhel/8.10/main/x86_64/\nenabled=1\ngpgcheck=1\ngpgkey=https://repo.radeon.com/rocm/rocm.gpg.key" >>/etc/yum.repos.d/amdgpu.repo
@@ -138,18 +143,18 @@ fi
 function ver { printf "%03d%03d%03d" $(echo "$1" | tr '.' ' '); }
 # If hipcc uses llvm-17, in case of ROCM 6.0.x and 6.1.x and
 # host compiler is llvm-18 leads to mismatch in name mangling resulting
-# in faliure to link compiled gpu kernels. This linker option circumvents that issue.
-if [ $(ver "$ROCM_VERSION") -lt $(ver "6.2.0") ]
+# in failure to link compiled gpu kernels. This linker option circumvents that issue.
+if [ "$(ver "$ROCM_VERSION")" -lt "$(ver "6.2.0")" ]
 then
   echo "build:rocm_base --copt=-fclang-abi-compat=17" >> /etc/bazel.bazelrc
 fi
 
-echo $ROCM_VERSION
-echo $ROCM_REPO
-echo $ROCM_PATH
-echo $GPU_DEVICE_TARGETS
+echo "${ROCM_VERSION}"
+echo "${ROCM_REPO:-}"
+echo "${ROCM_PATH}"
+echo "${GPU_DEVICE_TARGETS:-}"
 
 # Ensure the ROCm target list is set up
 mkdir -p "$ROCM_PATH/bin" "$ROCM_PATH/.info"
-printf '%s\n' ${GPU_DEVICE_TARGETS} | tr ',' ' ' | tee -a "$ROCM_PATH/bin/target.lst"
+printf '%s\n' "${GPU_DEVICE_TARGETS:-}" | tr ',' ' ' | tee -a "$ROCM_PATH/bin/target.lst"
 touch "${ROCM_PATH}/.info/version"
