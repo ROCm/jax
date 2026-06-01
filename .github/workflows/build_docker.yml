@@ -38,7 +38,7 @@ jobs:
         run: |
           echo "${{ secrets.GITHUB_TOKEN }}" \
             | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-      - name: Build and push JAX docker image
+      - name: Build JAX docker image
         working-directory: ./build/rocm/docker
         run: |
           IMAGE="ghcr.io/rocm/jax-ubu22.rocm${ROCM_VERSION}"
@@ -46,5 +46,10 @@ jobs:
           docker build -f Dockerfile.rocm \
             --build-arg ROCM_VERSION="${ROCM_VERSION}" \
             -t "${IMAGE}:latest" .
+
+      - name: Push JAX docker image
+        working-directory: ./build/rocm/docker
+        run: |
+          IMAGE="ghcr.io/rocm/jax-ubu22.rocm${ROCM_VERSION}"
 
           docker push "${IMAGE}:latest"
