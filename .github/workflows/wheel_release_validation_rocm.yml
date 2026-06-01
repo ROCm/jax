@@ -7,9 +7,6 @@
 name: CI - Release Validation (ROCm)
 
 on:
-  push:
-    branches:
-      - rocm-jaxlib-v0.10.1-draft
   workflow_dispatch:
     inputs:
       halt-for-connection:
