@@ -1,4 +1,4 @@
-name: Build docker
+name: Build ROCm JAX Docker image
 
 on:
   push:
