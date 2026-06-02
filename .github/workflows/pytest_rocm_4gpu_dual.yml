@@ -1,0 +1,71 @@
+# CI - Pytest ROCm 4GPU (py3.12 + py3.14)
+#
+# Convenience caller workflow that triggers two 4-GPU `pytest_rocm.yml` runs in
+# parallel, one for Python 3.12 and one for Python 3.14. This mirrors a single
+# manual `workflow_dispatch` of `pytest_rocm.yml` (which downloads prebuilt
+# jax/jaxlib wheels from GCS and the ROCm plugin/PJRT wheels from S3, then runs
+# pytest) but fans out over the Python matrix from one trigger.
+#
+# Note: the underlying job is skipped automatically if wheels for the requested
+# Python version are not available at the resolved GCS/S3 locations.
+name: CI - Pytest ROCm 4GPU (py3.12 + py3.14)
+
+on:
+  workflow_dispatch:
+    inputs:
+      rocm-version:
+        description: "Which ROCm version to test?"
+        type: choice
+        default: "7.2.0"
+        options:
+          - "7.2.0"
+      rocm-tag:
+        description: "ROCm tag for container image (e.g., rocm720)"
+        type: string
+        default: "rocm720"
+      rocm-release-version:
+        description: "Release version for S3 path resolution (e.g., 7.2.0 or therock-latest)"
+        type: string
+        default: ""
+      jaxlib-version:
+        description: "Which jaxlib version to use? (head/pypi_latest)"
+        type: choice
+        default: "head"
+        options:
+          - "head"
+          - "pypi_latest"
+      gcs_download_uri:
+        description: "GCS location prefix from where the artifacts should be downloaded"
+        type: string
+        default: 'gs://jax-nightly-artifacts/latest'
+      s3_download_uri:
+        description: "S3 URI for ROCm plugin/PJRT wheels (use 'latest' to resolve via LATEST pointer)"
+        type: string
+        default: 'latest'
+
+permissions:
+  id-token: write
+  contents: read
+  actions: read
+
+jobs:
+  pytest-rocm-4gpu:
+    if: ${{ github.repository_owner == 'jax-ml' || github.repository_owner == 'ROCm' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.12", "3.14"]
+    uses: ./.github/workflows/pytest_rocm.yml
+    permissions:
+      id-token: write
+      contents: read
+      actions: read
+    with:
+      runner: "linux-x86-64-4gpu-amd"
+      python: ${{ matrix.python }}
+      rocm-version: ${{ inputs.rocm-version }}
+      rocm-tag: ${{ inputs.rocm-tag }}
+      rocm-release-version: ${{ inputs.rocm-release-version }}
+      jaxlib-version: ${{ inputs.jaxlib-version }}
+      gcs_download_uri: ${{ inputs.gcs_download_uri }}
+      s3_download_uri: ${{ inputs.s3_download_uri }}
