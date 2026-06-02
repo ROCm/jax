@@ -12,6 +12,15 @@ common:rocm --copt=-Qunused-arguments
 common:rocm --repo_env=TF_ROCM_AMDGPU_TARGETS="gfx908,gfx90a,gfx942,gfx950,gfx1030,gfx1100,gfx1101,gfx1200,gfx1201"
 # Used for @xla//build_tools/rocm:parallel_gpu_execute
 common:rocm --legacy_external_runfiles=true
+# Use compiler-rt builtins instead of libgcc_s.so.1 for compiler support routines.
+# The ROCm clang is built with -DCLANG_DEFAULT_RTLIB=compiler-rt; this aligns all
+# other clang-based ROCm builds with that default so that symbols such as
+# __extendhfsf2 are resolved statically from libclang_rt.builtins.a rather than
+# left as runtime dependencies on libgcc_s.so.1.
+common:rocm --copt=-rtlib=compiler-rt
+common:rocm --host_copt=-rtlib=compiler-rt
+common:rocm --linkopt=-rtlib=compiler-rt
+common:rocm --host_linkopt=-rtlib=compiler-rt
 
 common:rocm_clang_local --config=rocm
 common:rocm_clang_local --noincompatible_enable_cc_toolchain_resolution
