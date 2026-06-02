@@ -31,6 +31,8 @@ on:
         options:
           - "3.11"
           - "3.12"
+          - "3.13"
+          - "3.14"
       rocm-version:
         description: "Which ROCm version to test?"
         type: choice
