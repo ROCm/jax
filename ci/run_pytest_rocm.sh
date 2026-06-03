@@ -124,7 +124,7 @@ set +e
 "$JAXCI_PYTHON" -m pytest -n $num_processes --tb=short \
 --json-report --json-report-file=${LOGS_DIR}/pytest_results_single.json \
 --junitxml=test-artifacts/junit-single.xml \
---dist=loadfile \
+--dist=load \
 -m "not multiaccelerator" \
 --deselect=tests/multi_device_test.py::MultiDeviceTest::test_computation_follows_data \
 --deselect=tests/multiprocess_gpu_test.py::MultiProcessGpuTest::test_distributed_jax_visible_devices \
