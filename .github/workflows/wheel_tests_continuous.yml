@@ -323,7 +323,8 @@ jobs:
     strategy:
         fail-fast: false
         matrix:
-          runner: ["linux-x86-64-1gpu-amd", "linux-x86-64-4gpu-amd", "linux-x86-64-8gpu-amd"]
+          # devtest: 4-GPU runner only.
+          runner: ["linux-x86-64-4gpu-amd"]
           python: ["3.11"]
           rocm: [
             {label: "ROCm 7.2.0",     wheel-version: "7", release-version: "7.2.0",        tag: "rocm720"},
