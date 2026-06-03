@@ -292,21 +292,14 @@ jobs:
     strategy:
         fail-fast: false
         matrix:
+          # devtest: scoped to ROCm 7.2.0 + py3.11 only (the config where the
+          # flaky tolerance failures reproduced).
           runner: ["linux-x86-64-1gpu-amd"]
           artifact: ["jax-rocm-plugin", "jax-rocm-pjrt"]
-          python: ["3.11", "3.12", "3.13", "3.14"]
+          python: ["3.11"]
           rocm: [
             {label: "ROCm 7.2.0",     wheel-version: "7", release-version: "7.2.0",        manylinux-image: ""},
-            {label: "TheRock 7.13",   wheel-version: "7", release-version: "therock-7.13.0",  manylinux-image: "ghcr.io/rocm/jax-manylinux_2_28-therock-7.13.0:latest"},
-            {label: "TheRock latest", wheel-version: "7", release-version: "therock-latest", manylinux-image: "ghcr.io/rocm/jax-manylinux_2_28-therock-latest:latest"},
           ]
-          exclude:
-            - artifact: "jax-rocm-pjrt"
-              python: "3.12"
-            - artifact: "jax-rocm-pjrt"
-              python: "3.13"
-            - artifact: "jax-rocm-pjrt"
-              python: "3.14"
     name: "Build ROCm artifacts (${{ matrix.rocm.label }})"
     with:
       runner: ${{ matrix.runner }}
@@ -334,8 +327,6 @@ jobs:
           python: ["3.11"]
           rocm: [
             {label: "ROCm 7.2.0",     wheel-version: "7", release-version: "7.2.0",        tag: "rocm720"},
-            {label: "TheRock 7.13",   wheel-version: "7", release-version: "therock-7.13.0",  tag: "therock-7.13.0"},
-            {label: "TheRock latest", wheel-version: "7", release-version: "therock-latest", tag: "therock-latest"},
           ]
     name: "Pytest ROCm (${{ matrix.rocm.label }})"
     with:
@@ -348,37 +339,5 @@ jobs:
       gcs_download_uri: ${{ needs.build-jaxlib-artifact.outputs.gcs_upload_uri || 'gs://jax-nightly-artifacts/latest' }}
       s3_download_uri: 's3://jax-ci-amd/rocm-wheels/${{ github.repository }}/${{ github.ref_name }}/${{ matrix.rocm.release-version }}/wheel-tests-continuous/${{ github.run_number }}/${{ github.run_attempt }}'
 
-  run-bazel-test-rocm:
-    if: ${{ !cancelled() && (github.repository_owner == 'jax-ml' || github.repository_owner == 'ROCm') }}
-    needs: [build-jax-artifact, build-jaxlib-artifact, build-rocm-artifacts]
-    uses: ./.github/workflows/bazel_rocm.yml
-    permissions:
-      id-token: write
-      contents: read
-      actions: read
-    strategy:
-        fail-fast: false
-        matrix:
-          runner: ["linux-x86-64-4gpu-amd", "linux-x86-64-8gpu-amd"]
-          python: ["3.11"]
-          rocm: [
-            {label: "ROCm 7.2.0",     wheel-version: "7", release-version: "7.2.0",        tag: "rocm720"},
-            {label: "TheRock 7.13",   wheel-version: "7", release-version: "therock-7.13.0",  tag: "therock-7.13.0"},
-            {label: "TheRock latest", wheel-version: "7", release-version: "therock-latest", tag: "therock-latest"},
-          ]
-          enable-x64: [0]
-    name: "Bazel ROCm (${{ matrix.rocm.label }})"
-    with:
-      runner: ${{ matrix.runner }}
-      python: ${{ matrix.python }}
-      rocm-version: ${{ matrix.rocm.wheel-version }}
-      rocm-release-version: ${{ matrix.rocm.release-version }}
-      rocm-tag: ${{ matrix.rocm.tag }}
-      enable-x64: ${{ matrix.enable-x64 }}
-      gcs_download_uri: ${{ needs.build-jaxlib-artifact.outputs.gcs_upload_uri || 'gs://jax-nightly-artifacts/latest' }}
-      s3_download_uri: 's3://jax-ci-amd/rocm-wheels/${{ github.repository }}/${{ github.ref_name }}/${{ matrix.rocm.release-version }}/wheel-tests-continuous/${{ github.run_number }}/${{ github.run_attempt }}'
-      build_jaxlib: ${{ 'false' }}
-      build_jax: ${{ 'false' }}
-      jaxlib-version: "head"
-      run_multiaccelerator_tests: ${{ 'false' }}
-      clone_main_xla: 1
+  # devtest: run-bazel-test-rocm intentionally removed to scope this run to the
+  # pytest-rocm leg only (fastest signal on the flaky tolerance tests).
