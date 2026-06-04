@@ -189,8 +189,6 @@ class ImageTest(jtu.JaxTestCase):
     method=["nearest", "linear", "lanczos3", "lanczos5", "cubic"],
   )
   def testResizeUp(self, dtype, image_shape, target_shape, method):
-    if jtu.rocm_version() and jtu.rocm_version()[:2] == (7, 2) and np.dtype(dtype).kind == "c" and method != "nearest":
-      self.skipTest("hipblasLT doesn't support complex numbers in ROCm 7.2.x")
     data = [64, 32, 32, 64, 50, 100]
     expected_data = {}
     expected_data["nearest"] = [
@@ -273,8 +271,6 @@ class ImageTest(jtu.JaxTestCase):
   )
   def testScaleAndTranslateUp(self, dtype, image_shape, target_shape, scale,
                               translation, method):
-    if jtu.rocm_version() and jtu.rocm_version()[:2] == (7, 2) and np.dtype(dtype).kind == "c":
-      self.skipTest("hipblasLT doesn't support complex numbers in ROCm 7.2.x")
     data = [64, 32, 32, 64, 50, 100]
     # Note zeros occur in the output because the sampling location is outside
     # the boundaries of the input image.
@@ -316,8 +312,6 @@ class ImageTest(jtu.JaxTestCase):
     antialias=[True, False],
   )
   def testScaleAndTranslateDown(self, dtype, method, antialias):
-    if jtu.rocm_version() and jtu.rocm_version()[:2] == (7, 2) and np.dtype(dtype).kind == "c":
-      self.skipTest("hipblasLT doesn't support complex numbers in ROCm 7.2.x")
     image_shape = [1, 6, 7, 1]
     target_shape = [1, 3, 3, 1]
 
