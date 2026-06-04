@@ -14,6 +14,7 @@
 """pytest configuration"""
 
 import os
+import sys
 import pytest
 
 
@@ -79,11 +80,50 @@ def pytest_collection() -> None:
     if not xdist_worker_name.startswith("gw"):
       return
     xdist_worker_number = int(xdist_worker_name[len("gw") :])
-    os.environ["ROCR_VISIBLE_DEVICES"] = str(
-        xdist_worker_number % num_rocm_devices
-    )
-    # ROCR_VISIBLE_DEVICES filters HSA to a single physical device, which
-    # becomes HIP index 0. The container env-file may preset
-    # HIP_VISIBLE_DEVICES to all GPUs; override to "0" so HIP doesn't try to
-    # enable agents that ROCr just hid.
+
+    # The CI runner isolates this job to a subset of the host's physical GPUs
+    # by injecting ROCR_VISIBLE_DEVICES via the container env-file (e.g.
+    # "0,3,4,5"). Those are absolute ROCt/physical indices and the set may be
+    # non-contiguous. ROCR_VISIBLE_DEVICES does not compose across processes:
+    # re-setting it is re-evaluated against the full physical enumeration, not
+    # against the inherited slice. So selecting an absolute index of our own
+    # (xdist_worker_number % num_rocm_devices) can land on a GPU owned by a
+    # co-tenant job on the same host. Instead, pick a device *from the
+    # inherited slice* so we never escape the isolation boundary.
+    allocated = os.environ.get("ROCR_VISIBLE_DEVICES")
+    allocated_tokens = allocated.split(",") if allocated else []
+
+    # Opt-in escape hatch to reproduce the historical absolute-index behaviour,
+    # so a contrasting CI run can demonstrate an isolation escape on sliced
+    # runners. Defaults to the safe slice-relative selection.
+    selection_mode = os.environ.get("JAX_ROCM_XDIST_SELECT", "slice")
+
+    if selection_mode == "absolute" or not allocated_tokens:
+      selected = str(xdist_worker_number % num_rocm_devices)
+    else:
+      selected = allocated_tokens[xdist_worker_number % len(allocated_tokens)]
+
+    within_isolation = (not allocated_tokens) or (selected in allocated_tokens)
+
+    os.environ["ROCR_VISIBLE_DEVICES"] = selected
+    # ROCr now surfaces a single physical device, which becomes HIP index 0.
+    # The container env-file may preset HIP_VISIBLE_DEVICES to all GPUs; pin to
+    # "0" so HIP doesn't try to enable agents that ROCr just hid.
     os.environ["HIP_VISIBLE_DEVICES"] = "0"
+
+    status = "WITHIN-ISOLATION" if within_isolation else "ISOLATION-ESCAPE"
+    print(
+        f"[rocm-xdist] {xdist_worker_name}: mode={selection_mode} "
+        f"runner_allocated_ROCR={allocated_tokens or 'unset'} "
+        f"selected_ROCR={selected} HIP_VISIBLE_DEVICES=0 -> {status}",
+        file=sys.stderr,
+        flush=True,
+    )
+    if not within_isolation:
+      print(
+          f"[rocm-xdist] WARNING {xdist_worker_name}: selected physical device "
+          f"{selected!r} is NOT in the runner-allocated set {allocated_tokens}; "
+          f"this worker is running on a GPU owned by another job.",
+          file=sys.stderr,
+          flush=True,
+      )
