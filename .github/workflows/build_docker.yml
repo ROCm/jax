@@ -1,0 +1,55 @@
+name: Build ROCm JAX Docker image
+
+on:
+  push:
+    branches:
+      - hhs/add_docker_for_jax_xla
+  workflow_call:
+    inputs:
+      rocm-version:
+        required: false
+        type: string
+      runner-label:
+        required: false
+        default: linux-x86-64-1gpu-amd
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build-docker:
+    runs-on: ${{ inputs.runner-label || 'linux-x86-64-1gpu-amd' }}
+    env:
+      ROCM_VERSION: ${{ inputs.rocm-version || '7.2.4' }}
+    steps:
+      - name: Print system info
+        run: |
+          whoami
+          printenv
+          df -h
+          rocm-smi -a || true
+          rocminfo | grep gfx || true
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Authenticate to GitHub Container Registry
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" \
+            | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+      - name: Build JAX docker image
+        working-directory: ./build/rocm/docker
+        run: |
+          IMAGE="ghcr.io/rocm/jax-ubu22.rocm${ROCM_VERSION}"
+
+          docker build -f Dockerfile.rocm \
+            --build-arg ROCM_VERSION="${ROCM_VERSION}" \
+            -t "${IMAGE}:latest" .
+
+      - name: Push JAX docker image
+        working-directory: ./build/rocm/docker
+        run: |
+          IMAGE="ghcr.io/rocm/jax-ubu22.rocm${ROCM_VERSION}"
+
+          docker push "${IMAGE}:latest"

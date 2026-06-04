@@ -1,0 +1,11 @@
+# Other build-related tools
+autoconf
+automake
+build-essential
+curl
+git
+unzip
+zip
+vim
+wget
+file
