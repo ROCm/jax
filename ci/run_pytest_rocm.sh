@@ -121,10 +121,10 @@ mkdir -p test-artifacts
 set +e
 
 # Run single-accelerator tests in parallel
-"$JAXCI_PYTHON" -m pytest -n $num_processes -v --tb=short \
+"$JAXCI_PYTHON" -m pytest -n $num_processes --tb=short \
 --json-report --json-report-file=${LOGS_DIR}/pytest_results_single.json \
 --junitxml=test-artifacts/junit-single.xml \
---dist=load \
+--dist=loadfile \
 -m "not multiaccelerator" \
 --deselect=tests/multi_device_test.py::MultiDeviceTest::test_computation_follows_data \
 --deselect=tests/multiprocess_gpu_test.py::MultiProcessGpuTest::test_distributed_jax_visible_devices \
@@ -137,7 +137,7 @@ if [[ $gpu_count -gt 1 ]]; then
   # Run multi-accelerator tests across all GPUs without xdist.
   unset JAX_ENABLE_ROCM_XDIST
 
-  "$JAXCI_PYTHON" -m pytest -v --tb=short \
+  "$JAXCI_PYTHON" -m pytest --tb=short \
     --json-report --json-report-file=${LOGS_DIR}/pytest_results_multi.json \
     --junitxml=test-artifacts/junit-multi.xml \
     -m "multiaccelerator" \
