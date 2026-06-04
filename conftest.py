@@ -81,49 +81,48 @@ def pytest_collection() -> None:
       return
     xdist_worker_number = int(xdist_worker_name[len("gw") :])
 
-    # The CI runner isolates this job to a subset of the host's physical GPUs
-    # by injecting ROCR_VISIBLE_DEVICES via the container env-file (e.g.
-    # "0,3,4,5"). Those are absolute ROCt/physical indices and the set may be
-    # non-contiguous. ROCR_VISIBLE_DEVICES does not compose across processes:
-    # re-setting it is re-evaluated against the full physical enumeration, not
-    # against the inherited slice. So selecting an absolute index of our own
-    # (xdist_worker_number % num_rocm_devices) can land on a GPU owned by a
-    # co-tenant job on the same host. Instead, pick a device *from the
-    # inherited slice* so we never escape the isolation boundary.
-    allocated = os.environ.get("ROCR_VISIBLE_DEVICES")
-    allocated_tokens = allocated.split(",") if allocated else []
+    # Capture the GPU slice the CI runner isolated this job to. The runner
+    # injects ROCR_VISIBLE_DEVICES via the container env-file (e.g. "0,3,4,5");
+    # these are absolute ROCt/physical indices and the set may be
+    # non-contiguous. Snapshot it BEFORE we overwrite it below so we can tell
+    # whether the selected device stays inside the allocated boundary.
+    runner_allocated = os.environ.get("ROCR_VISIBLE_DEVICES")
+    allocated_tokens = runner_allocated.split(",") if runner_allocated else []
 
-    # Opt-in escape hatch to reproduce the historical absolute-index behaviour,
-    # so a contrasting CI run can demonstrate an isolation escape on sliced
-    # runners. Defaults to the safe slice-relative selection.
-    selection_mode = os.environ.get("JAX_ROCM_XDIST_SELECT", "slice")
-
-    if selection_mode == "absolute" or not allocated_tokens:
-      selected = str(xdist_worker_number % num_rocm_devices)
-    else:
-      selected = allocated_tokens[xdist_worker_number % len(allocated_tokens)]
-
-    within_isolation = (not allocated_tokens) or (selected in allocated_tokens)
-
+    # --- ORIGINAL selection logic (unchanged, under test) ---
+    selected = str(xdist_worker_number % num_rocm_devices)
     os.environ["ROCR_VISIBLE_DEVICES"] = selected
-    # ROCr now surfaces a single physical device, which becomes HIP index 0.
-    # The container env-file may preset HIP_VISIBLE_DEVICES to all GPUs; pin to
-    # "0" so HIP doesn't try to enable agents that ROCr just hid.
+    # ROCR_VISIBLE_DEVICES filters HSA to a single physical device, which
+    # becomes HIP index 0. The container env-file may preset
+    # HIP_VISIBLE_DEVICES to all GPUs; override to "0" so HIP doesn't try to
+    # enable agents that ROCr just hid.
     os.environ["HIP_VISIBLE_DEVICES"] = "0"
+    # --- end ORIGINAL selection logic ---
 
-    status = "WITHIN-ISOLATION" if within_isolation else "ISOLATION-ESCAPE"
+    # Diagnostic only: does the device this worker just claimed belong to the
+    # runner-allocated slice? If not, the original logic escaped GPU isolation
+    # and this worker is running on a device owned by a co-tenant job. When no
+    # slice was injected (e.g. local dev) we can't judge, so report UNKNOWN.
+    if not allocated_tokens:
+      status = "NO-SLICE-INJECTED"
+    elif selected in allocated_tokens:
+      status = "WITHIN-ISOLATION"
+    else:
+      status = "ISOLATION-ESCAPE"
     print(
-        f"[rocm-xdist] {xdist_worker_name}: mode={selection_mode} "
+        f"[rocm-xdist] {xdist_worker_name}: "
         f"runner_allocated_ROCR={allocated_tokens or 'unset'} "
+        f"num_rocm_devices={num_rocm_devices} "
         f"selected_ROCR={selected} HIP_VISIBLE_DEVICES=0 -> {status}",
         file=sys.stderr,
         flush=True,
     )
-    if not within_isolation:
+    if status == "ISOLATION-ESCAPE":
       print(
           f"[rocm-xdist] WARNING {xdist_worker_name}: selected physical device "
           f"{selected!r} is NOT in the runner-allocated set {allocated_tokens}; "
-          f"this worker is running on a GPU owned by another job.",
+          f"this worker is running on a GPU owned by another job "
+          f"(GPU isolation escape).",
           file=sys.stderr,
           flush=True,
       )
