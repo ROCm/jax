@@ -467,6 +467,8 @@ class NumpyLinalgTest(jtu.JaxTestCase):
   )
   @jtu.run_on_devices("cpu", "gpu")
   def testEigGradComplexInputs(self, shape, dtype, left_right):
+    if jtu.rocm_version() and jtu.rocm_version()[:2] == (7, 2) and np.dtype(dtype).kind == "c":
+      self.skipTest("hipblasLT doesn't support complex numbers in ROCm 7.2.x")
     # Small matrices only; the eigenvector derivative blows up like
     # 1/min|w_i - w_j| so close eigenvalues make the FD check noisy.
     left, right = left_right
@@ -484,6 +486,10 @@ class NumpyLinalgTest(jtu.JaxTestCase):
   )
   @jtu.run_on_devices("cpu", "gpu")
   def testEigGradRealInputs(self, shape, dtype, left_right):
+    # Although inputs are real, the eig gradient produces complex
+    # intermediates that hit hipBLASLt's complex GEMM path.
+    if jtu.rocm_version() and jtu.rocm_version()[:2] == (7, 2) and np.dtype(dtype).kind == "f":
+      self.skipTest("hipblasLT doesn't support complex numbers in ROCm 7.2.x")
     # dgeev does not pin the sign of complex-pair eigenvectors so the primal
     # output is itself discontinuous; compose with elementwise v -> v*v which
     # is sign-invariant but still phase-sensitive (so still exercises the
@@ -695,6 +701,9 @@ class NumpyLinalgTest(jtu.JaxTestCase):
   )
   @jax.default_matmul_precision("float32")
   def testMatmul(self, lhs_shape, rhs_shape, dtype):
+    if (jtu.rocm_version() and jtu.rocm_version()[:2] == (7, 2) and np.dtype(dtype).kind == "c"
+        and len(lhs_shape) >= 2 and len(rhs_shape) >= 2):
+      self.skipTest("hipblasLT doesn't support complex numbers in ROCm 7.2.x")
     rng = jtu.rand_default(self.rng())
     args_maker = lambda: [rng(lhs_shape, dtype), rng(rhs_shape, dtype)]
     np_fn = jtu.promote_like_jnp(np.linalg.matmul)
@@ -721,6 +730,8 @@ class NumpyLinalgTest(jtu.JaxTestCase):
   )
   @jax.default_matmul_precision("float32")
   def testTensordot(self, lhs_shape, rhs_shape, axes, dtype):
+    if jtu.rocm_version() and jtu.rocm_version()[:2] == (7, 2) and np.dtype(dtype).kind == "c" and axes == 1:
+      self.skipTest("hipblasLT doesn't support complex numbers in ROCm 7.2.x")
     rng = jtu.rand_default(self.rng())
     args_maker = lambda: [rng(lhs_shape, dtype), rng(rhs_shape, dtype)]
     np_fn = jtu.promote_like_jnp(partial(np.linalg.tensordot, axes=axes))
@@ -894,6 +905,8 @@ class NumpyLinalgTest(jtu.JaxTestCase):
   )
   @jax.default_matmul_precision("float32")
   def testSVDGrad(self, shape, dtype, full_matrices, compute_uv):
+    if jtu.rocm_version() and jtu.rocm_version()[:2] == (7, 2) and np.dtype(dtype).kind == "c":
+      self.skipTest("hipblasLT doesn't support complex numbers in ROCm 7.2.x")
     rng = jtu.rand_default(self.rng())
     a = rng(shape, dtype)
     if not compute_uv:
@@ -929,6 +942,8 @@ class NumpyLinalgTest(jtu.JaxTestCase):
   )
   @jax.default_matmul_precision("float32")
   def testQr(self, shape, dtype, full_matrices):
+    if jtu.rocm_version() and jtu.rocm_version()[:2] == (7, 2) and np.dtype(dtype).kind == "c" and 0 not in shape:
+      self.skipTest("hipblasLT doesn't support complex numbers in ROCm 7.2.x")
     if (jtu.test_device_matches(["cuda"]) and
         _is_required_cuda_version_satisfied(12000)):
       self.skipTest("Triggers a bug in cuda-12 b/287345077")
@@ -1117,6 +1132,9 @@ class NumpyLinalgTest(jtu.JaxTestCase):
   )
   @jtu.ignore_warning(message="invalid value", category=RuntimeWarning)
   def testPinv(self, shape, hermitian, dtype):
+    if (jtu.rocm_version() and jtu.rocm_version()[:2] == (7, 2) and np.dtype(dtype).kind == "c"
+        and not hermitian and shape[-2] >= 2 and shape[-1] >= 2):
+      self.skipTest("hipblasLT doesn't support complex numbers in ROCm 7.2.x")
     rng = jtu.rand_default(self.rng())
     def args_maker():
       a = rng(shape, dtype)
@@ -1162,6 +1180,9 @@ class NumpyLinalgTest(jtu.JaxTestCase):
   )
   @jax.default_matmul_precision("float32")
   def testMatrixPower(self, shape, dtype, n):
+    if (jtu.rocm_version() and jtu.rocm_version()[:2] == (7, 2) and np.dtype(dtype).kind == "c"
+        and n != 1 and shape[-1] > 1):
+      self.skipTest("hipblasLT doesn't support complex numbers in ROCm 7.2.x")
     rng = jtu.rand_default(self.rng())
     args_maker = lambda: [rng(shape, dtype)]
     self._CheckAgainstNumpy(partial(np.linalg.matrix_power, n=n),
@@ -1273,6 +1294,9 @@ class NumpyLinalgTest(jtu.JaxTestCase):
 
   # Regression test for incorrect type for eigenvalues of a complex matrix.
   def testIssue669(self):
+    # Test uses complex input; hits hipBLASLt complex GEMM on ROCm.
+    if jtu.rocm_version() and jtu.rocm_version()[:2] == (7, 2):
+      self.skipTest("hipblasLT doesn't support complex numbers in ROCm 7.2.x")
     def test(x):
       val, vec = jnp.linalg.eigh(x)
       return jnp.real(jnp.sum(val))
@@ -1420,6 +1444,8 @@ class ScipyLinalgTest(jtu.JaxTestCase):
     dtype=float_types + complex_types,
   )
   def testLuGrad(self, shape, dtype):
+    if jtu.rocm_version() and jtu.rocm_version()[:2] == (7, 2) and np.dtype(dtype).kind == "c" and shape[-1] > 1:
+      self.skipTest("hipblasLT doesn't support complex numbers in ROCm 7.2.x")
     rng = jtu.rand_default(self.rng())
     a = rng(shape, dtype)
     lu = vmap(jsp.linalg.lu) if len(shape) > 2 else jsp.linalg.lu
@@ -1651,6 +1677,9 @@ class ScipyLinalgTest(jtu.JaxTestCase):
   def testTriangularSolveGrad(
       self, lower, transpose_a, conjugate_a, unit_diagonal, left_side, a_shape,
       b_shape, dtype):
+    if (jtu.rocm_version() and jtu.rocm_version()[:2] == (7, 2) and np.dtype(dtype).kind == "c"
+        and tuple(a_shape) == (3, 3) and tuple(b_shape) == (4, 3)):
+      self.skipTest("hipblasLT doesn't support complex numbers in ROCm 7.2.x")
     rng = jtu.rand_default(self.rng())
     # Test lax.linalg.triangular_solve instead of scipy.linalg.solve_triangular
     # because it exposes more options.
@@ -1738,6 +1767,9 @@ class ScipyLinalgTest(jtu.JaxTestCase):
   )
   @jax.default_matmul_precision("float32")
   def testScipyQrModes(self, shape, dtype, mode, pivoting):
+    if (jtu.rocm_version() and jtu.rocm_version()[:2] == (7, 2) and np.dtype(dtype).kind == "c"
+        and mode == "economic" and pivoting and shape[-2] > shape[-1]):
+      self.skipTest("hipblasLT doesn't support complex numbers in ROCm 7.2.x")
     if pivoting:
       if not jtu.test_device_matches(["cpu", "gpu"]):
         self.skipTest("Pivoting is only supported on CPU and GPU.")
@@ -1769,6 +1801,8 @@ class ScipyLinalgTest(jtu.JaxTestCase):
       pivoting=[False, True],
   )
   def testQrMultiply(self, shape, dtype, mode, pivoting):
+    if jtu.rocm_version() and jtu.rocm_version()[:2] == (7, 2) and np.dtype(dtype).kind == "c":
+      self.skipTest("hipblasLT doesn't support complex numbers in ROCm 7.2.x")
     if pivoting and not jtu.test_device_matches(["cpu", "gpu"]):
       self.skipTest("Pivoting is only supported on CPU and GPU.")
     rng = jtu.rand_default(self.rng())
@@ -1879,6 +1913,8 @@ class ScipyLinalgTest(jtu.JaxTestCase):
       transpose=[False, True],
   )
   def testOrmqr(self, a_shape, c_shape, dtype, left, transpose):
+    if jtu.rocm_version() and jtu.rocm_version()[:2] == (7, 2) and np.dtype(dtype).kind == "c":
+      self.skipTest("hipblasLT doesn't support complex numbers in ROCm 7.2.x")
     rng = jtu.rand_default(self.rng())
     args_maker = lambda: [rng(a_shape, dtype), rng(c_shape, dtype)]
 
@@ -1977,6 +2013,8 @@ class ScipyLinalgTest(jtu.JaxTestCase):
     dtype=float_types + complex_types,
   )
   def testIssue2131(self, n, dtype):
+    if jtu.rocm_version() and jtu.rocm_version()[:2] == (7, 2) and np.dtype(dtype).kind == "c":
+      self.skipTest("hipblasLT doesn't support complex numbers in ROCm 7.2.x")
     args_maker_zeros = lambda: [np.zeros((n, n), dtype)]
     osp_fun = lambda a: osp.linalg.expm(a)
     jsp_fun = lambda a: jsp.linalg.expm(a)
@@ -2044,6 +2082,8 @@ class ScipyLinalgTest(jtu.JaxTestCase):
     dtype=float_types + complex_types,
   )
   def testExpmFrechet(self, n, dtype):
+    if jtu.rocm_version() and jtu.rocm_version()[:2] == (7, 2) and np.dtype(dtype).kind == "c":
+      self.skipTest("hipblasLT doesn't support complex numbers in ROCm 7.2.x")
     rng = jtu.rand_small(self.rng())
     if dtype == np.float64 or dtype == np.complex128:
       target_norms = [1.0e-2, 2.0e-1, 9.0e-01, 2.0, 3.0]
@@ -2082,6 +2122,8 @@ class ScipyLinalgTest(jtu.JaxTestCase):
     dtype=float_types + complex_types,
   )
   def testExpmGrad(self, n, dtype):
+    if jtu.rocm_version() and jtu.rocm_version()[:2] == (7, 2) and np.dtype(dtype).kind == "c" and n > 1:
+      self.skipTest("hipblasLT doesn't support complex numbers in ROCm 7.2.x")
     rng = jtu.rand_small(self.rng())
     a = rng((n, n), dtype)
     if dtype == np.float64 or dtype == np.complex128:
@@ -2486,6 +2528,8 @@ class ScipyLinalgTest(jtu.JaxTestCase):
   @jtu.run_on_devices("cpu", "gpu")
   @jax.default_matmul_precision("float32")
   def test_solve_sylvester(self, shape, dtype, method):
+    if jtu.rocm_version() and jtu.rocm_version()[:2] == (7, 2) and method == "eigen":
+      self.skipTest("hipblasLT doesn't support complex numbers in ROCm 7.2.x")
     if jtu.test_device_matches(["gpu"]) and method == "schur":
       self.skipTest("Schur not supported on GPU.")
 
@@ -2521,6 +2565,8 @@ class ScipyLinalgTest(jtu.JaxTestCase):
     We simulate this case below by randomly selecting the eigenvalues of A and then assign the
     eigenvalues of B as negative eigenvalues of A. We say that A and B are ill-conditioned.
     """
+    if jtu.rocm_version() and jtu.rocm_version()[:2] == (7, 2) and method == "eigen":
+      self.skipTest("hipblasLT doesn't support complex numbers in ROCm 7.2.x")
     if jtu.test_device_matches(["gpu"]) and method == "schur":
       self.skipTest("Schur not supported on GPU.")
 
@@ -2560,6 +2606,8 @@ class ScipyLinalgTest(jtu.JaxTestCase):
   @jax.default_matmul_precision("float32")
   @jax.numpy_rank_promotion('allow')  # This test explicitly exercises implicit rank promotion.
   def test_solve_sylvester_broadcast(self, a_shape, b_shape, c_shape, dtype, method):
+    if jtu.rocm_version() and jtu.rocm_version()[:2] == (7, 2) and method == "eigen":
+      self.skipTest("hipblasLT doesn't support complex numbers in ROCm 7.2.x")
     if scipy_version < (1, 16, 0):
       self.skipTest("scipy.linalg.solve_sylvester batch broadcasting requires scipy >= 1.16")
     if jtu.test_device_matches(["gpu"]) and method == "schur":
@@ -2594,6 +2642,9 @@ class LaxLinalgTest(jtu.JaxTestCase):
                       k_rhs=[1, 2],
                       perturb_singular=[False, True])
   def test_tridiagonal_solve(self, shape, dtype, k_rhs, perturb_singular):
+    if (jtu.rocm_version() and jtu.rocm_version()[:2] == (7, 2) and np.dtype(dtype).kind == "c"
+        and k_rhs == 2 and len(shape) <= 2):
+      self.skipTest("hipblasLT doesn't support complex numbers in ROCm 7.2.x")
 
     if perturb_singular and not jtu.test_device_matches(["cpu", "gpu"]):
       self.skipTest("perturb_singular=True only supported on CPU and GPU")
