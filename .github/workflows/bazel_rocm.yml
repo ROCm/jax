@@ -117,6 +117,11 @@ jobs:
     env:
       JAXCI_CLONE_MAIN_XLA: ${{ inputs.clone_main_xla }}
       JAXCI_HERMETIC_PYTHON_VERSION: ${{ inputs.python }}
+      # Required on gfx950 with ROCm 7.13 to avoid HIP "invalid device function"
+      # failures during multi-accelerator collectives. RCCL emits an explicit
+      # warning when this is unset; the env var must be in place before HIP
+      # initialization, which happens at JAX import time.
+      HSA_NO_SCRATCH_RECLAIM: "1"
 
 # Begin Presubmit Naming Check - name modification requires internal check to be updated
     name: "linux x86, jaxlib=${{ inputs.jaxlib-version }}, ROCM=${{ inputs.rocm-version }}, Python=${{ inputs.python }}, x64=${{ inputs.enable-x64 }}, build_jax=${{ inputs.build_jax }}, build_jaxlib=${{ inputs.build_jaxlib }}"
