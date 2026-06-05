@@ -122,7 +122,7 @@ jobs:
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
-      options: --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --shm-size 64G --env-file /etc/podinfo/gha-gpu-isolation-settings
+      options: --device=/dev/kfd $(cat /etc/podinfo/gpu-render-devices) --security-opt seccomp=unconfined --group-add video --shm-size 64G --env-file /etc/podinfo/gha-gpu-isolation-settings
     name: "${{ (contains(inputs.runner, '1gpu') && '1gpu') ||
         (contains(inputs.runner, '4gpu') && '4gpu') ||
         (contains(inputs.runner, '8gpu') && '8gpu') }}, ROCm ${{ inputs.rocm-version }}, py${{ inputs.python }}"
