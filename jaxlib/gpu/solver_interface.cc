@@ -15,6 +15,9 @@ limitations under the License.
 
 #include "jaxlib/gpu/solver_interface.h"
 
+#include <algorithm>
+#include <cstddef>
+
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_format.h"
@@ -473,6 +476,31 @@ absl::Status SetWorkspace(gpusolverDnHandle_t handle, void* ptr, size_t size) {
 
 // Cholesky decomposition via native rocsolver potrf (bypasses hipSOLVER).
 // rocsolver potrf uses rocBLAS TRSM+SYRK kernels optimized for MI300X.
+
+absl::StatusOr<size_t> RocPotrfWorkspaceSize(gpusolverDnHandle_t handle,
+                                              bool lower, int n) {
+  auto h = reinterpret_cast<rocblas_handle>(handle);
+  rocblas_fill uplo = lower ? rocblas_fill_lower : rocblas_fill_upper;
+  rocblas_status st = rocblas_start_device_memory_size_query(h);
+  if (st != rocblas_status_success) {
+    return RocblasStatusToStatus(st, __FILE__, __LINE__,
+                                 "rocblas_start_device_memory_size_query");
+  }
+  // In query mode rocsolver returns size_query_mismatch (8), size_increased (9),
+  // or size_unchanged (10) — all expected, not errors.
+  int dummy_info = 0;
+  rocsolver_spotrf(h, uplo, n, nullptr, n,
+                   reinterpret_cast<rocblas_int*>(&dummy_info));
+  size_t workspace_bytes = 0;
+  st = rocblas_stop_device_memory_size_query(h, &workspace_bytes);
+  if (st != rocblas_status_success) {
+    return RocblasStatusToStatus(st, __FILE__, __LINE__,
+                                 "rocblas_stop_device_memory_size_query");
+  }
+  workspace_bytes = std::max(workspace_bytes, size_t{4096});
+  return workspace_bytes;
+}
+
 #define JAX_GPU_DEFINE_ROC_POTRF(Type, CType, Name)                            \
   absl::Status RocPotrf(gpusolverDnHandle_t handle, bool lower, int n,         \
                         Type *a, int *info) {                                   \

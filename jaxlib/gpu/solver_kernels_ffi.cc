@@ -1450,6 +1450,18 @@ ffi::Error RocPotrfImpl(int64_t batch, int64_t size, gpuStream_t stream,
   FFI_ASSIGN_OR_RETURN(auto n, MaybeCastNoOverflow<int>(size));
   FFI_ASSIGN_OR_RETURN(auto handle, SolverHandlePool::Borrow(stream));
 
+  // Pre-allocate rocBLAS workspace to avoid hipMalloc inside the kernel.
+  // rocBLAS workspace query tells us the exact size needed for spotrf.
+  FFI_ASSIGN_OR_RETURN(size_t workspace_bytes,
+                       solver::RocPotrfWorkspaceSize(handle.get(), lower, n));
+  auto maybe_workspace = scratch.Allocate(workspace_bytes);
+  if (!maybe_workspace.has_value()) {
+    return ffi::Error(ffi::ErrorCode::kResourceExhausted,
+                      "Unable to allocate device workspace for rocsolver potrf");
+  }
+  FFI_RETURN_IF_ERROR_STATUS(
+      solver::SetWorkspace(handle.get(), maybe_workspace.value(), workspace_bytes));
+
   auto a_data = static_cast<T*>(a.untyped_data());
   auto out_data = static_cast<T*>(out->untyped_data());
   auto info_data = info->typed_data();
@@ -1465,6 +1477,8 @@ ffi::Error RocPotrfImpl(int64_t batch, int64_t size, gpuStream_t stream,
     out_data += out_step;
     ++info_data;
   }
+  // Clear workspace pointer so rocBLAS reverts to its default memory model.
+  solver::SetWorkspace(handle.get(), nullptr, 0).IgnoreError();
   return ffi::Error::Success();
 }
 
@@ -1478,6 +1492,17 @@ ffi::Error RocPotrfBatchedImpl(int64_t batch, int64_t size, gpuStream_t stream,
   FFI_ASSIGN_OR_RETURN(auto handle, SolverHandlePool::Borrow(stream));
   FFI_ASSIGN_OR_RETURN(auto batch_ptrs,
                        AllocateWorkspace<T*>(scratch, batch, "rocsolver batched potrf"));
+
+  // Pre-allocate rocBLAS workspace (same size as single-matrix case).
+  FFI_ASSIGN_OR_RETURN(size_t workspace_bytes,
+                       solver::RocPotrfWorkspaceSize(handle.get(), lower, n));
+  auto maybe_workspace = scratch.Allocate(workspace_bytes);
+  if (!maybe_workspace.has_value()) {
+    return ffi::Error(ffi::ErrorCode::kResourceExhausted,
+                      "Unable to allocate device workspace for rocsolver potrf batched");
+  }
+  FFI_RETURN_IF_ERROR_STATUS(
+      solver::SetWorkspace(handle.get(), maybe_workspace.value(), workspace_bytes));
 
   auto a_data = a.untyped_data();
   auto out_data = out->untyped_data();
@@ -1494,6 +1519,7 @@ ffi::Error RocPotrfBatchedImpl(int64_t batch, int64_t size, gpuStream_t stream,
   FFI_RETURN_IF_ERROR_STATUS(solver::RocPotrfBatched(
       handle.get(), lower, n, batch_ptrs, info_data, batch));
 
+  solver::SetWorkspace(handle.get(), nullptr, 0).IgnoreError();
   return ffi::Error::Success();
 }
 
