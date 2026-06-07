@@ -1438,6 +1438,105 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(GesddFfi, GesddDispatch,
                                   .Ret<ffi::AnyBuffer>()         // vt
                                   .Ret<ffi::Buffer<ffi::S32>>()  // info
 );
+
+// Cholesky decomposition via native rocsolver potrf.
+// Replaces the hipSOLVER-backed PotrfFfi on ROCm for better MI300X performance.
+
+template <typename T>
+ffi::Error RocPotrfImpl(int64_t batch, int64_t size, gpuStream_t stream,
+                        ffi::ScratchAllocator& scratch, bool lower,
+                        ffi::AnyBuffer a, ffi::Result<ffi::AnyBuffer> out,
+                        ffi::Result<ffi::Buffer<ffi::S32>> info) {
+  FFI_ASSIGN_OR_RETURN(auto n, MaybeCastNoOverflow<int>(size));
+  FFI_ASSIGN_OR_RETURN(auto handle, SolverHandlePool::Borrow(stream));
+
+  auto a_data = static_cast<T*>(a.untyped_data());
+  auto out_data = static_cast<T*>(out->untyped_data());
+  auto info_data = info->typed_data();
+  if (a_data != out_data) {
+    JAX_FFI_RETURN_IF_GPU_ERROR(gpuMemcpyAsync(
+        out_data, a_data, a.size_bytes(), gpuMemcpyDeviceToDevice, stream));
+  }
+
+  int out_step = n * n;
+  for (auto i = 0; i < batch; ++i) {
+    FFI_RETURN_IF_ERROR_STATUS(
+        solver::RocPotrf(handle.get(), lower, n, out_data, info_data));
+    out_data += out_step;
+    ++info_data;
+  }
+  return ffi::Error::Success();
+}
+
+template <typename T>
+ffi::Error RocPotrfBatchedImpl(int64_t batch, int64_t size, gpuStream_t stream,
+                               ffi::ScratchAllocator& scratch, bool lower,
+                               ffi::AnyBuffer a,
+                               ffi::Result<ffi::AnyBuffer> out,
+                               ffi::Result<ffi::Buffer<ffi::S32>> info) {
+  FFI_ASSIGN_OR_RETURN(auto n, MaybeCastNoOverflow<int>(size));
+  FFI_ASSIGN_OR_RETURN(auto handle, SolverHandlePool::Borrow(stream));
+  FFI_ASSIGN_OR_RETURN(auto batch_ptrs,
+                       AllocateWorkspace<T*>(scratch, batch, "rocsolver batched potrf"));
+
+  auto a_data = a.untyped_data();
+  auto out_data = out->untyped_data();
+  auto info_data = info->typed_data();
+  if (a_data != out_data) {
+    JAX_FFI_RETURN_IF_GPU_ERROR(gpuMemcpyAsync(
+        out_data, a_data, a.size_bytes(), gpuMemcpyDeviceToDevice, stream));
+  }
+
+  MakeBatchPointersAsync(stream, out_data, batch_ptrs, batch,
+                         sizeof(T) * n * n);
+  JAX_FFI_RETURN_IF_GPU_ERROR(gpuGetLastError());
+
+  FFI_RETURN_IF_ERROR_STATUS(solver::RocPotrfBatched(
+      handle.get(), lower, n, batch_ptrs, info_data, batch));
+
+  return ffi::Error::Success();
+}
+
+ffi::Error RocPotrfDispatch(gpuStream_t stream, ffi::ScratchAllocator scratch,
+                            bool lower, ffi::AnyBuffer a,
+                            ffi::Result<ffi::AnyBuffer> out,
+                            ffi::Result<ffi::Buffer<ffi::S32>> info) {
+  auto dataType = a.element_type();
+  if (dataType != out->element_type()) {
+    return ffi::Error::InvalidArgument(
+        "The input and output to rocsolver potrf must have the same element type");
+  }
+  FFI_ASSIGN_OR_RETURN((auto [batch, rows, cols]),
+                       SplitBatch2D(a.dimensions()));
+  if (rows != cols) {
+    return ffi::Error::InvalidArgument(
+        "The input matrix to rocsolver potrf must be square");
+  }
+  FFI_RETURN_IF_ERROR(
+      CheckShape(out->dimensions(), {batch, rows, cols}, "out", "rocsolver_potrf"));
+  FFI_RETURN_IF_ERROR(
+      CheckShape(info->dimensions(), batch, "info", "rocsolver_potrf"));
+  if (batch > 1) {
+    SOLVER_DISPATCH_IMPL(RocPotrfBatchedImpl, batch, rows, stream, scratch,
+                         lower, a, out, info);
+  } else {
+    SOLVER_DISPATCH_IMPL(RocPotrfImpl, batch, rows, stream, scratch, lower, a,
+                         out, info);
+  }
+  return ffi::Error::InvalidArgument(absl::StrFormat(
+      "Unsupported dtype %s in rocsolver_potrf", absl::FormatStreamed(dataType)));
+}
+
+XLA_FFI_DEFINE_HANDLER_SYMBOL(RocPotrfFfi, RocPotrfDispatch,
+                              ffi::Ffi::Bind()
+                                  .Ctx<ffi::PlatformStream<gpuStream_t>>()
+                                  .Ctx<ffi::ScratchAllocator>()
+                                  .Attr<bool>("lower")
+                                  .Arg<ffi::AnyBuffer>()         // a
+                                  .Ret<ffi::AnyBuffer>()         // out
+                                  .Ret<ffi::Buffer<ffi::S32>>()  // info
+);
+
 #endif  // JAX_GPU_HIP
 
 // Singular Value Decomposition: gesvdp (Polar decomposition)

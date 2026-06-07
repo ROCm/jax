@@ -256,6 +256,28 @@ JAX_GPU_SOLVER_EXPAND_DEFINITION(absl::Status, Gesdd);
 // (handle, ptr, size) before Gesdd; call with (handle, nullptr, 0) to clear.
 // The kernel computes workspace size via formula (see solver_kernels_ffi.cc).
 absl::Status SetWorkspace(gpusolverDnHandle_t handle, void* ptr, size_t size);
+
+// Cholesky decomposition via rocsolver (ROCm only). Bypasses hipSOLVER and
+// calls native rocsolver kernels, which are optimized with rocBLAS TRSM+SYRK.
+// uplo_lower=true means rocblas_fill_lower; false means rocblas_fill_upper.
+absl::Status RocPotrf(gpusolverDnHandle_t handle, bool lower, int n,
+                      float *a, int *info);
+absl::Status RocPotrf(gpusolverDnHandle_t handle, bool lower, int n,
+                      double *a, int *info);
+absl::Status RocPotrf(gpusolverDnHandle_t handle, bool lower, int n,
+                      gpuComplex *a, int *info);
+absl::Status RocPotrf(gpusolverDnHandle_t handle, bool lower, int n,
+                      gpuDoubleComplex *a, int *info);
+
+absl::Status RocPotrfBatched(gpusolverDnHandle_t handle, bool lower, int n,
+                             float **a, int *info, int batch);
+absl::Status RocPotrfBatched(gpusolverDnHandle_t handle, bool lower, int n,
+                             double **a, int *info, int batch);
+absl::Status RocPotrfBatched(gpusolverDnHandle_t handle, bool lower, int n,
+                             gpuComplex **a, int *info, int batch);
+absl::Status RocPotrfBatched(gpusolverDnHandle_t handle, bool lower, int n,
+                             gpuDoubleComplex **a, int *info, int batch);
+
 #endif  // JAX_GPU_HIP
 
 #ifdef JAX_GPU_CUDA

@@ -471,6 +471,47 @@ absl::Status SetWorkspace(gpusolverDnHandle_t handle, void* ptr, size_t size) {
   return RocblasStatusToStatus(st, __FILE__, __LINE__, "rocblas_set_workspace");
 }
 
+// Cholesky decomposition via native rocsolver potrf (bypasses hipSOLVER).
+// rocsolver potrf uses rocBLAS TRSM+SYRK kernels optimized for MI300X.
+#define JAX_GPU_DEFINE_ROC_POTRF(Type, CType, Name)                            \
+  absl::Status RocPotrf(gpusolverDnHandle_t handle, bool lower, int n,         \
+                        Type *a, int *info) {                                   \
+    auto h = reinterpret_cast<rocblas_handle>(handle);                         \
+    rocblas_fill uplo =                                                         \
+        lower ? rocblas_fill_lower : rocblas_fill_upper;                        \
+    rocblas_status st = Name(h, uplo, n,                                       \
+                             reinterpret_cast<CType *>(a), n,                  \
+                             reinterpret_cast<rocblas_int *>(info));            \
+    return RocblasStatusToStatus(st, __FILE__, __LINE__, #Name);                \
+  }
+
+JAX_GPU_DEFINE_ROC_POTRF(float, float, rocsolver_spotrf);
+JAX_GPU_DEFINE_ROC_POTRF(double, double, rocsolver_dpotrf);
+JAX_GPU_DEFINE_ROC_POTRF(gpuComplex, rocblas_float_complex, rocsolver_cpotrf);
+JAX_GPU_DEFINE_ROC_POTRF(gpuDoubleComplex, rocblas_double_complex,
+                         rocsolver_zpotrf);
+#undef JAX_GPU_DEFINE_ROC_POTRF
+
+#define JAX_GPU_DEFINE_ROC_POTRF_BATCHED(Type, CType, Name)                    \
+  absl::Status RocPotrfBatched(gpusolverDnHandle_t handle, bool lower, int n,  \
+                               Type **a, int *info, int batch) {               \
+    auto h = reinterpret_cast<rocblas_handle>(handle);                         \
+    rocblas_fill uplo =                                                         \
+        lower ? rocblas_fill_lower : rocblas_fill_upper;                        \
+    rocblas_status st = Name(h, uplo, n,                                       \
+                             reinterpret_cast<CType *const *>(a), n,           \
+                             reinterpret_cast<rocblas_int *>(info), batch);     \
+    return RocblasStatusToStatus(st, __FILE__, __LINE__, #Name);                \
+  }
+
+JAX_GPU_DEFINE_ROC_POTRF_BATCHED(float, float, rocsolver_spotrf_batched);
+JAX_GPU_DEFINE_ROC_POTRF_BATCHED(double, double, rocsolver_dpotrf_batched);
+JAX_GPU_DEFINE_ROC_POTRF_BATCHED(gpuComplex, rocblas_float_complex,
+                                 rocsolver_cpotrf_batched);
+JAX_GPU_DEFINE_ROC_POTRF_BATCHED(gpuDoubleComplex, rocblas_double_complex,
+                                 rocsolver_zpotrf_batched);
+#undef JAX_GPU_DEFINE_ROC_POTRF_BATCHED
+
 #endif  // JAX_GPU_HIP
 
 #ifdef JAX_GPU_CUDA

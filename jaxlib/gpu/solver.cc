@@ -40,6 +40,7 @@ nb::dict Registrations() {
 
 #ifdef JAX_GPU_HIP
   dict[JAX_GPU_PREFIX "solver_gesdd_ffi"] = EncapsulateFfiHandler(GesddFfi);
+  dict["rocsolver_potrf_ffi"] = EncapsulateFfiHandler(RocPotrfFfi);
 #endif  // JAX_GPU_HIP
 
 #ifdef JAX_GPU_CUDA
