@@ -1442,6 +1442,14 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(GesddFfi, GesddDispatch,
 // Cholesky decomposition via native rocsolver potrf.
 // Replaces the hipSOLVER-backed PotrfFfi on ROCm for better MI300X performance.
 
+// dtype_tag: 0=float, 1=double, 2=complex float, 3=complex double.
+template <typename T> constexpr int RocPotrfDtypeTag() {
+  if constexpr (std::is_same_v<T, float>) return 0;
+  if constexpr (std::is_same_v<T, double>) return 1;
+  if constexpr (std::is_same_v<T, gpuComplex>) return 2;
+  return 3;  // gpuDoubleComplex
+}
+
 template <typename T>
 ffi::Error RocPotrfImpl(int64_t batch, int64_t size, gpuStream_t stream,
                         ffi::ScratchAllocator& scratch, bool lower,
@@ -1453,7 +1461,8 @@ ffi::Error RocPotrfImpl(int64_t batch, int64_t size, gpuStream_t stream,
   // Pre-allocate rocBLAS workspace to avoid hipMalloc inside the kernel.
   // rocBLAS workspace query tells us the exact size needed for spotrf.
   FFI_ASSIGN_OR_RETURN(size_t workspace_bytes,
-                       solver::RocPotrfWorkspaceSize(handle.get(), lower, n));
+                       solver::RocPotrfWorkspaceSize(handle.get(), lower, n,
+                                                     RocPotrfDtypeTag<T>()));
   auto maybe_workspace = scratch.Allocate(workspace_bytes);
   if (!maybe_workspace.has_value()) {
     return ffi::Error(ffi::ErrorCode::kResourceExhausted,
@@ -1495,7 +1504,8 @@ ffi::Error RocPotrfBatchedImpl(int64_t batch, int64_t size, gpuStream_t stream,
 
   // Pre-allocate rocBLAS workspace (same size as single-matrix case).
   FFI_ASSIGN_OR_RETURN(size_t workspace_bytes,
-                       solver::RocPotrfWorkspaceSize(handle.get(), lower, n));
+                       solver::RocPotrfWorkspaceSize(handle.get(), lower, n,
+                                                     RocPotrfDtypeTag<T>()));
   auto maybe_workspace = scratch.Allocate(workspace_bytes);
   if (!maybe_workspace.has_value()) {
     return ffi::Error(ffi::ErrorCode::kResourceExhausted,

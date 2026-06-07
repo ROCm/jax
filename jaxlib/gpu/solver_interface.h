@@ -262,11 +262,13 @@ absl::Status SetWorkspace(gpusolverDnHandle_t handle, void* ptr, size_t size);
 // uplo_lower=true means rocblas_fill_lower; false means rocblas_fill_upper.
 //
 // RocPotrfWorkspaceSize uses rocBLAS device memory size query to determine the
-// workspace needed for rocsolver_spotrf (float). The caller should allocate
-// this workspace and call SetWorkspace before RocPotrf to avoid hipMalloc
-// inside the kernel.
+// workspace needed for rocsolver_[sdcz]potrf. dtype_tag selects the type:
+// 0=float (s), 1=double (d), 2=complex64 (c), 3=complex128 (z).
+// The caller should allocate this workspace and call SetWorkspace before
+// RocPotrf to avoid hipMalloc inside the kernel.
 absl::StatusOr<size_t> RocPotrfWorkspaceSize(gpusolverDnHandle_t handle,
-                                              bool lower, int n);
+                                              bool lower, int n,
+                                              int dtype_tag);
 absl::Status RocPotrf(gpusolverDnHandle_t handle, bool lower, int n,
                       float *a, int *info);
 absl::Status RocPotrf(gpusolverDnHandle_t handle, bool lower, int n,

@@ -478,7 +478,8 @@ absl::Status SetWorkspace(gpusolverDnHandle_t handle, void* ptr, size_t size) {
 // rocsolver potrf uses rocBLAS TRSM+SYRK kernels optimized for MI300X.
 
 absl::StatusOr<size_t> RocPotrfWorkspaceSize(gpusolverDnHandle_t handle,
-                                              bool lower, int n) {
+                                              bool lower, int n,
+                                              int dtype_tag) {
   auto h = reinterpret_cast<rocblas_handle>(handle);
   rocblas_fill uplo = lower ? rocblas_fill_lower : rocblas_fill_upper;
   rocblas_status st = rocblas_start_device_memory_size_query(h);
@@ -489,8 +490,25 @@ absl::StatusOr<size_t> RocPotrfWorkspaceSize(gpusolverDnHandle_t handle,
   // In query mode rocsolver returns size_query_mismatch (8), size_increased (9),
   // or size_unchanged (10) — all expected, not errors.
   int dummy_info = 0;
-  rocsolver_spotrf(h, uplo, n, nullptr, n,
-                   reinterpret_cast<rocblas_int*>(&dummy_info));
+  // Query with the matching typed call so workspace size reflects element size.
+  switch (dtype_tag) {
+    case 0:  // float
+      rocsolver_spotrf(h, uplo, n, nullptr, n,
+                       reinterpret_cast<rocblas_int*>(&dummy_info));
+      break;
+    case 1:  // double
+      rocsolver_dpotrf(h, uplo, n, nullptr, n,
+                       reinterpret_cast<rocblas_int*>(&dummy_info));
+      break;
+    case 2:  // complex float
+      rocsolver_cpotrf(h, uplo, n, nullptr, n,
+                       reinterpret_cast<rocblas_int*>(&dummy_info));
+      break;
+    default:  // complex double
+      rocsolver_zpotrf(h, uplo, n, nullptr, n,
+                       reinterpret_cast<rocblas_int*>(&dummy_info));
+      break;
+  }
   size_t workspace_bytes = 0;
   st = rocblas_stop_device_memory_size_query(h, &workspace_bytes);
   if (st != rocblas_status_success) {
