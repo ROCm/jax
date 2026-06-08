@@ -29,8 +29,9 @@ if [[ ! $(uname -s) =~ "MSYS_NT" ]]; then
 fi
 
 function clone_main_xla() {
-  echo "Cloning XLA at HEAD to $(pwd)/xla"
-  git clone --depth=1 https://github.com/openxla/xla.git $(pwd)/xla
+  # devtest: use the magaonka-amd/xla devtest branch instead of openxla/xla HEAD.
+  echo "Cloning XLA (magaonka-amd/xla@devtest) to $(pwd)/xla"
+  git clone --depth=1 -b devtest https://github.com/magaonka-amd/xla.git $(pwd)/xla
   cd $(pwd)/xla
   echo "XLA commit: $(git log -1 --format=%H)"
   cd ..

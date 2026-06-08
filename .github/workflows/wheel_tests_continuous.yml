@@ -292,19 +292,13 @@ jobs:
     strategy:
         fail-fast: false
         matrix:
+          # devtest: only need py3.11 wheels for the 1-GPU pytest run.
           runner: ["linux-x86-64-1gpu-amd"]
           artifact: ["jax-rocm-plugin", "jax-rocm-pjrt"]
-          python: ["3.11", "3.12", "3.13", "3.14"]
+          python: ["3.11"]
           rocm: [
             {label: "ROCm 7.2.0", wheel-version: "7", release-version: "7.2.0", manylinux-image: ""},
           ]
-          exclude:
-            - artifact: "jax-rocm-pjrt"
-              python: "3.12"
-            - artifact: "jax-rocm-pjrt"
-              python: "3.13"
-            - artifact: "jax-rocm-pjrt"
-              python: "3.14"
     name: "Build ROCm artifacts (${{ matrix.rocm.label }})"
     with:
       runner: ${{ matrix.runner }}
@@ -328,7 +322,8 @@ jobs:
     strategy:
         fail-fast: false
         matrix:
-          runner: ["linux-x86-64-1gpu-amd", "linux-x86-64-4gpu-amd", "linux-x86-64-8gpu-amd"]
+          # devtest: 1-GPU only.
+          runner: ["linux-x86-64-1gpu-amd"]
           python: ["3.11"]
           rocm: [
             {label: "ROCm 7.2.0", wheel-version: "7", release-version: "7.2.0", tag: "rocm720"},
@@ -345,7 +340,8 @@ jobs:
       s3_download_uri: 's3://jax-ci-amd/rocm-wheels/${{ github.repository }}/${{ github.ref_name }}/${{ matrix.rocm.release-version }}/wheel-tests-continuous/${{ github.run_number }}/${{ github.run_attempt }}'
 
   run-bazel-test-rocm:
-    if: ${{ !cancelled() && (github.repository_owner == 'jax-ml' || github.repository_owner == 'ROCm') }}
+    # devtest: disabled - we only want the 1-GPU ROCm pytest run.
+    if: false
     needs: [build-jax-artifact, build-jaxlib-artifact, build-rocm-artifacts]
     uses: ./.github/workflows/bazel_rocm.yml
     permissions:
