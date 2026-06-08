@@ -161,6 +161,7 @@ jobs:
       JAXCI_ENABLE_X64: "0"
       JAXCI_ROCM_VERSION: "7"
       ROCM_SDK_TARGET_FAMILY: "gfx950-dcgpu"
+      HSA_NO_SCRATCH_RECLAIM: "1"
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
