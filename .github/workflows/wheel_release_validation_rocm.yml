@@ -104,7 +104,7 @@ jobs:
         python: ["3.12"]
         rocm: [
           {label: "ROCm 7.2.0", wheel-version: "7", release-version: "7.2.0", manylinux-image: ""},
-          {label: "TheRock 7.13.0", wheel-version: "7", release-version: "therock-7.13.0", manylinux-image: "ghcr.io/rocm/jax-manylinux_2_28-therock-latest:latest"},
+          {label: "TheRock 7.14.0", wheel-version: "7", release-version: "therock-7.14.0", manylinux-image: "ghcr.io/rocm/jax-manylinux_2_28-therock-latest:latest"},
         ]
         exclude:
           - artifact: "jax-rocm-pjrt"
