@@ -132,6 +132,12 @@ jobs:
           persist-credentials: false
       - name: ROCm Info
         run: |
+          # TheRock (pip) ROCm images are /opt/rocm-less; rocminfo lives in the
+          # SDK bin dir, so put it on PATH via rocm-sdk. apt-ROCm images lack
+          # rocm-sdk and already have rocminfo on PATH.
+          if command -v rocm-sdk >/dev/null 2>&1; then
+            export PATH="$(rocm-sdk path --bin):$PATH"
+          fi
           rocminfo
       - name: Configure AWS Credentials
         if: inputs.build_jaxlib == 'false' && inputs.jaxlib-version == 'head'
