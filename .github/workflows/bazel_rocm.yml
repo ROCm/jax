@@ -136,10 +136,14 @@ jobs:
           # SDK bin dir, so put it on PATH via rocm-sdk. apt-ROCm images lack
           # rocm-sdk and already have rocminfo on PATH.
           if command -v rocm-sdk >/dev/null 2>&1; then
+<<<<<<< HEAD
             sdk_bin="$(rocm-sdk path --bin)"
             if [[ -n "$sdk_bin" ]]; then
               export PATH="$sdk_bin:$PATH"
             fi
+=======
+            export PATH="$(rocm-sdk path --bin):$PATH"
+>>>>>>> b8c52b15be ([ROCm] Put TheRock SDK bin on PATH via  so rocminfo/rocm-smi resolve in /opt/rocm-less images)
           fi
           rocminfo
       - name: Configure AWS Credentials
