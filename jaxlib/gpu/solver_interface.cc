@@ -17,10 +17,15 @@ limitations under the License.
 
 #include <algorithm>
 #include <cstddef>
+#include <dlfcn.h>
+#include <map>
+#include <vector>
 
+#include "absl/base/const_init.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_format.h"
+#include "absl/synchronization/mutex.h"
 #include "jaxlib/gpu/gpu_kernel_helpers.h"
 #include "jaxlib/gpu/vendor.h"
 
@@ -519,43 +524,245 @@ absl::StatusOr<size_t> RocPotrfWorkspaceSize(gpusolverDnHandle_t handle,
   return workspace_bytes;
 }
 
-#define JAX_GPU_DEFINE_ROC_POTRF(Type, CType, Name)                            \
-  absl::Status RocPotrf(gpusolverDnHandle_t handle, bool lower, int n,         \
+// ---------------------------------------------------------------------------
+// dlopen-based runtime loading of rocsolver potrf functions.
+//
+// rocsolver 3.33.0 (librocsolver.so.1) has a ~1.7x faster potrf on MI300X
+// compared to the system rocsolver 3.32.0 (librocsolver.so.0) that _solver.so
+// is linked against. We selectively redirect potrf calls to the newer library
+// at runtime without affecting other rocsolver operations (LU/QR/etc.).
+// ---------------------------------------------------------------------------
+
+// Function pointer types matching rocsolver potrf signatures.
+using rocsolver_spotrf_fn_t = rocblas_status (*)(rocblas_handle, rocblas_fill,
+                                                  rocblas_int, float*,
+                                                  rocblas_int, rocblas_int*);
+using rocsolver_dpotrf_fn_t = rocblas_status (*)(rocblas_handle, rocblas_fill,
+                                                  rocblas_int, double*,
+                                                  rocblas_int, rocblas_int*);
+using rocsolver_cpotrf_fn_t = rocblas_status (*)(rocblas_handle, rocblas_fill,
+                                                  rocblas_int,
+                                                  rocblas_float_complex*,
+                                                  rocblas_int, rocblas_int*);
+using rocsolver_zpotrf_fn_t = rocblas_status (*)(rocblas_handle, rocblas_fill,
+                                                  rocblas_int,
+                                                  rocblas_double_complex*,
+                                                  rocblas_int, rocblas_int*);
+
+struct RocPotrfFnPtrs {
+  rocsolver_spotrf_fn_t spotrf = nullptr;
+  rocsolver_dpotrf_fn_t dpotrf = nullptr;
+  rocsolver_cpotrf_fn_t cpotrf = nullptr;
+  rocsolver_zpotrf_fn_t zpotrf = nullptr;
+  bool loaded = false;
+};
+
+// Attempt to load potrf symbols from a newer rocsolver (soname librocsolver.so.1).
+// Falls back to nullptr (callers will use statically linked symbols) on failure.
+static RocPotrfFnPtrs LoadRocPotrfFnPtrs() {
+  RocPotrfFnPtrs ptrs;
+  // Try the newer soname first; this is the v3.33.0 library on the system.
+  void* lib = dlopen("librocsolver.so.1", RTLD_LAZY | RTLD_LOCAL);
+  if (!lib) {
+    // Try the well-known build path as a fallback.
+    lib = dlopen(
+        "/work/rocm-libraries/projects/rocsolver/build-bench/library/src/"
+        "librocsolver.so.1",
+        RTLD_LAZY | RTLD_LOCAL);
+  }
+  if (!lib) return ptrs;
+
+  ptrs.spotrf = reinterpret_cast<rocsolver_spotrf_fn_t>(
+      dlsym(lib, "rocsolver_spotrf"));
+  ptrs.dpotrf = reinterpret_cast<rocsolver_dpotrf_fn_t>(
+      dlsym(lib, "rocsolver_dpotrf"));
+  ptrs.cpotrf = reinterpret_cast<rocsolver_cpotrf_fn_t>(
+      dlsym(lib, "rocsolver_cpotrf"));
+  ptrs.zpotrf = reinterpret_cast<rocsolver_zpotrf_fn_t>(
+      dlsym(lib, "rocsolver_zpotrf"));
+
+  // Only mark loaded if all four symbols resolved.
+  if (ptrs.spotrf && ptrs.dpotrf && ptrs.cpotrf && ptrs.zpotrf) {
+    ptrs.loaded = true;
+  } else {
+    // Partial load: fall back entirely to static symbols.
+    ptrs = RocPotrfFnPtrs{};
+  }
+  return ptrs;
+}
+
+static const RocPotrfFnPtrs& GetRocPotrfFnPtrs() {
+  static RocPotrfFnPtrs ptrs = LoadRocPotrfFnPtrs();
+  return ptrs;
+}
+
+// Dedicated per-stream rocblas_handle pool for the dlopen'd rocsolver potrf.
+//
+// We cannot reuse the SolverHandlePool (hipsolverDnHandle_t) because
+// hipSOLVER's internal rocblas handle accumulates state from LU/QR operations
+// (via rocsolver 3.32.0) that causes rocblas_status_memory_error (5) when
+// rocsolver 3.33.0's potrf tries to use it. A fresh, dedicated rocblas_handle
+// has a clean memory manager state and works reliably.
+absl::StatusOr<rocblas_handle> BorrowPotrfHandle(gpuStream_t stream);
+void ReturnPotrfHandle(rocblas_handle handle, gpuStream_t stream);
+
+// RAII wrapper that returns the handle to the pool on destruction.
+struct PotrfHandleGuard {
+  rocblas_handle h;
+  gpuStream_t stream;
+  ~PotrfHandleGuard() { ReturnPotrfHandle(h, stream); }
+};
+
+namespace {
+absl::Mutex g_potrf_handle_pool_mu(absl::kConstInit);
+std::map<gpuStream_t, std::vector<rocblas_handle>> g_potrf_handle_pool
+    ABSL_GUARDED_BY(g_potrf_handle_pool_mu);
+}  // namespace
+
+absl::StatusOr<rocblas_handle> BorrowPotrfHandle(gpuStream_t stream) {
+  absl::MutexLock lock(&g_potrf_handle_pool_mu);
+  rocblas_handle handle;
+  auto& pool = g_potrf_handle_pool[stream];
+  if (!pool.empty()) {
+    handle = pool.back();
+    pool.pop_back();
+  } else {
+    rocblas_status st = rocblas_create_handle(&handle);
+    if (st != rocblas_status_success) {
+      return RocblasStatusToStatus(st, __FILE__, __LINE__,
+                                   "rocblas_create_handle");
+    }
+  }
+  rocblas_status st = rocblas_set_stream(handle, stream);
+  if (st != rocblas_status_success) {
+    rocblas_destroy_handle(handle);
+    return RocblasStatusToStatus(st, __FILE__, __LINE__, "rocblas_set_stream");
+  }
+  return handle;
+}
+
+void ReturnPotrfHandle(rocblas_handle handle, gpuStream_t stream) {
+  absl::MutexLock lock(&g_potrf_handle_pool_mu);
+  g_potrf_handle_pool[stream].push_back(handle);
+}
+
+#define JAX_GPU_DEFINE_ROC_POTRF(Type, CType, StaticName, PtrField)            \
+  absl::Status RocPotrf(gpuStream_t stream, bool lower, int n,                 \
                         Type *a, int *info) {                                   \
-    auto h = reinterpret_cast<rocblas_handle>(handle);                         \
     rocblas_fill uplo =                                                         \
         lower ? rocblas_fill_lower : rocblas_fill_upper;                        \
-    rocblas_status st = Name(h, uplo, n,                                       \
-                             reinterpret_cast<CType *>(a), n,                  \
-                             reinterpret_cast<rocblas_int *>(info));            \
-    return RocblasStatusToStatus(st, __FILE__, __LINE__, #Name);                \
+    const auto& ptrs = GetRocPotrfFnPtrs();                                    \
+    auto maybe_h = BorrowPotrfHandle(stream);                                  \
+    if (!maybe_h.ok()) return maybe_h.status();                                \
+    rocblas_handle h_raw = maybe_h.value();                                    \
+    PotrfHandleGuard guard{h_raw, stream};                                     \
+    rocblas_status st;                                                          \
+    if (ptrs.loaded && ptrs.PtrField) {                                        \
+      st = ptrs.PtrField(h_raw, uplo, n,                                       \
+                         reinterpret_cast<CType *>(a), n,                      \
+                         reinterpret_cast<rocblas_int *>(info));                \
+    } else {                                                                    \
+      st = StaticName(h_raw, uplo, n,                                          \
+                      reinterpret_cast<CType *>(a), n,                         \
+                      reinterpret_cast<rocblas_int *>(info));                   \
+    }                                                                           \
+    return RocblasStatusToStatus(st, __FILE__, __LINE__, #StaticName);          \
   }
 
-JAX_GPU_DEFINE_ROC_POTRF(float, float, rocsolver_spotrf);
-JAX_GPU_DEFINE_ROC_POTRF(double, double, rocsolver_dpotrf);
-JAX_GPU_DEFINE_ROC_POTRF(gpuComplex, rocblas_float_complex, rocsolver_cpotrf);
+JAX_GPU_DEFINE_ROC_POTRF(float, float, rocsolver_spotrf, spotrf);
+JAX_GPU_DEFINE_ROC_POTRF(double, double, rocsolver_dpotrf, dpotrf);
+JAX_GPU_DEFINE_ROC_POTRF(gpuComplex, rocblas_float_complex, rocsolver_cpotrf,
+                         cpotrf);
 JAX_GPU_DEFINE_ROC_POTRF(gpuDoubleComplex, rocblas_double_complex,
-                         rocsolver_zpotrf);
+                         rocsolver_zpotrf, zpotrf);
 #undef JAX_GPU_DEFINE_ROC_POTRF
 
-#define JAX_GPU_DEFINE_ROC_POTRF_BATCHED(Type, CType, Name)                    \
-  absl::Status RocPotrfBatched(gpusolverDnHandle_t handle, bool lower, int n,  \
+// Batched potrf function pointer types.
+using rocsolver_spotrf_batched_fn_t = rocblas_status (*)(
+    rocblas_handle, rocblas_fill, rocblas_int, float* const*, rocblas_int,
+    rocblas_int*, rocblas_int);
+using rocsolver_dpotrf_batched_fn_t = rocblas_status (*)(
+    rocblas_handle, rocblas_fill, rocblas_int, double* const*, rocblas_int,
+    rocblas_int*, rocblas_int);
+using rocsolver_cpotrf_batched_fn_t = rocblas_status (*)(
+    rocblas_handle, rocblas_fill, rocblas_int, rocblas_float_complex* const*,
+    rocblas_int, rocblas_int*, rocblas_int);
+using rocsolver_zpotrf_batched_fn_t = rocblas_status (*)(
+    rocblas_handle, rocblas_fill, rocblas_int, rocblas_double_complex* const*,
+    rocblas_int, rocblas_int*, rocblas_int);
+
+struct RocPotrfBatchedFnPtrs {
+  rocsolver_spotrf_batched_fn_t spotrf = nullptr;
+  rocsolver_dpotrf_batched_fn_t dpotrf = nullptr;
+  rocsolver_cpotrf_batched_fn_t cpotrf = nullptr;
+  rocsolver_zpotrf_batched_fn_t zpotrf = nullptr;
+  bool loaded = false;
+};
+
+static RocPotrfBatchedFnPtrs LoadRocPotrfBatchedFnPtrs() {
+  RocPotrfBatchedFnPtrs ptrs;
+  void* lib = dlopen("librocsolver.so.1", RTLD_LAZY | RTLD_LOCAL);
+  if (!lib) {
+    lib = dlopen(
+        "/work/rocm-libraries/projects/rocsolver/build-bench/library/src/"
+        "librocsolver.so.1",
+        RTLD_LAZY | RTLD_LOCAL);
+  }
+  if (!lib) return ptrs;
+
+  ptrs.spotrf = reinterpret_cast<rocsolver_spotrf_batched_fn_t>(
+      dlsym(lib, "rocsolver_spotrf_batched"));
+  ptrs.dpotrf = reinterpret_cast<rocsolver_dpotrf_batched_fn_t>(
+      dlsym(lib, "rocsolver_dpotrf_batched"));
+  ptrs.cpotrf = reinterpret_cast<rocsolver_cpotrf_batched_fn_t>(
+      dlsym(lib, "rocsolver_cpotrf_batched"));
+  ptrs.zpotrf = reinterpret_cast<rocsolver_zpotrf_batched_fn_t>(
+      dlsym(lib, "rocsolver_zpotrf_batched"));
+
+  if (ptrs.spotrf && ptrs.dpotrf && ptrs.cpotrf && ptrs.zpotrf) {
+    ptrs.loaded = true;
+  } else {
+    ptrs = RocPotrfBatchedFnPtrs{};
+  }
+  return ptrs;
+}
+
+static const RocPotrfBatchedFnPtrs& GetRocPotrfBatchedFnPtrs() {
+  static RocPotrfBatchedFnPtrs ptrs = LoadRocPotrfBatchedFnPtrs();
+  return ptrs;
+}
+
+#define JAX_GPU_DEFINE_ROC_POTRF_BATCHED(Type, CType, StaticName, PtrField)    \
+  absl::Status RocPotrfBatched(gpuStream_t stream, bool lower, int n,          \
                                Type **a, int *info, int batch) {               \
-    auto h = reinterpret_cast<rocblas_handle>(handle);                         \
     rocblas_fill uplo =                                                         \
         lower ? rocblas_fill_lower : rocblas_fill_upper;                        \
-    rocblas_status st = Name(h, uplo, n,                                       \
-                             reinterpret_cast<CType *const *>(a), n,           \
-                             reinterpret_cast<rocblas_int *>(info), batch);     \
-    return RocblasStatusToStatus(st, __FILE__, __LINE__, #Name);                \
+    const auto& ptrs = GetRocPotrfBatchedFnPtrs();                             \
+    auto maybe_h = BorrowPotrfHandle(stream);                                  \
+    if (!maybe_h.ok()) return maybe_h.status();                                \
+    rocblas_handle h_raw = maybe_h.value();                                    \
+    PotrfHandleGuard guard{h_raw, stream};                                     \
+    rocblas_status st;                                                          \
+    if (ptrs.loaded && ptrs.PtrField) {                                        \
+      st = ptrs.PtrField(h_raw, uplo, n,                                       \
+                         reinterpret_cast<CType *const *>(a), n,               \
+                         reinterpret_cast<rocblas_int *>(info), batch);         \
+    } else {                                                                    \
+      st = StaticName(h_raw, uplo, n,                                          \
+                      reinterpret_cast<CType *const *>(a), n,                  \
+                      reinterpret_cast<rocblas_int *>(info), batch);            \
+    }                                                                           \
+    return RocblasStatusToStatus(st, __FILE__, __LINE__, #StaticName);          \
   }
 
-JAX_GPU_DEFINE_ROC_POTRF_BATCHED(float, float, rocsolver_spotrf_batched);
-JAX_GPU_DEFINE_ROC_POTRF_BATCHED(double, double, rocsolver_dpotrf_batched);
+JAX_GPU_DEFINE_ROC_POTRF_BATCHED(float, float, rocsolver_spotrf_batched,
+                                 spotrf);
+JAX_GPU_DEFINE_ROC_POTRF_BATCHED(double, double, rocsolver_dpotrf_batched,
+                                 dpotrf);
 JAX_GPU_DEFINE_ROC_POTRF_BATCHED(gpuComplex, rocblas_float_complex,
-                                 rocsolver_cpotrf_batched);
+                                 rocsolver_cpotrf_batched, cpotrf);
 JAX_GPU_DEFINE_ROC_POTRF_BATCHED(gpuDoubleComplex, rocblas_double_complex,
-                                 rocsolver_zpotrf_batched);
+                                 rocsolver_zpotrf_batched, zpotrf);
 #undef JAX_GPU_DEFINE_ROC_POTRF_BATCHED
 
 #endif  // JAX_GPU_HIP

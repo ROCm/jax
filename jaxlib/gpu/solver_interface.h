@@ -261,30 +261,29 @@ absl::Status SetWorkspace(gpusolverDnHandle_t handle, void* ptr, size_t size);
 // calls native rocsolver kernels, which are optimized with rocBLAS TRSM+SYRK.
 // uplo_lower=true means rocblas_fill_lower; false means rocblas_fill_upper.
 //
-// RocPotrfWorkspaceSize uses rocBLAS device memory size query to determine the
-// workspace needed for rocsolver_[sdcz]potrf. dtype_tag selects the type:
-// 0=float (s), 1=double (d), 2=complex64 (c), 3=complex128 (z).
-// The caller should allocate this workspace and call SetWorkspace before
-// RocPotrf to avoid hipMalloc inside the kernel.
+// When rocsolver 3.33.0 (librocsolver.so.1) is available at runtime, these
+// functions use it via dlopen and a dedicated per-stream rocblas_handle to
+// avoid handle state conflicts with the hipSOLVER-managed handle. Falls back
+// to statically linked rocsolver 3.32.0 if the newer library is absent.
 absl::StatusOr<size_t> RocPotrfWorkspaceSize(gpusolverDnHandle_t handle,
                                               bool lower, int n,
                                               int dtype_tag);
-absl::Status RocPotrf(gpusolverDnHandle_t handle, bool lower, int n,
+absl::Status RocPotrf(gpuStream_t stream, bool lower, int n,
                       float *a, int *info);
-absl::Status RocPotrf(gpusolverDnHandle_t handle, bool lower, int n,
+absl::Status RocPotrf(gpuStream_t stream, bool lower, int n,
                       double *a, int *info);
-absl::Status RocPotrf(gpusolverDnHandle_t handle, bool lower, int n,
+absl::Status RocPotrf(gpuStream_t stream, bool lower, int n,
                       gpuComplex *a, int *info);
-absl::Status RocPotrf(gpusolverDnHandle_t handle, bool lower, int n,
+absl::Status RocPotrf(gpuStream_t stream, bool lower, int n,
                       gpuDoubleComplex *a, int *info);
 
-absl::Status RocPotrfBatched(gpusolverDnHandle_t handle, bool lower, int n,
+absl::Status RocPotrfBatched(gpuStream_t stream, bool lower, int n,
                              float **a, int *info, int batch);
-absl::Status RocPotrfBatched(gpusolverDnHandle_t handle, bool lower, int n,
+absl::Status RocPotrfBatched(gpuStream_t stream, bool lower, int n,
                              double **a, int *info, int batch);
-absl::Status RocPotrfBatched(gpusolverDnHandle_t handle, bool lower, int n,
+absl::Status RocPotrfBatched(gpuStream_t stream, bool lower, int n,
                              gpuComplex **a, int *info, int batch);
-absl::Status RocPotrfBatched(gpusolverDnHandle_t handle, bool lower, int n,
+absl::Status RocPotrfBatched(gpuStream_t stream, bool lower, int n,
                              gpuDoubleComplex **a, int *info, int batch);
 
 #endif  // JAX_GPU_HIP
