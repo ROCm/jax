@@ -104,7 +104,7 @@ jobs:
         python: ["3.11", "3.12", "3.13", "3.14"]
         rocm: [
           {label: "ROCm 7.2.0", wheel-version: "7", release-version: "7.2.0", manylinux-image: ""},
-          {label: "TheRock 7.13.0", wheel-version: "7", release-version: "therock-7.13.0", manylinux-image: "ghcr.io/rocm/jax-manylinux_2_28-therock-latest:latest"},
+          {label: "TheRock 7.14.0", wheel-version: "7", release-version: "therock-7.14.0", manylinux-image: "ghcr.io/rocm/jax-manylinux_2_28-therock-latest:latest"},
         ]
         exclude:
           - artifact: "jax-rocm-pjrt"
@@ -146,7 +146,7 @@ jobs:
         python: ["3.11", "3.12", "3.13", "3.14"]
         rocm: [
           {label: "ROCm 7.2.0", release-version: "7.2.0", image: "ghcr.io/rocm/jax-base-ubu24.rocm720:latest"},
-          {label: "TheRock 7.13.0", release-version: "therock-7.13.0", image: "ghcr.io/rocm/jax-base-ubu24.therock-7.13.0a20260515:latest"},
+          {label: "TheRock 7.14.0", release-version: "therock-7.14.0", image: "ghcr.io/rocm/jax-base-ubu24.therock-latest:latest"},
         ]
     name: "Pytest ROCm (${{ matrix.rocm.label }})"
     container:
@@ -161,6 +161,7 @@ jobs:
       JAXCI_ENABLE_X64: "0"
       JAXCI_ROCM_VERSION: "7"
       ROCM_SDK_TARGET_FAMILY: "gfx950-dcgpu"
+      HSA_NO_SCRATCH_RECLAIM: "1"
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
