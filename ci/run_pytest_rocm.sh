@@ -155,6 +155,12 @@ if [[ $gpu_count -gt 1 ]]; then
     --deselect=tests/compilation_cache_test.py::CompilationCacheTest::test_task_using_cache_metric \
     tests
 
+  second_cmd_retval=$?
+else
+  echo "Skipping multi-accelerator tests (only $gpu_count GPU detected)"
+  second_cmd_retval=0
+fi
+
 # Exit with failure if either command fails.
 if [[ $first_cmd_retval -ne 0 ]]; then
   exit $first_cmd_retval
