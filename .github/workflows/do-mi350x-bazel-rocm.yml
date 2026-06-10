@@ -1,0 +1,50 @@
+# Copy of bazel_rocm_presubmit.yml retargeted to the DigitalOcean DOKS MI350X
+# jax runner (linux-jax-do-mi350x-1). Same reusable bazel_rocm.yml CI path, just
+# pointed at the DO runner, and triggered by pushing the do-mi350x-jax-smoke branch.
+name: DO MI350X - CI - Bazel ROCm tests
+
+on:
+  workflow_dispatch:
+    inputs:
+      halt-for-connection:
+        description: 'Should this workflow run wait for a remote connection?'
+        type: choice
+        required: true
+        default: 'no'
+        options:
+        - 'yes'
+        - 'no'
+  push:
+    branches:
+      - do-mi350x-jax-smoke
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+permissions: {}
+jobs:
+  run-tests:
+    if: github.event.repository.fork == false && (github.repository_owner == 'jax-ml' || github.repository_owner == 'ROCm')
+    uses: ./.github/workflows/bazel_rocm.yml
+    strategy:
+        fail-fast: false
+        matrix:
+          python: ["3.14"]
+          runner: ["linux-jax-do-mi350x-1"]
+          jaxlib-version: ["head", "pypi_latest"]
+          enable-x64: [1]
+          rocm-version: ["7"]
+    name: "Bazel single accelerator ROCm tests (DO MI350X)"
+    with:
+      runner: ${{ matrix.runner }}
+      python: ${{ matrix.python }}
+      download-jax-from-gcs: 0
+      skip-download-jaxlib-and-plugins-from-gcs: 0
+      jaxlib-version: ${{ matrix.jaxlib-version }}
+      halt-for-connection: ${{ inputs.halt-for-connection }}
+      rocm-version: ${{ matrix.rocm-version }}
+      enable-x64:  ${{ matrix.enable-x64 }}
+      build_jaxlib: ${{ (matrix.jaxlib-version == 'head' && 'wheel') || 'false' }}
+      build_jax: ${{ 'true' }}
+      run_multiaccelerator_tests: ${{ 'false' }}
+      clone_main_xla: 0
