@@ -19,11 +19,11 @@ on:
       runner:
         description: "Which runner should the workflow run on?"
         type: choice
-        default: "linux-x86-64-4gpu-amd"
+        default: "linux-jax-do-mi350x-4"
         options:
-          - "linux-x86-64-1gpu-amd"
-          - "linux-x86-64-4gpu-amd"
-          - "linux-x86-64-8gpu-amd"
+          - "linux-jax-do-mi350x-1"
+          - "linux-jax-do-mi350x-4"
+          - "linux-jax-do-mi350x-8"
       python:
         description: "Which Python version to use?"
         type: choice
@@ -76,7 +76,7 @@ on:
       runner:
         description: "Which runner should the workflow run on?"
         type: string
-        default: "linux-x86-64-4gpu-amd"
+        default: "linux-jax-do-mi350x-4"
       python:
         description: "Which Python version to use?"
         type: string
