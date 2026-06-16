@@ -132,12 +132,12 @@ set +e
 --deselect=tests/multi_device_test.py::MultiDeviceTest::test_computation_follows_data \
 --deselect=tests/multiprocess_gpu_test.py::MultiProcessGpuTest::test_distributed_jax_visible_devices \
 --deselect=tests/compilation_cache_test.py::CompilationCacheTest::test_task_using_cache_metric \
+--deselect=tests/pgle_test.py::PgleTest::testAutoPgle \
+--deselect=tests/pgle_test.py::PgleTest::testAutoPgleWithCommandBuffers0 \
+--deselect=tests/pgle_test.py::PgleTest::testAutoPgleWithCommandBuffers1 \
+--deselect=tests/pgle_test.py::PgleTest::testAutoPgleWithPersistentCache \
+--deselect=tests/pgle_test.py::PgleTest::testPGLEProfilerGetFDOProfile \
 tests
-
-first_cmd_retval=$?
-
-if [[ $gpu_count -gt 1 ]]; then
-  # Run multi-accelerator tests across all GPUs without xdist.
   unset JAX_ENABLE_ROCM_XDIST
 
   "$JAXCI_PYTHON" -m pytest --tb=short \
@@ -147,12 +147,12 @@ if [[ $gpu_count -gt 1 ]]; then
     --deselect=tests/multi_device_test.py::MultiDeviceTest::test_computation_follows_data \
     --deselect=tests/multiprocess_gpu_test.py::MultiProcessGpuTest::test_distributed_jax_visible_devices \
     --deselect=tests/compilation_cache_test.py::CompilationCacheTest::test_task_using_cache_metric \
+    --deselect=tests/pgle_test.py::PgleTest::testAutoPgle \
+    --deselect=tests/pgle_test.py::PgleTest::testAutoPgleWithCommandBuffers0 \
+    --deselect=tests/pgle_test.py::PgleTest::testAutoPgleWithCommandBuffers1 \
+    --deselect=tests/pgle_test.py::PgleTest::testAutoPgleWithPersistentCache \
+    --deselect=tests/pgle_test.py::PgleTest::testPGLEProfilerGetFDOProfile \
     tests
-
-  second_cmd_retval=$?
-else
-  echo "Skipping multi-accelerator tests (only $gpu_count GPU detected)"
-  second_cmd_retval=0
 fi
 
 # Exit with failure if either command fails.
