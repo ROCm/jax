@@ -95,3 +95,12 @@ def pytest_collection() -> None:
     # HIP_VISIBLE_DEVICES to all GPUs; override to "0" so HIP doesn't try to
     # enable agents that ROCr just hid.
     os.environ["HIP_VISIBLE_DEVICES"] = "0"
+
+    # MIOpen serializes kernel lookup through a shared user-DB lock under
+    # /tmp/miopen-lockfiles. Use a per-worker cache directory to avoid lock
+    # contention when xdist workers share the same GPU.
+    miopen_cache_dir = f"/tmp/miopen-{xdist_worker_name}"
+    os.makedirs(miopen_cache_dir, exist_ok=True)
+    os.environ["MIOPEN_USER_DB_PATH"] = miopen_cache_dir
+    os.environ["MIOPEN_CUSTOM_CACHE_DIR"] = miopen_cache_dir
+
