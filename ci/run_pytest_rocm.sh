@@ -102,6 +102,14 @@ if [[ $host_memory_limit -lt $num_processes ]]; then
   echo "Adjusting num_processes to match host memory limit: $num_processes"
 fi
 
+# Cap workers per GPU to avoid oversubscribing a single device.
+max_workers_per_gpu=8
+
+if [[ $((gpu_count * max_workers_per_gpu)) -lt $num_processes ]]; then
+  num_processes=$((gpu_count * max_workers_per_gpu))
+  echo "Capping num_processes to $max_workers_per_gpu/GPU: $num_processes"
+fi
+
 if [[ 16 -lt $num_processes ]]; then
   num_processes=16
   echo "Reducing num_processes to $num_processes"
