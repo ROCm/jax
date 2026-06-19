@@ -271,21 +271,8 @@ packages (for example, `jax-rocm7-plugin==X.Y.Z.post1`). Upgrading
 `jax[rocm7-local]` will pick up the newest compatible post-release available from
 your configured package indexes.
 
-After installing, set `LLVM_PATH` so XLA can find `ld.lld` at runtime, then
-verify that JAX detects your GPUs:
-
 ```bash
-export LLVM_PATH=/opt/rocm/llvm
-
 python3 -c "import jax; print(jax.devices())"
-```
-
-```{note}
-`LLVM_PATH` is only needed for a legacy ROCm install (ROCm under `/opt/rocm`).
-If you're using the prebuilt `rocm/jax` image, `LLVM_PATH` is already set — skip
-this step. On bare metal or a plain ROCm container, set it so XLA can find
-`ld.lld`. The TheRock-based wheels (see below) bundle the ROCm runtime, so you do
-not set `LLVM_PATH`; the plugin locates the bundled `ld.lld` automatically.
 ```
 
 If the installation is working, this lists your ROCm devices (for example,
@@ -295,23 +282,19 @@ To build the ROCm JAX wheels from source, see [Build ROCm JAX from Source](https
 
 ### pip installation: AMD GPU (ROCm, installed via pip)
 
-AMD is rolling out installing the JAX ROCm wheels directly from AMD's package
+AMD is rolling out installing the ROCm wheels directly from AMD's package
 indexes, currently available as a **technology preview** in
-[ROCm 7.13.0 (preview)](https://rocm.docs.amd.com/en/7.13.0-preview/frameworks/jax/install.html).
-This path installs the `jax-rocm7-plugin` and `jax-rocm7-pjrt` wheels from an
-AMD index URL selected for your GPU architecture (for example,
-`https://repo.amd.com/rocm/whl/gfx950-dcgpu/`).
+[ROCm 7.13.0 (preview)](https://rocm.docs.amd.com/en/7.13.0-preview/install/rocm.html).
 
 This is a preview and not yet generally available; the ROCm Core SDK must still
 be installed separately (the JAX packages do not pull in `rocm[libraries]`
 automatically). For the per-architecture index URLs and exact commands, follow
-the [ROCm 7.13.0 JAX installation guide](https://rocm.docs.amd.com/en/7.13.0-preview/frameworks/jax/install.html).
+the [ROCm 7.13.0 installation guide](https://rocm.docs.amd.com/en/7.13.0-preview/install/rocm.html).
 
 As part of the same preview effort, the ROCm JAX fork
 ([ROCm/jax](https://github.com/ROCm/jax)) publishes
 [TheRock](https://github.com/ROCm/TheRock)-based JAX wheels — built against
-TheRock ROCm — as downloadable release assets. These bundle the ROCm runtime, so
-they do not require a separately installed ROCm. Grab the
+TheRock ROCm — as downloadable release assets. Grab the
 `wheelhouse_*_theRock*.zip` archive from the
 [latest ROCm/jax release](https://github.com/ROCm/jax/releases/latest),
 unzip it, and `pip install` the contained `jax-rocm7-pjrt` and `jax-rocm7-plugin`
