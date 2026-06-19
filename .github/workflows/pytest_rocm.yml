@@ -117,6 +117,10 @@ env:
 
 jobs:
   run-tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        workers_per_gpu: [16, 8, 4, 2, 1]
     defaults:
       run:
         # Set the shell to bash as GitHub actions run with /bin/sh by default
@@ -132,7 +136,7 @@ jobs:
       options: --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --shm-size 64G --env-file /etc/podinfo/gha-gpu-isolation-settings
     name: "${{ (contains(inputs.runner, '1gpu') && '1gpu') ||
         (contains(inputs.runner, '4gpu') && '4gpu') ||
-        (contains(inputs.runner, '8gpu') && '8gpu') }}, ROCm ${{ inputs.rocm-version }}, py${{ inputs.python }}"
+        (contains(inputs.runner, '8gpu') && '8gpu') }}, n=${{ matrix.workers_per_gpu }}, ROCm ${{ inputs.rocm-version }}, py${{ inputs.python }}"
 
     env:
       JAXCI_HERMETIC_PYTHON_VERSION: "${{ inputs.python }}"
@@ -143,6 +147,8 @@ jobs:
       # warning when this is unset; the env var must be in place before HIP
       # initialization, which happens at JAX import time.
       HSA_NO_SCRATCH_RECLAIM: "1"
+      # Temp: Sweep the xdist worker cap across matrix values
+      JAXCI_MAX_WORKERS_PER_GPU: ${{ matrix.workers_per_gpu }}
 
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3

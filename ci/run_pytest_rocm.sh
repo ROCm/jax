@@ -103,8 +103,9 @@ if [[ $host_memory_limit -lt $num_processes ]]; then
 fi
 
 # Cap workers per GPU to avoid oversubscribing a single device.
-max_workers_per_gpu=8
-
+# max_workers_per_gpu=8
+max_workers_per_gpu="${JAXCI_MAX_WORKERS_PER_GPU:-8}"
+echo "max_workers_per_gpu=$max_workers_per_gpu (JAXCI_MAX_WORKERS_PER_GPU='${JAXCI_MAX_WORKERS_PER_GPU:-<unset>}')"
 if [[ $((gpu_count * max_workers_per_gpu)) -lt $num_processes ]]; then
   num_processes=$((gpu_count * max_workers_per_gpu))
   echo "Capping num_processes to $max_workers_per_gpu/GPU: $num_processes"
