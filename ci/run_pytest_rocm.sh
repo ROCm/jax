@@ -122,6 +122,12 @@ export XLA_FLAGS="--xla_gpu_force_compilation_parallelism=1 --xla_gpu_enable_ncc
 ulimit -c 0
 
 echo "Running ROCm tests..."
+
+# Ensure tests start with a clean MIOpen cache state.
+echo "Clearing MIOpen user cache..."
+rm -rf /tmp/miopen* /tmp/miopen-lockfiles 2>/dev/null
+rm -rf "${HOME}/.cache/miopen" /root/.cache/miopen 2>/dev/null
+
 export NPROC=32
 LOGS_DIR="logs"
 mkdir -p "${LOGS_DIR}"
