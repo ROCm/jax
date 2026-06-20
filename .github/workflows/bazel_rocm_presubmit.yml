@@ -63,13 +63,12 @@ jobs:
         python: ["3.12"]
         runner: ["linux-x86-64-2gpu-amd"]
         rocm:
-          - {label: "ROCm 7.2.0",     tag: "rocm720",        release-version: "7.2.0",        s3-version: "0.11.0/7.2.0",          experimental: false}
-          - {label: "TheRock 7.13",   tag: "therock-7.13.0", release-version: "therock-7.13.0", s3-version: "0.11.0/therock-7.13.0", experimental: true}
-          - {label: "TheRock latest", tag: "therock-latest",  release-version: "therock-latest", s3-version: "0.11.0/therock-latest", experimental: true}
+          - {label: "ROCm 7.2.0",     tag: "rocm720",        release-version: "7.2.0",        s3-version: "0.11.0/7.2.0"}
+          - {label: "TheRock 7.13",   tag: "therock-7.13.0", release-version: "therock-7.13.0", s3-version: "0.11.0/therock-7.13.0"}
+          - {label: "TheRock latest", tag: "therock-latest",  release-version: "therock-latest", s3-version: "0.11.0/therock-latest"}
 # Begin Presubmit Naming Check - name modification requires internal check to be updated
     name: "ROCm blocking gate (${{ matrix.rocm.label }})"
 # End Presubmit Naming Check github-rocm-blocking-presubmits
-    continue-on-error: ${{ matrix.rocm.experimental }}
     with:
       runner: ${{ matrix.runner }}
       python: ${{ matrix.python }}
