@@ -82,6 +82,7 @@ jobs:
       build_jax: "true"
       skip-download-jaxlib-and-plugins-from-gcs: 0
       s3_download_uri: "s3://jax-ci-amd/rocm-wheels/releases/${{ matrix.rocm.s3-version }}"
+      halt-for-connection: ${{ inputs.halt-for-connection }}
       gate-targets-file: "build/rocm/ci_blocking_test_targets.txt"
       gpu-config: "rocm_gate"
       run_multiaccelerator_tests: "false"
