@@ -49,6 +49,9 @@ TAG_FILTERS="jax_test_gpu,-config-cuda-only,-manual"
 # Defaults to the full CI suite; set to build/rocm/ci_blocking_test_targets.txt
 # for the PR blocking gate.
 TARGETS_FILE="${JAXCI_GATE_TARGETS_FILE:-build/rocm/ci_test_targets.txt}"
+# Effective file passed to --target_pattern_file; may be replaced by a temp
+# file below when additional dynamic exclusions are needed.
+EFFECTIVE_TARGETS_FILE="${TARGETS_FILE}"
 
 for arg in "$@"; do
     if [[ "$arg" == "--config=multi_gpu" ]]; then
@@ -56,6 +59,13 @@ for arg in "$@"; do
     fi
     if [[ "$arg" == "--config=single_gpu" ]]; then
         TAG_FILTERS="${TAG_FILTERS},gpu,-multiaccelerator"
+    fi
+    if [[ "$arg" == "--//jax:build_jaxlib=false" ]]; then
+        # buffer_callback_test_gpu uses py_import deps that are incompatible
+        # with pre-built plugin wheels; exclude it in that mode.
+        EFFECTIVE_TARGETS_FILE=$(mktemp)
+        cat "${TARGETS_FILE}" > "${EFFECTIVE_TARGETS_FILE}"
+        echo "-//tests:buffer_callback_test_gpu" >> "${EFFECTIVE_TARGETS_FILE}"
     fi
 done
 
@@ -81,7 +91,7 @@ bazel --bazelrc=build/rocm/rocm.bazelrc test \
     --color=yes \
     $@ \
     --spawn_strategy=local \
-    --target_pattern_file="${TARGETS_FILE}" || bazel_retval=$?
+    --target_pattern_file="${EFFECTIVE_TARGETS_FILE}" || bazel_retval=$?
 echo "::endgroup::" >&2
 
 echo "::group::Cleanup" >&2

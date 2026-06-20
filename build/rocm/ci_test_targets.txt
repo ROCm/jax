@@ -47,5 +47,3 @@
 -//tests:svd_test_gpu
 -//tests:eigh_test_gpu
 -//tests:image_test_gpu
-# Excluded when using pre-built plugin wheels (incompatible with py_import deps).
--//tests:buffer_callback_test_gpu
