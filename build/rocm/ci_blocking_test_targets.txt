@@ -1,15 +1,17 @@
-# Blocking PR gate targets for amd-main.
-# This list is intentionally small and conservative.
-# Add or remove targets here; use - prefix to exclude specific tests within a suite.
-# Keep only tests that are fast and reliably passing — flaky tests will block all PRs.
+# Blocking PR gate targets.
+# Edit this file to tune which tests gate PRs; no workflow YAML changes needed.
+# Use - prefix to exclude specific tests within a suite.
+# Keep only tests that are fast and reliably passing — flaky tests block all PRs.
+# Multi-GPU tests (tagged multiaccelerator) are supported: the gate runs with
+# --config=multi_gpu so the RBE pool provides multi-GPU machines.
 
-//tests:backend_independent_tests
-//tests:lax_numpy_indexing_test_gpu
-//tests:lax_reference_test_gpu
+//tests:export_back_compat_test_gpu
+//tests:sparse_test_gpu
 //tests:lax_test_gpu
-//tests:jax_numpy_linalg_test_gpu
-//tests:nn_test_gpu
-//tests:random_test_gpu
-//tests:xmap_test_gpu
-//tests:api_test_gpu
-//jaxlib/tools:check_gpu_wheel_sources_test
+//tests:lax_numpy_test_gpu
+//tests:pjit_test_gpu
+//tests:export_harnesses_multi_platform_test_gpu
+//tests:lax_autodiff_test_gpu
+//tests/pallas:pallas_test_gpu
+//tests:lax_numpy_operators_test_gpu
+//tests:lax_control_flow_test_gpu

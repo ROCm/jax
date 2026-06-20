@@ -50,6 +50,7 @@ jobs:
       enable-x64:  ${{ matrix.enable-x64 }}
       build_jaxlib: ${{ (matrix.jaxlib-version == 'head' && 'wheel') || 'false' }}
       build_jax: ${{ 'true' }}
+      gate-targets-file: "build/rocm/ci_test_targets.txt"
       run_multiaccelerator_tests: ${{ 'false' }}
       clone_main_xla: 0
 
@@ -60,7 +61,7 @@ jobs:
       fail-fast: false
       matrix:
         python: ["3.12"]
-        runner: ["linux-x86-64-1gpu-amd"]
+        runner: ["linux-x86-64-2gpu-amd"]
         rocm:
           - {label: "ROCm 7.2.0",     tag: "rocm720",        release-version: "7.2.0",        s3-version: "0.11.0/7.2.0",          experimental: false}
           - {label: "TheRock 7.13",   tag: "therock-7.13.0", release-version: "therock-7.13.0", s3-version: "0.11.0/therock-7.13.0", experimental: true}
@@ -82,5 +83,6 @@ jobs:
       skip-download-jaxlib-and-plugins-from-gcs: 0
       s3_download_uri: "s3://jax-ci-amd/rocm-wheels/releases/${{ matrix.rocm.s3-version }}"
       gate-targets-file: "build/rocm/ci_blocking_test_targets.txt"
+      gpu-config: "rocm_gate"
       run_multiaccelerator_tests: "false"
       clone_main_xla: 0

@@ -270,6 +270,7 @@ jobs:
       build_jaxlib: ${{ 'false' }}
       build_jax: ${{ 'false' }}
       jaxlib-version: "head"
+      gate-targets-file: "build/rocm/ci_test_targets.txt"
       write_to_bazel_remote_cache: 1
       run_multiaccelerator_tests: ${{ 'true' }}
       clone_main_xla: 0

@@ -95,6 +95,10 @@ on:
         description: "Path to a Bazel target pattern file for the blocking gate. When set, overrides the default full test suite."
         type: string
         default: ''
+      gpu-config:
+        description: "Bazel GPU config to use for the test run (single_gpu or multi_gpu)."
+        type: string
+        default: 'single_gpu'
       halt-for-connection:
         description: 'Should this workflow run wait for a remote connection?'
         type: string
@@ -196,9 +200,10 @@ jobs:
           ENABLE_X64: ${{ inputs.enable-x64 }}
           RBE_IMAGE: ${{ steps.rbe-image.outputs.rbe_image }}
           JAXCI_GATE_TARGETS_FILE: ${{ inputs.gate-targets-file }}
+          GPU_CONFIG: ${{ inputs.gpu-config }}
         run: |
           ./ci/run_bazel_test_rocm_rbe.sh  \
-            --config=single_gpu \
+            --config="${GPU_CONFIG}" \
             --local_test_jobs=4 \
             --//jax:build_jaxlib="${BUILD_JAXLIB}" \
             --//jax:build_jax="${BUILD_JAX}" \
