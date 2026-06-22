@@ -16,6 +16,11 @@ When releasing, please add the new-release-boilerplate to docs/pallas/CHANGELOG.
 
 ## Unreleased
 
+* Deprecations
+  * Passing 2-dimensional arrays (or mixed 2D and 3D arrays) to {func}`jax.numpy.cross` is deprecated and will be removed in JAX 0.12.0, aligning with NumPy 2.5 behavior.
+
+## JAX 0.10.2 (June 17, 2026)
+
 * New features
   * Added {func}`jax.scipy.linalg.invhilbert` for the closed-form inverse
     of the Hilbert matrix ({jax-issue}`#10144`).
