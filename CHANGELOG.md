@@ -79,6 +79,7 @@ When releasing, please add the new-release-boilerplate to docs/pallas/CHANGELOG.
     `call`, `concretization_function_error`, `custom_typechecks`, `is_concrete`,
     `is_constant_dim`, `is_constant_shape`, `literalable_types`, `no_axis_name`,
     `pytype_aval_mappings`, and `trace_ctx`.
+  * Passing 2-dimensional arrays (or mixed 2D and 3D arrays) to {func}`jax.numpy.cross` is deprecated and will be removed in JAX 0.12.0, aligning with NumPy 2.5 behavior.
 
 * Changes:
   * The minimum supported SciPy version is now 1.14.
