@@ -16,6 +16,31 @@ When releasing, please add the new-release-boilerplate to docs/pallas/CHANGELOG.
 
 ## Unreleased
 
+* Breaking changes
+  * The deprecated module jax.cloud_tpu_init was removed. This did nothing and
+    references to it can be safely removed.
+  * Support for Python 3.11, NumPy 2.0, and SciPy 1.14 has been dropped, per the
+    [deprecation policy](https://docs.jax.dev/en/latest/deprecation.html).
+
+* Deprecations
+  * Passing 2-dimensional arrays (or mixed 2D and 3D arrays) to {func}`jax.numpy.cross` is deprecated and will be removed in JAX 0.12.0, aligning with NumPy 2.5 behavior.
+
+## JAX 0.10.2 (June 17, 2026)
+
+* New features
+  * Added {func}`jax.scipy.linalg.invhilbert` for the closed-form inverse
+    of the Hilbert matrix ({jax-issue}`#10144`).
+  * Added {func}`jax.scipy.linalg.invpascal` for the inverse of the Pascal
+    matrix ({jax-issue}`#10144`).
+  * Added {func}`jax.scipy.linalg.fiedler_companion` for constructing the
+    pentadiagonal Fiedler companion matrix of a polynomial
+    ({jax-issue}`#10144`).
+  * Added {func}`jax.ShapeDtypeStruct.like` -- a shortcut for constructing a
+    {class}`jax.ShapeDtypeStruct` from an object with `shape` and `dtype`
+    attributes.
+
+## JAX 0.10.1 (May 20, 2026)
+
 * New features
   * Added `ResizeMethod.AREA` to {func}`jax.image.resize`, which matches
     TensorFlow's AREA resizing ({jax-issue}`#20098`).
