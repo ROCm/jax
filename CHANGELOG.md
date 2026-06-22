@@ -34,6 +34,8 @@ When releasing, please add the new-release-boilerplate to docs/pallas/CHANGELOG.
     process, even if the value is actually in the disk cache. When a value is
     `put()`, we verify that its contents match.
 
+* Deprecations
+  * Passing 2-dimensional arrays (or mixed 2D and 3D arrays) to {func}`jax.numpy.cross` is deprecated and will be removed in JAX 0.12.0, aligning with NumPy 2.5 behavior.
 
 ## JAX 0.9.0 (January 20, 2026)
 
