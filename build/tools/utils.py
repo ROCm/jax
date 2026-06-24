@@ -289,26 +289,84 @@ def is_linux_aarch64(arch: str, os_name: str):
   """Returns true if the architecture is Linux aarch64."""
   return arch == "aarch64" and os_name == "linux"
 
-def detect_rocm_major_version(rocm_path: str = "/opt/rocm") -> int:
-  """Read the ROCm install's version file and return the major version.
-  Raise:
-    RuntimeError: if the version file cannot be read or parsed
+def detect_rocm_path() -> str | None:
+  """Detect the ROCm toolkit install path.
+
+  Resolution order:
+    1. The rocm-sdk binary (``rocm-sdk path --root``), if on PATH.
+    2. The ROCM_PATH environment variable.
+    3. The conventional ``/opt/rocm`` location, if it exists.
+
+  Returns the detected path, or None if none could be found.
   """
-  version_file = os.path.join(rocm_path, ".info", "version")
+  if shutil.which("rocm-sdk") is not None:
+    try:
+      output = subprocess.run(
+        ["rocm-sdk", "path", "--root"],
+        check=True,
+        capture_output=True,
+        text=True,
+      ).stdout.strip()
+      if output and os.path.isdir(output):
+        return output
+    except (subprocess.SubprocessError, OSError) as e:
+      logging.debug("rocm-sdk path query failed: %s", e)
+
+  env_path = os.environ.get("ROCM_PATH")
+  if env_path and os.path.isdir(env_path):
+    return env_path
+
+  if os.path.isdir("/opt/rocm"):
+    return "/opt/rocm"
+
+  return None
+
+def _rocm_version_from_sdk() -> str | None:
+  """Return the ROCm version string from the rocm-sdk binary, if available.
+
+  Returns None if the rocm-sdk binary is not on PATH or the query fails.
+  """
+  if shutil.which("rocm-sdk") is None:
+    return None
   try:
-    with open(version_file) as f:
-      version_str = f.read().strip()
-  except OSError as e:
-    raise RuntimeError(
-      f"Could not read ROCm version from {version_file}: {e}. "
-      "Pass --rocm_version explicitly or ensure ROCm is installed at "
-      f"{rocm_path}."
-    ) from e
+    output = subprocess.run(
+      ["rocm-sdk", "version"],
+      check=True,
+      capture_output=True,
+      text=True,
+    ).stdout.strip()
+  except (subprocess.SubprocessError, OSError) as e:
+    logging.debug("rocm-sdk version query failed: %s", e)
+    return None
+  return output or None
+
+def detect_rocm_major_version(rocm_path: str = "/opt/rocm") -> int:
+  """Detect the major version of the ROCm install.
+
+  Prefers the rocm-sdk binary when present; otherwise falls back to reading the
+  ROCm install's static version file under ``rocm_path``.
+
+  Raise:
+    RuntimeError: if the version cannot be determined or parsed
+  """
+  version_str = _rocm_version_from_sdk()
+  source = "rocm-sdk"
+  if version_str is None:
+    source = version_file = os.path.join(rocm_path, ".info", "version")
+    try:
+      with open(version_file) as f:
+        version_str = f.read().strip()
+    except OSError as e:
+      raise RuntimeError(
+        f"Could not read ROCm version from {version_file}: {e}. "
+        "Pass --rocm_version explicitly or ensure ROCm is installed at "
+        f"{rocm_path}."
+      ) from e
   major_str = version_str.split(".", 1)[0].split("-", 1)[0]
   try:
     return int(major_str)
   except ValueError as e:
     raise RuntimeError(
-      f"Could not parse ROCm major version from {version_file!r} "
+      f"Could not parse ROCm major version from {source!r} "
       f"(contents: {version_str!r})."
     ) from e

@@ -671,6 +671,16 @@ async def main():
     wheel_build_command_base.append("--config=rocm")
     if clang_local:
       wheel_build_command_base.append(f"--action_env=CLANG_COMPILER_PATH=\"{clang_path}\"")
+    if not args.rocm_path:
+      detected_rocm_path = utils.detect_rocm_path()
+      if detected_rocm_path:
+        logging.debug("Detected ROCm toolkit path: %s", detected_rocm_path)
+        args.rocm_path = detected_rocm_path
+      else:
+        logging.warning(
+            "Could not detect ROCm toolkit path; pass --rocm_path explicitly "
+            "if the build fails to locate ROCm."
+        )
     if args.rocm_path:
       logging.debug("ROCm toolkit path: %s", args.rocm_path)
       wheel_build_command_base.append(f"--action_env=ROCM_PATH=\"{args.rocm_path}\"")
@@ -681,7 +691,7 @@ async def main():
       )
     if not args.rocm_version:
       logging.debug("ROCm version not supplied")
-      args.rocm_verion = str(utils.detect_rocm_major_version(args.rocm_path or
+      args.rocm_version = str(utils.detect_rocm_major_version(args.rocm_path or
                                                        "/opt/rocm"))
 
 
