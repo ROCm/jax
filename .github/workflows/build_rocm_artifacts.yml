@@ -48,6 +48,14 @@ on:
         options:
         - "1"
         - "0"
+      artifact-type:
+        description: "Type of artifact to build (default/nightly/release). Controls wheel version stamping."
+        type: choice
+        default: "default"
+        options:
+        - "default"
+        - "nightly"
+        - "release"
       wheel-version-suffix:
         description: "Version suffix for post-releases (e.g., .post3). Leave empty for normal builds."
         type: string
@@ -59,14 +67,6 @@ on:
         options:
         - 'yes'
         - 'no'
-      artifact-type:
-        description: "Artifact type (default/nightly/release)"
-        type: choice
-        default: "default"
-        options:
-        - "default"
-        - "nightly"
-        - "release"
   workflow_call:
     inputs:
       runner:
@@ -105,6 +105,10 @@ on:
         description: "S3 location prefix to where the artifacts should be uploaded"
         default: 's3://jax-ci-amd/jax-rocm-plugin-wheels'
         type: string
+      artifact-type:
+        description: "Type of artifact to build (default/nightly/release). Controls wheel version stamping."
+        type: string
+        default: "default"
       wheel-version-suffix:
         description: "Version suffix for post-releases (e.g., .post3). Leave empty for normal builds."
         type: string
@@ -113,10 +117,6 @@ on:
         description: 'Should this workflow run wait for a remote connection?'
         type: string
         default: 'no'
-      artifact-type:
-        description: "Artifact type (default/nightly/release)"
-        type: string
-        default: "default"
     outputs:
       s3_upload_uri:
         description: "S3 location prefix to where the artifacts were uploaded"
@@ -150,7 +150,7 @@ jobs:
       JAXCI_HERMETIC_PYTHON_VERSION: "${{ inputs.python }}"
       JAXCI_CLONE_MAIN_XLA: "${{ inputs.clone_main_xla }}"
       JAXCI_OUTPUT_DIR: "${{ github.workspace }}/dist"
-      JAXCI_ARTIFACT_TYPE: ${{ inputs.artifact-type }}
+      JAXCI_ARTIFACT_TYPE: "${{ inputs.artifact-type }}"
 
     name: "${{ inputs.artifact }}, py ${{ inputs.python }}, ROCm ${{ inputs.rocm-version }}"
 
