@@ -103,7 +103,6 @@ jobs:
         artifact: ["jax-rocm-plugin", "jax-rocm-pjrt"]
         python: ["3.11", "3.12", "3.13", "3.14"]
         rocm: [
-          {label: "ROCm 7.2.0", wheel-version: "7", release-version: "7.2.0", manylinux-image: ""},
           {label: "TheRock 7.14.0", wheel-version: "7", release-version: "therock-7.14.0", manylinux-image: "ghcr.io/rocm/jax-manylinux_2_28-therock-latest:latest"},
         ]
         exclude:
@@ -145,7 +144,6 @@ jobs:
         runner: ["amd-do-linux.jax.gpu.gfx950.1", "amd-do-linux.jax.gpu.gfx950.4", "amd-do-linux.jax.gpu.gfx950.8"]
         python: ["3.12"]
         rocm: [
-          {label: "ROCm 7.2.0", release-version: "7.2.0", image: "ghcr.io/rocm/jax-base-ubu24.rocm720:latest"},
           {label: "TheRock 7.14.0", release-version: "therock-7.14.0", image: "ghcr.io/rocm/jax-base-ubu24.therock-latest:latest"},
         ]
     name: "Pytest ROCm (${{ matrix.rocm.label }})"
