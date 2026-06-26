@@ -9,22 +9,17 @@ name: CI - ROCm Release Publish
 on:
   workflow_dispatch:
     inputs:
-      branch:
-        description: "Release branch name (e.g. rocm-jaxlib-v0.11.0)"
+      staging-uri:
+        description: "Full S3 staging URI to publish (e.g. s3://jax-ci-amd/rocm-wheels/release/0.10.2/7.2.0/staging/4/1). Printed by the build workflow."
+        required: true
+        type: string
+      release-branch:
+        description: "Release branch name used as the S3 release prefix (e.g. rocm-jaxlib-v0.10.2)"
         required: true
         type: string
       rocm-release-version:
         description: "ROCm release version (e.g. 7.2.0, therock-7.13.0, therock-latest)"
         required: true
-        type: string
-      run-number:
-        description: "Staging run number to publish"
-        required: true
-        type: string
-      run-attempt:
-        description: "Staging run attempt to publish"
-        required: false
-        default: "1"
         type: string
 
 permissions: {}
@@ -51,13 +46,11 @@ jobs:
 
       - name: Publish wheels to release/
         env:
-          BRANCH: ${{ inputs.branch }}
+          SOURCE: ${{ inputs.staging-uri }}
+          RELEASE_BRANCH: ${{ inputs.release-branch }}
           ROCM_VERSION: ${{ inputs.rocm-release-version }}
-          RUN_NUMBER: ${{ inputs.run-number }}
-          RUN_ATTEMPT: ${{ inputs.run-attempt }}
         run: |
-          SOURCE="s3://jax-ci-amd/rocm-wheels/${BRANCH}/${ROCM_VERSION}/staging/${RUN_NUMBER}/${RUN_ATTEMPT}"
-          DEST="s3://jax-ci-amd/rocm-wheels/${BRANCH}/${ROCM_VERSION}/release"
+          DEST="s3://jax-ci-amd/rocm-wheels/${RELEASE_BRANCH}/${ROCM_VERSION}/release"
 
           echo "Publishing: ${SOURCE} -> ${DEST}"
 

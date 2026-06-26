@@ -13,18 +13,9 @@ name: CI - ROCm Release Promote Upstream Gate Pin
 on:
   workflow_dispatch:
     inputs:
-      branch:
-        description: "Release branch the staging build came from (e.g. rocm-jaxlib-v0.11.0)"
+      staging-uri:
+        description: "Full S3 staging URI to promote (e.g. s3://jax-ci-amd/rocm-wheels/release/0.10.2/7.2.0/staging/4/1). Printed by the build workflow."
         required: true
-        type: string
-      run-number:
-        description: "Workflow run number of the staging build to promote"
-        required: true
-        type: string
-      run-attempt:
-        description: "Run attempt of the staging build to promote"
-        required: false
-        default: "1"
         type: string
       rocm-release-version:
         description: "ROCm release version (e.g. 7.2.0, therock-7.13.0, therock-latest)"
@@ -55,12 +46,9 @@ jobs:
 
       - name: Promote staging build to upstream/GATE_CHECK
         env:
-          BRANCH: ${{ inputs.branch }}
-          RUN_NUMBER: ${{ inputs.run-number }}
-          RUN_ATTEMPT: ${{ inputs.run-attempt }}
+          SOURCE: ${{ inputs.staging-uri }}
           ROCM_VERSION: ${{ inputs.rocm-release-version }}
         run: |
-          SOURCE="s3://jax-ci-amd/rocm-wheels/${BRANCH}/${ROCM_VERSION}/staging/${RUN_NUMBER}/${RUN_ATTEMPT}"
           DEST="s3://jax-ci-amd/rocm-wheels/upstream/GATE_CHECK/${ROCM_VERSION}"
 
           echo "Promoting: ${SOURCE} -> ${DEST}"
@@ -76,8 +64,8 @@ jobs:
           aws s3 sync --delete --only-show-errors "${SOURCE}/" "${DEST}/"
 
           # Write provenance so it is clear which build this gate pin came from.
-          printf "branch=%s\nrocm_version=%s\nrun_number=%s\nrun_attempt=%s\npromoted_by=%s\npromoted_at=%s\n" \
-            "${BRANCH}" "${ROCM_VERSION}" "${RUN_NUMBER}" "${RUN_ATTEMPT}" \
+          printf "staging_uri=%s\nrocm_version=%s\npromoted_by=%s\npromoted_at=%s\n" \
+            "${SOURCE}" "${ROCM_VERSION}" \
             "${{ github.actor }}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" | \
             aws s3 cp --only-show-errors - "${DEST}/PROMOTED_FROM"
 
