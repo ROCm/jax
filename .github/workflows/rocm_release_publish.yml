@@ -61,7 +61,7 @@ jobs:
           fi
           echo "Found ${WHEEL_COUNT} wheel(s) to publish."
 
-          aws s3 sync --delete --only-show-errors "${SOURCE}/" "${DEST}/"
+          aws s3 sync --delete --only-show-errors --copy-props none "${SOURCE}/" "${DEST}/"
 
           echo "Published wheels at ${DEST}:"
           aws s3 ls "${DEST}/" | grep '\.whl'

@@ -61,7 +61,7 @@ jobs:
           fi
           echo "Found ${WHEEL_COUNT} wheel(s) in staging build."
 
-          aws s3 sync --delete --only-show-errors "${SOURCE}/" "${DEST}/"
+          aws s3 sync --delete --only-show-errors --copy-props none "${SOURCE}/" "${DEST}/"
 
           # Write provenance so it is clear which build this gate pin came from.
           printf "staging_uri=%s\nrocm_version=%s\npromoted_by=%s\npromoted_at=%s\n" \
