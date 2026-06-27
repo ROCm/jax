@@ -142,7 +142,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: ["amd-do-linux.jax.gpu.gfx950.1", "amd-do-linux.jax.gpu.gfx950.4", "amd-do-linux.jax.gpu.gfx950.8""]
+        runner: ["amd-do-linux.jax.gpu.gfx950.1", "amd-do-linux.jax.gpu.gfx950.4", "amd-do-linux.jax.gpu.gfx950.8"]
         python: ["3.11", "3.12", "3.13", "3.14"]
         rocm: [
           {label: "ROCm 7.2.0", release-version: "7.2.0", image: "ghcr.io/rocm/jax-base-ubu24.rocm720:latest"},
