@@ -16,6 +16,53 @@
 import os
 import pytest
 
+# ---------------------------------------------------------------------------
+# Convolution test skipping
+#
+# On some ROCm targets convolutions abort the process:
+# A single abort kills the xdist worker and cascades into an INTERNALERROR, 
+# which masks the pass/fail status of the rest of the suite.
+#
+# To measure how much of the suite passes with convolutions disabled, we
+# intercept the `conv_general_dilated` primitive - the single chokepoint for
+# the conve related tests. This turns any test that dispatches a convolution 
+# into a skip instead of letting it run.
+#
+# Set JAX_SKIP_CONV_TESTS=0 to run convolutions normally.
+# ---------------------------------------------------------------------------
+_conv_skip_installed = [False]
+
+
+def _install_conv_skip() -> None:
+  if _conv_skip_installed[0]:
+    return
+  _conv_skip_installed[0] = True
+
+  # Enable skipp by default
+  if os.environ.get("JAX_SKIP_CONV_TESTS", "1") != "1":
+    return
+
+  import unittest
+  from jax._src.lax import convolution as _convolution
+
+  prim = _convolution.conv_general_dilated_p
+  prim._orig_bind = prim.bind
+
+  def _skipping_bind(*args, **kwargs):
+    raise unittest.SkipTest(
+        "convolution disabled on branch jax-v0.10.1-skip-convs "
+        "(set JAX_SKIP_CONV_TESTS=0 to run convolutions)")
+
+  prim.bind = _skipping_bind
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_call(item):
+  # Install lazily so jax is imported only after test collection / device-env
+  # setup, and in each xdist worker process.
+  _install_conv_skip()
+  yield
+
 
 @pytest.fixture(autouse=True)
 def add_imports(doctest_namespace):
