@@ -102,7 +102,7 @@ def check_1d_2d_mesh(f, set_mesh):
     ))(jtu.with_mesh_from_kwargs(f) if set_mesh else f)
 
 
-@jtu.pytest_mark_if_available('multiaccelerator-only')
+@jtu.pytest_mark_if_available('multiaccelerator')
 class PJitTest(jtu.BufferDonationTestCase):
 
   def setUp(self):
@@ -1403,7 +1403,7 @@ class PJitTest(jtu.BufferDonationTestCase):
         self.assertAllClose(x + i, y)
 
 
-@jtu.pytest_mark_if_available('multiaccelerator-only')
+@jtu.pytest_mark_if_available('multiaccelerator')
 class ArrayPjitTest(jtu.JaxTestCase):
 
   def setUp(self):
@@ -9501,11 +9501,10 @@ class ShardingInTypesTest(jtu.JaxTestCase):
     step(ws, xs)  # doesn't crash
 
     compiled_text = step.lower(ws, xs).compile().as_text()
-    if jtu.test_device_matches(['gpu']):
-      self.assertEqual(compiled_text.count('all-reduce-start('), 1)
-      self.assertEqual(compiled_text.count('all-reduce-done('), 1)
-    else:
-      self.assertEqual(compiled_text.count('all-reduce('), 1)
+    # Remove the all-reduce-start( checks once jaxlib catches up with XLA.
+    self.assertEqual(
+      compiled_text.count('all-reduce(') +
+        compiled_text.count('all-reduce-start('), 1)
 
   @jtu.with_explicit_mesh((2,), 'x')
   def test_vmap_mapped_input_sharding_error(self, mesh):
@@ -9589,11 +9588,10 @@ class ShardingInTypesTest(jtu.JaxTestCase):
     step(stacked_ws, xs)  # doesn't crash
 
     compiled_text = step.lower(stacked_ws, xs).compile().as_text()
-    if jtu.test_device_matches(['gpu']):
-      self.assertEqual(compiled_text.count('all-reduce-start('), 1)
-      self.assertEqual(compiled_text.count('all-reduce-done('), 1)
-    else:
-      self.assertEqual(compiled_text.count('all-reduce('), 1)
+    # Remove the all-reduce-start( checks once jaxlib catches up with XLA.
+    self.assertEqual(
+      compiled_text.count('all-reduce(') +
+        compiled_text.count('all-reduce-start('), 1)
 
   @jtu.with_explicit_mesh((2, 2), ('x', 'y'))
   def test_jacrev_sharded_broadcast(self, mesh):
@@ -11447,8 +11445,21 @@ class ShardingInTypesTest(jtu.JaxTestCase):
     hess_g(q, k)  # doesn't crash
     jax.jit(hess_g)(q, k)  # doesn't crash
 
+  @config.numpy_dtype_promotion('standard')
+  @jtu.with_explicit_mesh((2,), 'x')
+  def test_sort_grad(self, mesh):
+    x = jax.random.normal(jax.random.key(1), (1024, 32), out_sharding=P("x"))
 
-@jtu.pytest_mark_if_available('multiaccelerator-only')
+    @jax.grad
+    def f(x):
+      xi = jnp.argsort(x, axis=1)
+      return jnp.sum(xi * x)
+
+    f(x)  # doesn't crash
+    jax.jit(f)(x)  # doesn't crash
+
+
+@jtu.pytest_mark_if_available('multiaccelerator')
 class PJitErrorTest(jtu.JaxTestCase):
 
   def setUp(self):
@@ -11725,7 +11736,7 @@ class PJitErrorTest(jtu.JaxTestCase):
       jax.NamedSharding(mesh, None)
 
 
-@jtu.pytest_mark_if_available('multiaccelerator-only')
+@jtu.pytest_mark_if_available('multiaccelerator')
 class UtilTest(jtu.JaxTestCase):
 
   def testOpShardingRoundTrip(self):

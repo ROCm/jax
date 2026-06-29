@@ -58,7 +58,7 @@ from jax._src import xla_bridge
 from jax._src import debugging
 from jax._src import literals
 from jax._src import sharding_impls
-from jax._src.ad_checkpoint import saved_residuals, custom_remat
+from jax._src.ad_checkpoint import saved_residuals, custom_remat, SaveOnlyTheseNames
 from jax._src.interpreters import ad as ad_internal
 from jax._src.interpreters import mlir
 from jax._src.interpreters import partial_eval as pe
@@ -7371,10 +7371,10 @@ class RematTest(jtu.JaxTestCase):
 @jtu.with_config(jax_remat3=True)
 class Remat3Test(RematTest):
   # The original versions of these tests used a "save cosine" policy that can't
-  # be expressed the same way with remat3.
+  # be expressed the same way with remat3. Instead, we use custom_remat.
   def test_remat_custom_policy_save_cos(self):
     sin = custom_remat(jnp.sin,
-                       lambda x: (jnp.sin(x), jnp.cos(x)),
+                       lambda _, x: (jnp.sin(x), jnp.cos(x)),
                        lambda cos_x, x: (jnp.sin(x), cos_x),
                        lambda cos_x, g: (cos_x * g,))
     f = jax.remat(lambda x: sin(sin(x)))
@@ -7384,13 +7384,167 @@ class Remat3Test(RematTest):
     self.assertNotIn(' cos ', jaxpr_text)
     jtu.check_grads(f, (3.,), order=2, modes=['fwd', 'rev'])
 
-  # TODO(mattjj): re-implement these tests using custom_remat, as above
-  def test_remat_of_scan_funky_custom_jvp(self): pass
-  def test_remat_of_cond_funky_custom_jvp(self): pass
-  def test_remat_of_cond_funky_custom_jvp2(self): pass
-  def test_remat_of_cond_policy(self): pass
-  def test_remat_of_scan_funky_custom_jvp2(self): pass
-  def test_remat_of_scan_policy(self): pass
+  def test_remat_of_scan_funky_custom_jvp(self):
+    def scan_apply(f, x):
+      y, _ = lax.scan(lambda x, _: (f(x), None), x, None, length=1)
+      return y
+
+    def sin_fwd(policy, x):
+      if isinstance(policy, SaveOnlyTheseNames) and 'cos' in policy.saveable_names:
+        return (jnp.sin(x), jnp.cos(x))
+      else:
+        return (jnp.sin(x), None)
+
+    def sin_rem(cos_x, x):
+      if cos_x is None:
+        cos_x = jnp.cos(x)
+      return (jnp.sin(x), cos_x)
+
+    def sin_bwd(cos_x, g):
+      return cos_x * g,
+
+    sin = custom_remat(jnp.sin, sin_fwd, sin_rem, sin_bwd)
+
+    save_cos = jax.checkpoint_policies.save_only_these_names('cos')
+    f = jax.checkpoint(partial(scan_apply, sin), policy=save_cos)
+    jtu.check_grads(f, (3.,), order=2, modes=['rev'])
+    _, f_lin = api.linearize(f, 4.)
+    jaxpr_text = str(jax.jit(f_lin).trace(1.).jaxpr)
+    self.assertEqual(jaxpr_text.count(' sin '), 0)
+    self.assertEqual(jaxpr_text.count(' cos '), 0)
+
+    save_sin = jax.checkpoint_policies.save_only_these_names('sin')
+    f = jax.checkpoint(partial(scan_apply, sin), policy=save_sin)
+    jtu.check_grads(f, (3.,), order=2, modes=['rev'])
+    _, f_lin = api.linearize(f, 4.)
+    jaxpr_text = str(jax.jit(f_lin).trace(1.).jaxpr)
+    self.assertEqual(jaxpr_text.count(' sin '), 1)  # +1 b/c dce fixed point
+    self.assertEqual(jaxpr_text.count(' cos '), 1)
+
+    f = jax.checkpoint(partial(scan_apply, sin),
+                       policy=jax.checkpoint_policies.nothing_saveable)
+    jtu.check_grads(f, (3.,), order=2, modes=['rev'])
+    jaxpr = api.make_jaxpr(api.linearize(f, 4.)[1])(1.)
+    jaxpr_text = str(jaxpr)
+    self.assertEqual(jaxpr_text.count(' sin '), 1)  # +1 b/c dce fixed point
+    self.assertEqual(jaxpr_text.count(' cos '), 1)
+
+    f = jax.checkpoint(lambda x: scan_apply(sin, scan_apply(sin, x)),
+                       policy=jax.checkpoint_policies.nothing_saveable)
+    jtu.check_grads(f, (3.,), order=2, modes=['rev'])
+    jaxpr = api.make_jaxpr(api.linearize(f, 4.)[1])(1.)
+    jaxpr_text = str(jaxpr)
+    self.assertEqual(jaxpr_text.count(' sin '), 2)  # +1 b/c dce fixed point
+    self.assertEqual(jaxpr_text.count(' cos '), 2)
+
+  def test_remat_of_cond_funky_custom_jvp(self):
+    def cond_apply(f, x):
+      return lax.cond(x.sum() > -jnp.inf, f, lambda x: x, x)
+
+    def sin_fwd(policy, x):
+      if isinstance(policy, SaveOnlyTheseNames) and 'cos' in policy.saveable_names:
+        return (jnp.sin(x), jnp.cos(x))
+      else:
+        return (jnp.sin(x), None)
+
+    def sin_rem(cos_x, x):
+      if cos_x is None:
+        cos_x = jnp.cos(x)
+      return (jnp.sin(x), cos_x)
+
+    def sin_bwd(cos_x, g):
+      return cos_x * g,
+
+    sin = custom_remat(jnp.sin, sin_fwd, sin_rem, sin_bwd)
+
+    save_cos = jax.checkpoint_policies.save_only_these_names('cos')
+    f = jax.checkpoint(partial(cond_apply, sin), policy=save_cos)
+    jtu.check_grads(f, (3.,), order=2, modes=['rev'])
+    jaxpr = api.make_jaxpr(api.linearize(f, 4.)[1])(1.)
+    jaxpr_text = str(jaxpr)
+    self.assertEqual(jaxpr_text.count(' sin '), 0)
+    self.assertEqual(jaxpr_text.count(' cos '), 0)
+
+    save_sin = jax.checkpoint_policies.save_only_these_names('sin')
+    f = jax.checkpoint(partial(cond_apply, sin), policy=save_sin)
+    jtu.check_grads(f, (3.,), order=2, modes=['rev'])
+    jaxpr = api.make_jaxpr(api.linearize(f, 4.)[1])(1.)
+    jaxpr_text = str(jaxpr)
+    self.assertEqual(jaxpr_text.count(' sin '), 0)
+    self.assertEqual(jaxpr_text.count(' cos '), 1)
+
+    f = jax.checkpoint(partial(cond_apply, sin),
+                       policy=jax.checkpoint_policies.nothing_saveable)
+    jtu.check_grads(f, (3.,), order=2, modes=['rev'])
+    jaxpr = api.make_jaxpr(api.linearize(f, 4.)[1])(1.)
+    jaxpr_text = str(jaxpr)
+    self.assertEqual(jaxpr_text.count(' sin '), 0)
+    self.assertEqual(jaxpr_text.count(' cos '), 1)
+
+    f = jax.checkpoint(lambda x: cond_apply(sin, cond_apply(sin, x)),
+                       policy=jax.checkpoint_policies.nothing_saveable)
+    jtu.check_grads(f, (3.,), order=2, modes=['rev'])
+    jaxpr = api.make_jaxpr(api.linearize(f, 4.)[1])(1.)
+    jaxpr_text = str(jaxpr)
+    self.assertEqual(jaxpr_text.count(' sin '), 1)
+    self.assertEqual(jaxpr_text.count(' cos '), 2)
+
+  def test_remat_of_cond_funky_custom_jvp2(self):
+    raise unittest.SkipTest()
+
+  def test_remat_of_cond_policy(self):
+    def sin_fwd(policy, x):
+      if isinstance(policy, SaveOnlyTheseNames) and 'cos' in policy.saveable_names:
+        return (jnp.sin(x), jnp.cos(x))
+      else:
+        assert False
+
+    def sin_rem(cos_x, x):
+      assert cos_x is not None
+      return (jnp.sin(x), cos_x)
+
+    def sin_bwd(cos_x, g):
+      return cos_x * g,
+
+    sin = custom_remat(jnp.sin, sin_fwd, sin_rem, sin_bwd)
+
+    save_cos = jax.checkpoint_policies.save_only_these_names('cos')
+    f = jax.checkpoint(lambda x: lax.cond(x > 0, sin, lambda x: x, x),
+                       policy=save_cos)
+    jtu.check_grads(f, (3.,), order=2, modes=['rev'])
+    _, f_lin = api.linearize(f, 4.)
+    jaxpr_text = str(jax.jit(f_lin).trace(1.).jaxpr)
+    self.assertEqual(jaxpr_text.count(' sin '), 0)
+    self.assertEqual(jaxpr_text.count(' cos '), 0)
+
+  def test_remat_of_scan_funky_custom_jvp2(self):
+    raise unittest.SkipTest()
+
+  def test_remat_of_scan_policy(self):
+    def sin_fwd(policy, x):
+      if isinstance(policy, SaveOnlyTheseNames) and 'cos' in policy.saveable_names:
+        return (jnp.sin(x), jnp.cos(x))
+      else:
+        assert False
+
+    def sin_rem(cos_x, x):
+      assert cos_x is not None
+      return (jnp.sin(x), cos_x)
+
+    def sin_bwd(cos_x, g):
+      return cos_x * g,
+
+    sin = custom_remat(jnp.sin, sin_fwd, sin_rem, sin_bwd)
+
+    save_cos = jax.checkpoint_policies.save_only_these_names('cos')
+    to_scan = lambda c, _: (sin(c), sin(c))
+    f = jax.checkpoint(lambda x: lax.scan(to_scan, x, None, length=3),
+                       policy=save_cos)
+    jtu.check_grads(f, (3.,), order=2, modes=['rev'])
+    jaxpr = api.make_jaxpr(api.linearize(f, 4.)[1])(1.)
+    jaxpr_text = str(jaxpr)
+    self.assertEqual(jaxpr_text.count(' sin '), 0)
+    self.assertEqual(jaxpr_text.count(' cos '), 0)
 
   # We don't support everything_saveable with remat3
   def test_remat_custom_policy_save_anything_new_remat(self): pass
@@ -7436,7 +7590,78 @@ class Remat3Test(RematTest):
     with assertEvals(3):
       vjp(v)
 
-  # TODO(mattjj): nested remat test
+  @config.custom_vjp3(True)
+  def test_custom_vjp_with_checkpoint_name_in_fwd(self):
+    assert jax.config.jax_custom_vjp3
+    sin = jax.custom_vjp(jnp.sin)
+    def fwd(x):
+      return jnp.sin(x), checkpoint_name(jnp.cos(x), 'cos')
+    def bwd(cos_x, g):
+      return cos_x * g,
+    sin.defvjp(fwd, bwd)
+
+    def fwd_bwd_jaxpr_strs(f, *args):
+      fwd_jaxpr = jax.jit(partial(jax.vjp, f)).trace(*args).lojax.jaxpr
+      fwd_jaxpr, _ = pe.dce_jaxpr(fwd_jaxpr.jaxpr, True)
+      fwd_str = fwd_jaxpr.pretty_print(use_color=False)
+
+      y, f_vjp = jax.vjp(f, *args)
+      bwd_jaxpr = jax.jit(f_vjp).trace(y).lojax.jaxpr
+      bwd_jaxpr, _ = pe.dce_jaxpr(bwd_jaxpr.jaxpr, True)
+      bwd_str = bwd_jaxpr.pretty_print(use_color=False)
+
+      return fwd_str, bwd_str
+
+    policy = jax.checkpoint_policies.save_only_these_names('cos')
+    f = jax.remat(sin, policy=policy)
+    fwd_str, bwd_str = fwd_bwd_jaxpr_strs(f, jnp.arange(3.))
+    self.assertIn('cos ', fwd_str)
+    self.assertNotIn('cos ', bwd_str)
+    jtu.check_grads(f, (3.,), order=2, modes=['rev'])
+
+    f = jax.remat(sin)
+    fwd_str, bwd_str = fwd_bwd_jaxpr_strs(f, jnp.arange(3.))
+    self.assertNotIn('cos', fwd_str)
+    self.assertIn('cos ', bwd_str)
+    jtu.check_grads(f, (3.,), order=2, modes=['rev'])
+
+  @config.custom_vjp3(True)
+  def test_custom_vjp_with_checkpoint_name_in_fwd_static_argnums(self):
+    # Like the above test, but exercises nondiff_argnums
+    assert jax.config.jax_custom_vjp3
+    sin = jax.custom_vjp(lambda _, x: jnp.sin(x), nondiff_argnums=(0,))
+    def fwd(_, x):
+      return jnp.sin(x), checkpoint_name(jnp.cos(x), 'cos')
+    def bwd(_, cos_x, g):
+      return cos_x * g,
+    sin.defvjp(fwd, bwd)
+
+    def fwd_bwd_jaxpr_strs(f, *args):
+      fwd_jaxpr = jax.jit(partial(jax.vjp, f)).trace(*args).lojax.jaxpr
+      fwd_jaxpr, _ = pe.dce_jaxpr(fwd_jaxpr.jaxpr, True)
+      fwd_str = fwd_jaxpr.pretty_print(use_color=False)
+
+      y, f_vjp = jax.vjp(f, *args)
+      bwd_jaxpr = jax.jit(f_vjp).trace(y).lojax.jaxpr
+      bwd_jaxpr, _ = pe.dce_jaxpr(bwd_jaxpr.jaxpr, True)
+      bwd_str = bwd_jaxpr.pretty_print(use_color=False)
+
+      return fwd_str, bwd_str
+
+    policy = jax.checkpoint_policies.save_only_these_names('cos')
+    f = jax.remat(partial(sin, 'hi'), policy=policy)
+    fwd_str, bwd_str = fwd_bwd_jaxpr_strs(f, jnp.arange(3.))
+    self.assertIn('cos ', fwd_str)
+    self.assertNotIn('cos ', bwd_str)
+    jtu.check_grads(f, (3.,), order=2, modes=['rev'])
+
+    f = jax.remat(partial(sin, 'hi'))
+    fwd_str, bwd_str = fwd_bwd_jaxpr_strs(f, jnp.arange(3.))
+    self.assertNotIn('cos', fwd_str)
+    self.assertIn('cos ', bwd_str)
+    jtu.check_grads(f, (3.,), order=2, modes=['rev'])
+
+
 
 @jtu.with_config(jax_pprint_use_color=False)
 class JaxprTest(jtu.JaxTestCase):

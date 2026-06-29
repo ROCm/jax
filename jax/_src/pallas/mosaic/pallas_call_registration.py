@@ -57,6 +57,7 @@ def _get_memory_space_from_aval(
           tpu_core.MemorySpace,
           pallas_core.MemorySpace,
           pallas_core.CoreMemorySpace,
+          jax_core.MemorySpace,
       ),
   ):
     return None  # If we are passed a non-TPU memory space, ignore it.
@@ -77,7 +78,7 @@ def _get_memory_space_from_aval(
           return tpu_custom_call.MemorySpace.SEMAPHORE_MEM
         case _:
           raise ValueError(f"Invalid kernel type for semaphore: {kernel_type}")
-    case pallas_core.MemorySpace.HOST:
+    case jax_core.MemorySpace.Host:
       return tpu_custom_call.MemorySpace.HOST
     case pallas_core.CoreMemorySpace(tpu_core.MemorySpace.VMEM, mesh):
       match mesh.core_type:
@@ -108,7 +109,10 @@ def _get_memory_spaces_from_avals(
 ) -> tuple[tpu_custom_call.MemorySpace | None, ...] | None:
   memory_spaces = None
   if any(isinstance(aval, jax_core.ShapedArray)
-         and not isinstance(aval.memory_space, jax_core.MemorySpace)
+         and (
+             not isinstance(aval.memory_space, jax_core.MemorySpace)
+             or aval.memory_space is jax_core.MemorySpace.Host
+         )
          for aval in avals):
     memory_spaces = tuple(
         _get_memory_space_from_aval(aval, kernel_type=kernel_type)
@@ -419,7 +423,7 @@ def pallas_call_tpu_lowering_rule(
     pm = passmanager.PassManager.parse("builtin.module(canonicalize)", mlir_ctx)
     pm.run(mosaic_module.operation)
     print(f"\nThe Mosaic module for pallas_call {debug_info.func_src_info}:")
-    print(mosaic_module)
+    print(mosaic_module.operation.get_asm(use_name_loc_as_prefix=True))
 
   return _lower_to_custom_call(
       ctx,
@@ -652,7 +656,7 @@ def mpmd_map_tpu_lowering_rule(
     pm = passmanager.PassManager.parse("builtin.module(canonicalize)", mlir_ctx)
     pm.run(mosaic_module.operation)
     print("\nThe Mosaic module for mpmd_map:")
-    print(mosaic_module)
+    print(mosaic_module.operation.get_asm(use_name_loc_as_prefix=True))
 
   if name is None:
     name = "_".join(jaxpr.debug_info.func_name for jaxpr in jaxprs)

@@ -14,6 +14,7 @@
 """Tests for Pallas on SparseCore."""
 
 import collections
+from collections.abc import Mapping, Sequence
 import functools
 import itertools
 import math
@@ -106,6 +107,7 @@ class PallasSCTest(jtu.JaxTestCase):
       in_specs=None,
       out_specs=None,
       compiler_params=pltpu.CompilerParams(),
+      debug=False,
   ):
     if compiler_params.dimension_semantics is not None:
       raise NotImplementedError(
@@ -121,14 +123,22 @@ class PallasSCTest(jtu.JaxTestCase):
         num_cores=1,
     )
 
+    num_scratch = 0
+    if isinstance(scratch_shapes, Sequence):
+      num_scratch = len(scratch_shapes)
+    elif not isinstance(scratch_shapes, Mapping):
+      num_scratch = 1
+
     def decorator(fn):
-      @pl.kernel(
-          out_type=out_shape,
-          mesh=mesh,
-          scratch_types=dict(scratch_args=scratch_shapes),
-          compiler_params=compiler_params,
-      )
-      def wrapper(*args_hbm, scratch_args):
+      @functools.wraps(fn)
+      def wrapper(*args, **kwargs):
+        if num_scratch > 0:
+          args_hbm = args[:-len(scratch_shapes)]
+          scratch_args = args[-len(scratch_shapes):]
+        else:
+          args_hbm = args
+          scratch_args = ()
+
         @functools.partial(
             pltpu.emit_pipeline,
             grid=(1,) if grid is None else grid,
@@ -142,11 +152,18 @@ class PallasSCTest(jtu.JaxTestCase):
             else out_specs,
         )
         def pipeline(*args):
-          fn(*args, *scratch_args)
+          fn(*args, *scratch_args, **kwargs)
 
         pipeline(*args_hbm)
 
-      return wrapper
+      return pl.kernel(
+          wrapper,
+          out_type=out_shape,
+          mesh=mesh,
+          scratch_types=scratch_shapes,
+          compiler_params=compiler_params,
+          debug=debug,
+      )
 
     return decorator
 
@@ -162,6 +179,46 @@ class PallasSCTest(jtu.JaxTestCase):
   def skip_if_tc_tiling(self, reason: str = ""):
     if self.USE_TC_TILING:
       self.skipTest(f"TC tiling is not supported. {reason}")
+
+
+@jtu.skip_under_pytest(
+    "Requires pytest -s (no capture) to pass, which is not enabled in CI"
+)
+class NamedLocationsTest(PallasSCTest):
+
+  @jtu.thread_unsafe_test()
+  def test_vector_subcore(self):
+    @self.vector_subcore_kernel(
+        out_shape=jax.ShapeDtypeStruct((self.num_lanes,), jnp.int32),
+        scratch_shapes=(pltpu.VMEM((self.num_lanes,), jnp.int32),),
+        debug=True,
+    )
+    def f(o_hbm_ref, scratch_ref):
+      del o_hbm_ref, scratch_ref
+
+    with jtu.capture_stdout() as get_output:
+      jax.block_until_ready(f())
+
+    output = get_output()
+    self.assertIn("%o_hbm_ref", output)
+    self.assertIn("%scratch_ref", output)
+
+  @jtu.thread_unsafe_test()
+  def test_scalar_subcore(self):
+    @self.kernel(
+        out_type=jax.ShapeDtypeStruct((self.num_lanes,), jnp.int32),
+        mesh=plsc.ScalarSubcoreMesh(
+            axis_name="x", num_cores=self.sc_info.num_cores
+        ),
+        debug=True,
+    )
+    def f(o_hbm_ref):
+      del o_hbm_ref
+
+    with jtu.capture_stdout() as get_output:
+      jax.block_until_ready(f())
+
+    self.assertIn("%o_hbm_ref", get_output())
 
 
 @jtu.skip_under_pytest("Requires pytest -s (no capture) to pass, which is not enabled in CI")
@@ -2485,6 +2542,71 @@ class ScalarSubcoreTest(PallasSCTest):
       pltpu.async_copy(x_ref, o_hbm_ref, sem).wait()
 
     np.testing.assert_array_equal(kernel(x), x)
+
+  def test_host_to_hbm_dma(self):
+    x = jnp.arange(8 * 128, dtype=jnp.int32).reshape(8, 128)
+    mesh = jax.sharding.Mesh(jax.devices()[:1], "x")
+    x = jax.device_put(
+        x,
+        jax.sharding.NamedSharding(
+            mesh,
+            jax.sharding.PartitionSpec(),
+            memory_kind="pinned_host",
+        ),
+    )
+
+    @jax.jit
+    def foo(x):
+      sc_mesh = plsc.ScalarSubcoreMesh(axis_name="core", num_cores=1)
+
+      y_ref = pl.empty_ref_like(pltpu.HBM(x.shape, x.dtype))
+      x_device = pltpu.with_memory_space_constraint(x, pltpu.HOST)
+      x_ref = jax.new_ref(x_device, memory_space=pltpu.HOST)
+
+      @pl.core_map(
+          mesh=sc_mesh,
+          compiler_params=pltpu.CompilerParams(
+              use_tc_tiling_on_sc=self.USE_TC_TILING,
+          ),
+      )
+      def _():
+        pltpu.sync_copy(x_ref, y_ref)
+
+      return y_ref[...]
+
+    o = jax.block_until_ready(foo(x))
+    np.testing.assert_array_equal(o, x)
+
+  def test_hbm_to_host_dma(self):
+    x = jnp.arange(8 * 128, dtype=jnp.int32).reshape(8, 128)
+
+    mesh = jax.sharding.Mesh(jax.devices()[:1], "x")
+    host_sharding = jax.sharding.NamedSharding(
+        mesh,
+        jax.sharding.PartitionSpec(),
+        memory_kind="pinned_host",
+    )
+
+    @functools.partial(jax.jit, out_shardings=host_sharding)
+    def foo(x):
+      sc_mesh = plsc.ScalarSubcoreMesh(axis_name="core", num_cores=1)
+
+      y_ref = pl.empty_ref_like(pl.MemoryRef(jax.core.ShapedArray(x.shape, x.dtype), pl.HOST))
+      x_ref = jax.new_ref(x, memory_space=pltpu.HBM)
+
+      @pl.core_map(
+          mesh=sc_mesh,
+          compiler_params=pltpu.CompilerParams(
+              use_tc_tiling_on_sc=self.USE_TC_TILING,
+          ),
+      )
+      def _():
+        pltpu.sync_copy(x_ref, y_ref)
+
+      return pltpu.with_memory_space_constraint(y_ref[...], pltpu.HOST)
+
+    o = jax.block_until_ready(foo(x))
+    np.testing.assert_array_equal(o, x)
 
 
 class ScalarSubcoreTestWithTCTiling(ScalarSubcoreTest):
