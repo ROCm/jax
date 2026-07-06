@@ -26,6 +26,7 @@ def repo():
             # Add any patch files here.
             # "//third_party/xla:temporary.patch
 	    "//third_party/xla:revert_xla_pr.patch",
+	    "//third_party/xla:add_buffer_debug_f16_kernel.patch",
         ],
     )
 

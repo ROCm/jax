@@ -1,0 +1,18 @@
+diff --git a/xla/stream_executor/gpu/buffer_debug_float_check_kernel.h b/xla/stream_executor/gpu/buffer_debug_float_check_kernel.h
+--- a/xla/stream_executor/gpu/buffer_debug_float_check_kernel.h
++++ b/xla/stream_executor/gpu/buffer_debug_float_check_kernel.h
+@@ -43,5 +43,14 @@ struct BufferDebugFloatCheckBf16Kernel {
+ };
+ 
++// Counts the number of NaNs, Infs and zeros in a buffer of halfs in
++// parallel, and stores partially accumulated results in the FloatCheckResult
++// array.
++struct BufferDebugFloatCheckF16Kernel {
++  using KernelType =
++      TypedKernel<DeviceAddress<Eigen::half>, uint64_t,
++                  DeviceAddress<xla::gpu::FloatCheckResult>, uint64_t>;
++};
++
+ // Counts the number of NaNs, Infs and zeros in a buffer of doubles in
+ // parallel, and stores partially accumulated results in the FloatCheckResult
+ // array.
