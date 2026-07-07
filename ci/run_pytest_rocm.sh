@@ -26,6 +26,10 @@ set -exu -o history -o allexport
 # Source default JAXCI environment variables.
 source ci/envs/default.env
 
+# Restrict to a single GPU for testing
+export HIP_VISIBLE_DEVICES=0
+export ROCR_VISIBLE_DEVICES=0
+
 # Install jaxlib and ROCm plugin wheels inside the $JAXCI_OUTPUT_DIR directory
 echo "Installing wheels locally..."
 source ./ci/utilities/install_wheels_locally.sh
