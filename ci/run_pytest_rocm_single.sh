@@ -132,8 +132,10 @@ mkdir -p test-artifacts
 # commands below.
 set +e
 
+unset JAX_ENABLE_ROCM_XDIST
+
 # Run single-accelerator tests in parallel
-"$JAXCI_PYTHON" -m pytest -n $num_processes --tb=short \
+"$JAXCI_PYTHON" -m pytest -sv --tb=short \
 --json-report --json-report-file=${LOGS_DIR}/pytest_results_single.json \
 --junitxml=test-artifacts/junit-single.xml \
 -m "not multiaccelerator" \

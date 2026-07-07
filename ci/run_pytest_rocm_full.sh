@@ -41,7 +41,10 @@ echo "Installed packages:"
 # them on PATH via rocm-sdk. apt-ROCm images lack rocm-sdk and already have
 # these tools on PATH, so the gate leaves them untouched.
 if command -v rocm-sdk >/dev/null 2>&1; then
-  export PATH="$(rocm-sdk path --bin):$PATH"
+  sdk_bin="$(rocm-sdk path --bin)"
+  if [[ -n "$sdk_bin" ]]; then
+    export PATH="$sdk_bin:$PATH"
+  fi
 fi
 
 rocm-smi
@@ -132,10 +135,8 @@ mkdir -p test-artifacts
 # commands below.
 set +e
 
-unset JAX_ENABLE_ROCM_XDIST
-
 # Run single-accelerator tests in parallel
-"$JAXCI_PYTHON" -m pytest -sv --tb=short \
+"$JAXCI_PYTHON" -m pytest -n $num_processes --tb=short \
 --json-report --json-report-file=${LOGS_DIR}/pytest_results_single.json \
 --junitxml=test-artifacts/junit-single.xml \
 -m "not multiaccelerator" \
@@ -146,9 +147,30 @@ tests
 
 first_cmd_retval=$?
 
+if [[ $gpu_count -gt 1 ]]; then
+  # Run multi-accelerator tests across all GPUs without xdist.
+  unset JAX_ENABLE_ROCM_XDIST
+
+  "$JAXCI_PYTHON" -m pytest --tb=short \
+    --json-report --json-report-file=${LOGS_DIR}/pytest_results_multi.json \
+    --junitxml=test-artifacts/junit-multi.xml \
+    -m "multiaccelerator" \
+    --deselect=tests/multi_device_test.py::MultiDeviceTest::test_computation_follows_data \
+    --deselect=tests/multiprocess_gpu_test.py::MultiProcessGpuTest::test_distributed_jax_visible_devices \
+    --deselect=tests/compilation_cache_test.py::CompilationCacheTest::test_task_using_cache_metric \
+    tests
+
+  second_cmd_retval=$?
+else
+  echo "Skipping multi-accelerator tests (only $gpu_count GPU detected)"
+  second_cmd_retval=0
+fi
+
 # Exit with failure if either command fails.
 if [[ $first_cmd_retval -ne 0 ]]; then
   exit $first_cmd_retval
+elif [[ $second_cmd_retval -ne 0 ]]; then
+  exit $second_cmd_retval
 else
   exit 0
 fi
