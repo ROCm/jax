@@ -45,7 +45,10 @@ echo "Installed packages:"
 # them on PATH via rocm-sdk. apt-ROCm images lack rocm-sdk and already have
 # these tools on PATH, so the gate leaves them untouched.
 if command -v rocm-sdk >/dev/null 2>&1; then
-  export PATH="$(rocm-sdk path --bin):$PATH"
+  sdk_bin="$(rocm-sdk path --bin)"
+  if [[ -n "$sdk_bin" ]]; then
+    export PATH="$sdk_bin:$PATH"
+  fi
 fi
 
 rocm-smi
