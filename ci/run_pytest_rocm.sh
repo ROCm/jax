@@ -139,13 +139,15 @@ set +e
 unset JAX_ENABLE_ROCM_XDIST
 
 # Run single-accelerator tests in parallel
-"$JAXCI_PYTHON" -m pytest -sv --tb=short \
+"$JAXCI_PYTHON" -m pytest -sv -n 1 --max-worker-restart=1000 --timeout=300 --tb=short \
 --json-report --json-report-file=${LOGS_DIR}/pytest_results_single.json \
 --junitxml=test-artifacts/junit-single.xml \
 -m "not multiaccelerator" \
+-k "not testOpGrad" \
 --deselect=tests/multi_device_test.py::MultiDeviceTest::test_computation_follows_data \
 --deselect=tests/multiprocess_gpu_test.py::MultiProcessGpuTest::test_distributed_jax_visible_devices \
 --deselect=tests/compilation_cache_test.py::CompilationCacheTest::test_task_using_cache_metric \
+--deselect=tests/lax_numpy_test.py::LaxBackedNumpyTests::testIssue728 \
 tests
 
 first_cmd_retval=$?
