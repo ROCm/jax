@@ -935,10 +935,14 @@ def _cond_typecheck(bind_time, *in_atoms, branches, **params):
       f'called with operands of type {_avals_short(op_avals)}')
   return jaxpr0.out_avals, joined_effects
 
-def _cond_remat(policy, *args, branches, **params):
+def _cond_remat(trace, *args, branches, **params):
   branches_fwd, branches_rem, branch_res_avals = [], [], []
   for jaxpr in branches:
-    jaxpr_fwd, jaxpr_rem, num_res = remat.remat_jaxpr(jaxpr, policy)
+    # TODO(mattjj): allow forwarding (requires per-branch wiring to survive
+    # the cross-branch residual merging below).
+    jaxpr_fwd, jaxpr_rem, fwds = remat.remat_jaxpr(
+      jaxpr, trace.policy, trace.custom_vjp_rules, allow_fwds=False)
+    num_res = len(fwds)
     branches_fwd.append(jaxpr_fwd)
     branches_rem.append(jaxpr_rem)
     _, res_avals = split_list_checked(jaxpr_fwd.out_avals, [len(jaxpr.out_avals), num_res])

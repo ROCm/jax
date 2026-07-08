@@ -184,7 +184,7 @@ class PallasCallPipelineTest(jtu.JaxTestCase):
 
     @pl.kernel(
         out_type=jax.ShapeDtypeStruct((8 * 8, 128), jnp.float32),
-        mesh=pltpu.create_tensorcore_mesh('core'),
+        mesh=pltpu.TensorCoreMesh(axis_name='core'),
         scratch_types=[pltpu.VMEM((8, 128), jnp.float32)],
     )
     def kernel(x_hbm_ref, y_hbm_ref, z_hbm_ref, o_hbm_ref, scratch_ref):
@@ -724,7 +724,7 @@ class PallasCallPipelinePoisonTest(jtu.JaxTestCase):
 
     @pl.kernel(
         out_type=jax.ShapeDtypeStruct((8, 128), dtype),
-        mesh=pltpu.create_tensorcore_mesh('core'),
+        mesh=pltpu.TensorCoreMesh(axis_name='core'),
     )
     def kernel(x_hbm_ref, o_hbm_ref):
       pltpu.emit_pipeline(
@@ -893,7 +893,7 @@ class PallasCallMultipleBufferedPipelineTest(jtu.JaxTestCase):
       x_ref = jax.new_ref(x)
       y_ref = jax.new_ref(y)
       o_ref = jax.empty_ref(jax.ShapeDtypeStruct(x.shape, jnp.float32))
-      mesh = pltpu.create_tensorcore_mesh('core')
+      mesh = pltpu.TensorCoreMesh(axis_name='core')
 
       @pl.core_map(mesh)
       def _():
@@ -1076,7 +1076,7 @@ class PallasCallMultipleBufferedPipelineTest(jtu.JaxTestCase):
 
     @pl.kernel(
         out_type=jax.ShapeDtypeStruct((2, 8, 128), jnp.float32),
-        mesh=pltpu.create_tensorcore_mesh('core'),
+        mesh=pltpu.TensorCoreMesh(axis_name='core'),
     )
     def run_kernel(o_ref):
       pltpu.emit_pipeline(
@@ -1135,7 +1135,7 @@ class PallasCallMegacoreTest(jtu.JaxTestCase):
     def func(x, i):
       x_ref = jax.new_ref(x)
       y_ref = jax.empty_ref(jax.ShapeDtypeStruct.like(x))
-      mesh = pltpu.create_tensorcore_mesh('core')
+      mesh = pltpu.TensorCoreMesh(axis_name='core')
 
       @pl.core_map(mesh)
       def _():
@@ -1233,7 +1233,7 @@ class PallasCallMegacoreTest(jtu.JaxTestCase):
       o_ref = jax.empty_ref(
           jax.ShapeDtypeStruct((num_cores, 8, 128), jnp.int32)
       )
-      mesh = pltpu.create_tensorcore_mesh('core')
+      mesh = pltpu.TensorCoreMesh(axis_name='core')
       @pl.core_map(mesh)
       def _():
         def run(o_vmem_ref):
@@ -1315,7 +1315,7 @@ class PallasCallMegacoreTest(jtu.JaxTestCase):
     def func(x):
       x_ref = jax.new_ref(x)
       y_ref = jax.empty_ref(jax.ShapeDtypeStruct.like(x))
-      mesh = pltpu.create_tensorcore_mesh('core')
+      mesh = pltpu.TensorCoreMesh(axis_name='core')
 
       @pl.core_map(mesh)
       def _():
@@ -1336,8 +1336,8 @@ class PallasCallMegacoreTest(jtu.JaxTestCase):
     x = jax.random.uniform(k1, (m, k))
     y = jax.random.uniform(k2, (k, n))
 
-    def matmul_pipeline(x_ref, y_ref, z_ref):
-      @pl.when(pl.program_id(2) == 0)
+    def matmul_pipeline(ps, x_ref, y_ref, z_ref):
+      @pl.when(ps.index[2] == 0)
       def _():
         z_ref[...] = jnp.zeros_like(z_ref)
       z_ref[...] += x_ref[...] @ y_ref[...]
@@ -1356,6 +1356,7 @@ class PallasCallMegacoreTest(jtu.JaxTestCase):
           out_specs=pl.BlockSpec((bm, bn), lambda i, j, k: (i, j)),
           core_axis_name='core',
           dimension_semantics=(pltpu.PARALLEL, pltpu.PARALLEL, pltpu.ARBITRARY),
+          _explicit_indices=True,
       )(x_ref, y_ref, z_ref)
 
     @jax.jit
@@ -1363,7 +1364,7 @@ class PallasCallMegacoreTest(jtu.JaxTestCase):
       x_ref = jax.new_ref(x)
       y_ref = jax.new_ref(y)
       o_ref = jax.empty_ref(jax.ShapeDtypeStruct((m, n), jnp.float32))
-      mesh = pltpu.create_tensorcore_mesh('core')
+      mesh = pltpu.TensorCoreMesh(axis_name='core')
 
       @pl.core_map(mesh)
       def _():
@@ -1375,7 +1376,7 @@ class PallasCallMegacoreTest(jtu.JaxTestCase):
 
   def test_pipeline_axis_queries(self):
 
-    mesh = pltpu.create_tensorcore_mesh('core')
+    mesh = pltpu.TensorCoreMesh(axis_name='core')
     num_cores = mesh.shape['core']
     grid_size = 8
 
@@ -1407,14 +1408,19 @@ class PallasCallMegacoreTest(jtu.JaxTestCase):
 
     out = func()
     out_np = np.array(out)
-    local_nprogs = grid_size // num_cores
+    if config.use_emit_pipeline_primitive.value:
+      # New primitives resolves num_programs to the full grid.
+      expected_nprogs = grid_size
+    else:
+      # Legacy behavior: num_programs reports the partitioned grid size.
+      expected_nprogs = grid_size // num_cores
     for i in range(grid_size):
       pid, nprogs = int(out_np[i, 0]), int(out_np[i, 1])
       asize, aindex = int(out_np[i, 2]), int(out_np[i, 3])
       self.assertEqual(pid, i)
-      self.assertEqual(nprogs, local_nprogs)
+      self.assertEqual(nprogs, expected_nprogs)
       self.assertEqual(asize, num_cores)
-      self.assertEqual(aindex, i // local_nprogs)
+      self.assertEqual(aindex, i // (grid_size // num_cores))
 
 @jax.jit(static_argnames=['bm', 'bk', 'bn'])
 def matmul(x: jax.Array, y: jax.Array, *, bm: int, bk: int, bn: int):
@@ -1522,7 +1528,7 @@ class PallasCallBoundedSliceIndexingTest(jtu.JaxTestCase):
     def main(refs):
       x_ref, y_ref = refs
 
-      @pl.core_map(pltpu.create_tensorcore_mesh('core'))
+      @pl.core_map(pltpu.TensorCoreMesh(axis_name='core'))
       def _():
         pltpu.emit_pipeline(
             kernel,
@@ -1564,7 +1570,7 @@ class PallasCallBoundedSliceIndexingTest(jtu.JaxTestCase):
     def main(refs):
       x_ref, y_ref = refs
 
-      @pl.core_map(pltpu.create_tensorcore_mesh('core'))
+      @pl.core_map(pltpu.TensorCoreMesh(axis_name='core'))
       def _():
         pltpu.emit_pipeline(
             kernel,
@@ -1609,7 +1615,7 @@ class PallasCallBoundedSliceIndexingTest(jtu.JaxTestCase):
     def main(refs):
       x_ref, y_ref, slices_ref = refs
 
-      @pl.core_map(pltpu.create_tensorcore_mesh('core'))
+      @pl.core_map(pltpu.TensorCoreMesh(axis_name='core'))
       def _():
 
         @functools.partial(
@@ -1925,7 +1931,7 @@ class PallasCallPipelineTransformedRefsTest(jtu.JaxTestCase):
     def fn(x):
       out_type = jax.ShapeDtypeStruct(x.shape[1:], x.dtype)
 
-      @pl.kernel(out_type=out_type, mesh=pltpu.create_tensorcore_mesh('core'))
+      @pl.kernel(out_type=out_type, mesh=pltpu.TensorCoreMesh(axis_name='core'))
       def run_kernel(x_ref, o_ref):
         x_ref = x_ref.at[1, ...]
         bs = x_ref.shape[:-1] + (256,)
@@ -1946,7 +1952,7 @@ class PallasCallPipelineTransformedRefsTest(jtu.JaxTestCase):
     def fn(x):
       out_type = jax.ShapeDtypeStruct(x.shape[1:], x.dtype)
 
-      @pl.kernel(out_type=out_type, mesh=pltpu.create_tensorcore_mesh('core'))
+      @pl.kernel(out_type=out_type, mesh=pltpu.TensorCoreMesh(axis_name='core'))
       def run_kernel(x_ref, o_ref):
         x_ref = x_ref.at[1, ...]
 
@@ -1978,7 +1984,7 @@ class PallasCallPipelineTransformedRefsTest(jtu.JaxTestCase):
     def fn(x):
       out_type = jax.ShapeDtypeStruct((256, 128), x.dtype)
 
-      @pl.kernel(out_type=out_type, mesh=pltpu.create_tensorcore_mesh('core'))
+      @pl.kernel(out_type=out_type, mesh=pltpu.TensorCoreMesh(axis_name='core'))
       def run_kernel(x_ref, o_ref):
         def outer_body(outer_x, outer_o):
           outer_o[...] = jnp.zeros(outer_o.shape, outer_o.dtype)
@@ -2021,7 +2027,7 @@ class PallasCallPipelineTransformedRefsTest(jtu.JaxTestCase):
     def fn(x):
       out_type = jax.ShapeDtypeStruct((128, 128), x.dtype)
 
-      @pl.kernel(out_type=out_type, mesh=pltpu.create_tensorcore_mesh('core'))
+      @pl.kernel(out_type=out_type, mesh=pltpu.TensorCoreMesh(axis_name='core'))
       def run_kernel(x_ref, o_ref):
         def outer_body(outer_x, outer_o):
           tx = outer_x.at[0:64, :].bitcast(jnp.int16)
@@ -2059,7 +2065,7 @@ class PallasCallPipelineTransformedRefsTest(jtu.JaxTestCase):
     def fn(x):
       out_type = jax.ShapeDtypeStruct(x.shape[1:], x.dtype)
 
-      @pl.kernel(out_type=out_type, mesh=pltpu.create_tensorcore_mesh('core'))
+      @pl.kernel(out_type=out_type, mesh=pltpu.TensorCoreMesh(axis_name='core'))
       def run_kernel(x_ref, o_ref):
         x_ref = x_ref.at[1, ...]
         def outer_body(outer_x, outer_o):
@@ -2101,7 +2107,7 @@ class PallasCallPipelineTransformedRefsTest(jtu.JaxTestCase):
     def fn(x, y):
       out_type = jax.ShapeDtypeStruct(x.shape[1:], x.dtype)
 
-      @pl.kernel(out_type=out_type, mesh=pltpu.create_tensorcore_mesh('core'))
+      @pl.kernel(out_type=out_type, mesh=pltpu.TensorCoreMesh(axis_name='core'))
       def run_kernel(x_ref, y_ref, o_ref):
         x_ref = x_ref.at[1, ...]
         y_scratch = jax.empty_ref(
@@ -2137,7 +2143,7 @@ class PallasCallPipelineTransformedRefsTest(jtu.JaxTestCase):
     def fn(x):
       out_type = jax.ShapeDtypeStruct(x.shape[1:], x.dtype)
 
-      @pl.kernel(out_type=out_type, mesh=pltpu.create_tensorcore_mesh('core'))
+      @pl.kernel(out_type=out_type, mesh=pltpu.TensorCoreMesh(axis_name='core'))
       def run_kernel(x_ref, o_ref):
         x_ref = x_ref.at[1, ...]
         def outer_body(outer_x, outer_o):
@@ -2170,7 +2176,7 @@ class PallasCallPipelineTransformedRefsTest(jtu.JaxTestCase):
     def fn(x):
       out_type = jax.ShapeDtypeStruct(x.shape[1:], x.dtype)
 
-      @pl.kernel(out_type=out_type, mesh=pltpu.create_tensorcore_mesh('core'))
+      @pl.kernel(out_type=out_type, mesh=pltpu.TensorCoreMesh(axis_name='core'))
       def run_kernel(x_ref, o_ref):
         x_ref = x_ref.at[1, ...]
 
@@ -2225,7 +2231,7 @@ class PallasCallPipelineNonFlatArgsTest(jtu.JaxTestCase):
       out_refs[1][0][...] = in_refs[0][0][...] + in_refs[2][0][...]
       out_refs[1][1][...] = in_refs[2][1][...]
 
-    @pl.kernel(out_type=out_type, mesh=pltpu.create_tensorcore_mesh('core'))
+    @pl.kernel(out_type=out_type, mesh=pltpu.TensorCoreMesh(axis_name='core'))
     def run_kernel(x_ref, y_ref, z_ref, out_xy_ref, out_z_ref):
       in_specs = ([(pl.BlockSpec((256,), lambda i: (i,)),), (),
                   (pl.BlockSpec((256,), lambda i: (i,)),
@@ -2264,7 +2270,7 @@ class PallasCallPipelineNonFlatArgsTest(jtu.JaxTestCase):
       scratch2_list[0][...] = in_refs[2][1][...]
       out_refs[1][1][...] = scratch2_list[0][...]
 
-    @pl.kernel(out_type=out_type, mesh=pltpu.create_tensorcore_mesh('core'))
+    @pl.kernel(out_type=out_type, mesh=pltpu.TensorCoreMesh(axis_name='core'))
     def run_kernel(x_ref, y_ref, z_ref, out_xy_ref, out_z_ref):
       in_specs = ([(pl.BlockSpec((256,), lambda i: (i,)),), (),
                    (pl.BlockSpec((256,), lambda i: (i,)),
@@ -2302,7 +2308,7 @@ class PallasCallPipelineNonFlatArgsTest(jtu.JaxTestCase):
                             pl.BlockSpec((128,), lambda i: (i,))) ],),
       )(outer_in, outer_out)
 
-    @pl.kernel(out_type=out_type, mesh=pltpu.create_tensorcore_mesh('core'))
+    @pl.kernel(out_type=out_type, mesh=pltpu.TensorCoreMesh(axis_name='core'))
     def run_kernel(x_ref, y_ref, z_ref, out_xy_ref, out_z_ref):
       in_specs = ([(pl.BlockSpec((256,), lambda i: (i,)),), (),
                    (pl.BlockSpec((256,), lambda i: (i,)),
@@ -2355,7 +2361,7 @@ class PallasCallPipelineNonFlatArgsTest(jtu.JaxTestCase):
                             pl.BlockSpec((128,), lambda i: (i,))) ],),
       )([(outer_scratch1,), (), (outer_scratch2_list[0],)], outer_out)
 
-    @pl.kernel(out_type=out_type, mesh=pltpu.create_tensorcore_mesh('core'))
+    @pl.kernel(out_type=out_type, mesh=pltpu.TensorCoreMesh(axis_name='core'))
     def run_kernel(x_ref, y_ref, z_ref, out_xy_ref, out_z_ref):
       in_specs = ([(pl.BlockSpec((256,), lambda i: (i,)),), (),
                    (pl.BlockSpec((256,), lambda i: (i,)),

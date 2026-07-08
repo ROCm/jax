@@ -25,8 +25,10 @@ import math
 from typing import Any, Literal, assert_never
 
 import jax
+from jax._src import api
 from jax._src import core as jax_core
 from jax._src import debugging
+from jax._src import deprecations
 from jax._src import dtypes
 from jax._src import lax
 from jax._src import literals
@@ -958,28 +960,24 @@ def copy_gmem_to_smem(
 ) -> None:
   """Asynchronously copies a GMEM reference to a SMEM reference.
 
-  If collective_axes is specified, this performs a multicast copy where
-  all CUDA blocks that share the same index along the collective axis
-  receive a copy of the same block of data loaded from `dst` to `src`.
+  When ``collective_axes`` is specified, the copy involves multiple blocks
+  in the cluster. The value of ``leader_tracked`` determines the behavior:
 
-  If both ``collective_axes`` and ``leader_tracked`` are specified as
-  ``CopyPartition.PARTITIONED(axis)``, this will perform a partitioned
-  collective copy where each block in the cluster will receive a tile of
-  ``transfer_size // cluster_size`` data from the ``src`` Ref.
-  For example, if ``src`` has a shape of (256, 256) and a partitioned
-  copy is performed along axis 0 with cluster size 2, then the first block
-  will receive ``src[0:128, :]`` and the second will receive
-  ``src[128:256, :]``.
+  * ``None`` (**multicast**): All blocks sharing the same index along the
+    collective axes receive the same data from ``src``.
+  * ``CopyPartition.PARTITIONED(axis)``: Each block in the collective receives
+    a ``transfer_size // cluster_size`` tile of ``src``. E.g. for ``src`` of
+    shape ``(256, 256)`` with cluster size 2 along axis 0: block 0 gets
+    ``src[0:128, :]``, block 1 gets ``src[128:256, :]``.
+  * ``CopyPartition.REPLICATED``: All blocks in the collective load the same
+    data, but only the first block tracks progress via barrier arrivals.
 
-  If both ``collective_axes`` and ``leader_tracked`` are specified as
-  ``CopyPartition.REPLICATED``, this will perform a replicated copy where
-  all blocks load the same data but only the first block in the collective
-  tracks progress via barrier arrivals.
+  .. note::
 
-
-  NOTE: Only the first block in the cluster will arrive on the barrier,
-  and an additional cluster barrier is necessary to ensure that all blocks in
-  the cluster have finished the copy.
+    For leader-tracked copies, only the first block in the collective arrives
+    on the barrier. If other blocks need to consume the copied data, an
+    additional cluster barrier is necessary to ensure all blocks have
+    finished the copy.
 
   Args:
     src: The source Ref. Must be in GMEM.
@@ -1844,6 +1842,56 @@ def _wgmma_effectful_abstract_eval(acc, lhs_ref, *args, **kwargs):
       state.ReadEffect(2),
       *([state.ReadEffect(1)] if isinstance(lhs_ref, state.AbstractRef) else [])
   }
+
+
+def mma(acc: jax.Array, a: jax.Array, b: jax.Array, /) -> jax.Array:
+  """Computes ``acc + a @ b`` synchronously using Ampere MMA instructions."""
+  return mma_p.bind(acc, a, b)
+
+
+mma_p = jax_core.Primitive("mma")
+
+
+@mma_p.def_abstract_eval
+def _mma_abstract_eval(acc, a, b):
+  m, n = acc.shape
+  m2, k = a.shape
+  k2, n2 = b.shape
+  if m != m2 or n != n2 or k != k2:
+    raise ValueError(
+        f"Incompatible shapes for matrix multiplication: lhs={a.shape},"
+        f" rhs={b.shape}, acc={acc.shape}"
+    )
+  if a.dtype != b.dtype:
+    raise TypeError(f"Operand dtypes must match: {a.dtype} != {b.dtype}")
+  if jnp.issubdtype(a.dtype, jnp.integer) or a.dtype == jnp.bool_:
+    if acc.dtype != jnp.int32:
+      raise NotImplementedError(
+          "Only int32 accumulator supported for integer and boolean operands."
+          f" Got {acc.dtype}"
+      )
+  elif jnp.issubdtype(a.dtype, jnp.floating):
+    if acc.dtype not in (jnp.float64, jnp.float32, jnp.float16):
+      raise NotImplementedError(
+          "Only float64, float32 and float16 accumulators supported for"
+          f" floating operands. Got {acc.dtype}"
+      )
+  else:
+    raise NotImplementedError(f"Unsupported operand type: {a.dtype}")
+  return acc
+
+
+@lowering.register_lowering_rule(mma_p, mgpu.LoweringSemantics.Lane)
+def _mma_lowering(ctx: lowering.LoweringRuleContext, acc, a, b):
+  del ctx  # Unused.
+  return mgpu.mma(acc, a, b)
+
+
+@lowering.register_lowering_rule(mma_p, mgpu.LoweringSemantics.Warpgroup)
+def _mma_warpgroup_lowering(ctx: lowering.LoweringRuleContext, acc, a, b):
+  del ctx  # Unused.
+  return mgpu.dialect.mma(acc, a, b)
+
 
 wgmma_wait_p = jax_core.Primitive("wgmma_wait")
 wgmma_wait_p.multiple_results = True
@@ -3530,7 +3578,7 @@ lowering.register_lowering_rule(load_p, mgpu.LoweringSemantics.Warpgroup)(
 
 def load(
     src: _Ref,
-    idx,
+    idx: Any = api.NotSpecified(),
     *,
     layout: SomeLayout | None = None,
     optimized: bool = True,
@@ -3547,6 +3595,16 @@ def load(
   Returns:
     The loaded array.
   """
+  if not isinstance(idx, api.NotSpecified):
+    deprecations.warn(
+        "jax-pallas-mgpu-load-idx",
+        "Passing the index separately from the reference is deprecated. Please"
+        " index the reference via ``ref.at[idx]`` before passing it to"
+        " ``load``.",
+        stacklevel=2,
+    )
+  else:
+    idx = None
   src, src_transforms = state_primitives.get_ref_and_transforms(
       src, idx, "load"
   )
@@ -3962,6 +4020,9 @@ def _async_copy_scales_to_tmem_lowering_rule(*args, **kwargs):
 
 @lowering.register_lowering_rule(
     async_copy_scales_to_tmem_p, mgpu.LoweringSemantics.Warpgroup
+)
+@lowering.register_lowering_rule(
+    async_copy_scales_to_tmem_p, *gpu_core.WGxWARP_SEMANTICS
 )
 def _async_copy_scales_to_tmem_lowering_rule_wg(*args, **kwargs):
   return _async_copy_to_tmem_lowering_rule(

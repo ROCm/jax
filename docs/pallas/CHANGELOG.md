@@ -13,6 +13,12 @@ Remember to align the itemized text with the first line of an item within a list
 
 ## Unreleased
 
+* Changes
+
+  * {func}`jax.experimental.pallas.kernel` now only aliases closed over or
+    passed in refs if the kernel writes to them. If you need aliasing without
+    an explicit write, use {func}`jax.experimental.pallas.tpu.touch`.
+
 ### Triton
 
 * New features
@@ -25,6 +31,19 @@ Remember to align the itemized text with the first line of an item within a list
     {func}`jax.experimental.export.export`, since the corresponding custom call
     is not considered export-stable and needs to be enabled explicitly.
 
+
+### Mosaic GPU
+
+* New features
+
+  * Added support for Ampere matrix multiply-accumulate instructions via
+  {func}`jax.experimental.pallas.mosaic_gpu.mma`.
+
+* Deprecations
+
+  * The `idx` parameter of {func}`jax.experimental.pallas.mosaic_gpu.load` is
+    deprecated. Index the ref explicitly via `ref.at[idx]` prior to loading
+    from it.
 
 ## Released with JAX 0.10.2
 
@@ -43,6 +62,13 @@ Remember to align the itemized text with the first line of an item within a list
     operator instead in a TPU or MGPU kernel.
 
 ### TPU
+
+* New features
+
+  * Added `jax_pallas_auto_assign_collective_ids` config flag to allow two new
+    custom semaphore barrier collective IDs modes: ('yes') assigning missing
+    collective IDs automatically or ('override') overridding all collective IDs
+    and assigning them automatically, both based on the serialized kernel hash.
 
 * Changes
 

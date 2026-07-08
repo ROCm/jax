@@ -5308,6 +5308,120 @@ class EmitPipelineTest(ptu.PallasTPUTest):
       np.testing.assert_array_equal(out, x + y)
 
 
+class PallasHloNamesTest(ptu.PallasTPUTest):
+
+  def setUp(self):
+    super().setUp()
+    if not jtu.is_libtpu_at_least('0.0.43'):
+      self.skipTest('Custom call naming requires libtpu 0.0.43 or newer.')
+
+  def test_custom_call_name(self):
+    def kernel(x_ref, o_ref):
+      o_ref[...] = x_ref[...]
+
+    x = jnp.zeros((8, 128), dtype=jnp.float32)
+
+    @jax.jit
+    def f(x):
+      return self.pallas_call(
+          kernel, out_shape=jax.typeof(x), name='my_copy_kernel'
+      )(x)
+
+    hlo = f.lower(x).compile().as_text()
+    self.assertRegex(hlo, r'%my_copy_kernel\.\d+ = .* custom-call')
+
+  def test_parameter_names(self):
+    def kernel(x_ref, y_ref, o_ref):
+      o_ref[...] = x_ref[...] + y_ref[...]
+
+    x = y = jnp.zeros((8, 128), dtype=jnp.float32)
+
+    @jax.jit
+    def f(x, y):
+      return self.pallas_call(kernel, out_shape=jax.typeof(x))(x, y)
+
+    hlo = f.lower(x, y).compile().as_text()
+    self.assertRegex(hlo, r'%x_ref\.\d+ = .* parameter\(0\)')
+    self.assertRegex(hlo, r'%y_ref\.\d+ = .* parameter\(1\)')
+
+  def test_parameter_names_with_grid(self):
+    def kernel(x_ref, o_ref):
+      o_ref[...] = x_ref[...]
+
+    x = jnp.zeros((16, 128), dtype=jnp.float32)
+
+    @jax.jit
+    def f(x):
+      return self.pallas_call(
+          kernel,
+          grid=(2,),
+          in_specs=[pl.BlockSpec((8, 128), lambda i: (i, 0))],
+          out_specs=pl.BlockSpec((8, 128), lambda i: (i, 0)),
+          out_shape=jax.typeof(x),
+      )(x)
+
+    hlo = f.lower(x).compile().as_text()
+    self.assertRegex(hlo, r'%x_ref\.\d+ = .* parameter\(0\)')
+
+  def test_parameter_names_dynamic_grid(self):
+    def kernel(x_ref, o_ref):
+      o_ref[...] = x_ref[...]
+
+    x = jnp.zeros((8, 128), dtype=jnp.float32)
+
+    @jax.jit
+    def f(x, steps):
+      return self.pallas_call(
+          kernel,
+          grid=(steps,),
+          in_specs=[pl.BlockSpec((8, 128), lambda i: (0, 0))],
+          out_specs=pl.BlockSpec((8, 128), lambda i: (0, 0)),
+          out_shape=jax.typeof(x),
+      )(x)
+
+    hlo = f.lower(x, jnp.int32(2)).compile().as_text()
+    self.assertRegex(hlo, r'%x_ref\.\d+ = .* parameter\(0\)')
+    self.assertRegex(hlo, r'%copy[.\d]* = .* copy')  # Grid bound.
+
+  def test_parameter_names_mixed_static_dynamic_grid(self):
+    def kernel(x_ref, y_ref, o_ref):
+      o_ref[...] = x_ref[...] + y_ref[...]
+
+    x = y = jnp.zeros((8, 128), dtype=jnp.float32)
+
+    @jax.jit
+    def f(x, y, steps):
+      return self.pallas_call(
+          kernel,
+          grid=(steps, 2),
+          in_specs=[
+              pl.BlockSpec((8, 128), lambda i, j: (0, 0)),
+              pl.BlockSpec((8, 128), lambda i, j: (0, 0)),
+          ],
+          out_specs=pl.BlockSpec((8, 128), lambda i, j: (0, 0)),
+          out_shape=jax.typeof(x),
+      )(x, y)
+
+    hlo = f.lower(x, y, jnp.int32(3)).compile().as_text()
+    self.assertRegex(hlo, r'%x_ref\.\d+ = .* parameter\(0\)')
+    self.assertRegex(hlo, r'%y_ref\.\d+ = .* parameter\(1\)')
+    self.assertRegex(hlo, r'%copy[.\d]* = .* copy')  # Grid bound.
+
+  def test_parameter_names_computed_operands(self):
+    def kernel(x_ref, y_ref, o_ref):
+      o_ref[...] = x_ref[...] + y_ref[...]
+
+    x = y = jnp.zeros((8, 128), dtype=jnp.float32)
+
+    @jax.jit
+    def f(x, y):
+      return self.pallas_call(kernel, out_shape=jax.typeof(x))(x + x, y + y)
+
+    hlo = f.lower(x, y).compile().as_text()
+    self.assertRegex(hlo, r'%add[.\d]*\.x_ref[.\d]* = .* add')
+    self.assertRegex(hlo, r'%add[.\d]*\.y_ref[.\d]* = .* add')
+
+
 class PallasKernelMetadataTest(ptu.PallasTPUTest):
 
   @parameterized.parameters(
@@ -5600,6 +5714,87 @@ class ExplicitMXUTest(jtu.JaxTestCase):
     out_ref = jnp.matmul(x, y).block_until_ready().astype(jnp.float32)
     np.testing.assert_allclose(out, out_ref, atol=1e-2, rtol=1e-2)
 
+
+@jtu.with_config(jax_pallas_auto_assign_collective_ids='yes')
+class PallasTPUCollectiveIdTest(ptu.PallasTPUTest):
+
+  def test_sequential_collectives_auto_allocated_ids_same_kernel(self):
+    if self.INTERPRET:
+      self.skipTest('Compilation-only test')
+
+    def kernel(x, y):
+      sem = pltpu.get_barrier_semaphore()
+      pl.semaphore_signal(sem)
+      y[...] = x[...]
+
+    @jax.jit
+    def run_sequential_collectives(x):
+      out = pl.pallas_call(
+          kernel,
+          out_shape=jax.ShapeDtypeStruct((8, 128), jnp.float32),
+          in_specs=[pl.BlockSpec(memory_space=pltpu.VMEM)],
+          out_specs=pl.BlockSpec(memory_space=pltpu.VMEM),
+      )(x)
+
+      out = pl.pallas_call(
+          kernel,
+          out_shape=jax.ShapeDtypeStruct((8, 128), jnp.float32),
+          in_specs=[pl.BlockSpec(memory_space=pltpu.VMEM)],
+          out_specs=pl.BlockSpec(memory_space=pltpu.VMEM),
+      )(out)
+      return out
+
+    x = jnp.zeros((8, 128), jnp.float32)
+    lowered = run_sequential_collectives.lower(x)
+    mlir_str = str(lowered.compiler_ir())
+
+    matches = re.findall(
+        r'(?:\\22|\\\"|\")collective_id(?:\\22|\\\"|\"):\s*(\d+)', mlir_str
+    )
+    self.assertLen(matches, 2)
+    self.assertEqual(int(matches[0]), 7000)
+    self.assertEqual(int(matches[1]), 7000)
+
+  def test_sequential_collectives_auto_allocated_ids_different_kernels(self):
+    if self.INTERPRET:
+      self.skipTest('Compilation-only test')
+
+    def kernel1(x, y):
+      sem = pltpu.get_barrier_semaphore()
+      pl.semaphore_signal(sem)
+      y[...] = x[...] + 1.0
+
+    def kernel2(x, y):
+      sem = pltpu.get_barrier_semaphore()
+      pl.semaphore_signal(sem)
+      y[...] = x[...] + 2.0
+
+    @jax.jit
+    def run_sequential_collectives(x):
+      out = pl.pallas_call(
+          kernel1,
+          out_shape=jax.ShapeDtypeStruct((8, 128), jnp.float32),
+          in_specs=[pl.BlockSpec(memory_space=pltpu.VMEM)],
+          out_specs=pl.BlockSpec(memory_space=pltpu.VMEM),
+      )(x)
+
+      out = pl.pallas_call(
+          kernel2,
+          out_shape=jax.ShapeDtypeStruct((8, 128), jnp.float32),
+          in_specs=[pl.BlockSpec(memory_space=pltpu.VMEM)],
+          out_specs=pl.BlockSpec(memory_space=pltpu.VMEM),
+      )(out)
+      return out
+
+    lowered = run_sequential_collectives.lower(jnp.zeros((8, 128), jnp.float32))
+    mlir_str = str(lowered.compiler_ir())
+
+    matches = re.findall(
+        r'(?:\\22|\\\"|\")collective_id(?:\\22|\\\"|\"):\s*(\d+)', mlir_str
+    )
+    self.assertLen(matches, 2)
+    self.assertEqual(int(matches[0]), 7000)
+    self.assertEqual(int(matches[1]), 7001)
 
 if __name__ == '__main__':
   absltest.main(testLoader=jtu.JaxTestLoader())

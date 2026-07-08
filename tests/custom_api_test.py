@@ -1785,6 +1785,33 @@ class CustomVJPTest(jtu.JaxTestCase):
     expected = (2., jnp.cos(1.))
     self.assertAllClose(ans, expected, check_dtypes=False)
 
+  def test_nondiff_argnums_unhashable(self):
+    @partial(jax.custom_vjp, nondiff_argnums=(0,))
+    def f(lst, x):
+      return lst[0] * jnp.sin(x)
+    def f_fwd(lst, x):
+      return f(lst, x), jnp.cos(x)
+    def f_bwd(lst, cos_x, g):
+      return (lst[0] * cos_x * g,)
+    f.defvjp(f_fwd, f_bwd)
+
+    lst = [2.]  # unhashable
+
+    ans = f(lst, 3.)
+    expected = 2. * jnp.sin(3.)
+    self.assertAllClose(ans, expected, check_dtypes=False)
+
+    ans = api.grad(f, argnums=1)(lst, 3.)
+    expected = 2. * jnp.cos(3.)
+    self.assertAllClose(ans, expected, check_dtypes=False)
+
+    ans = jax.jit(lambda x: api.grad(f, argnums=1)(lst, x))(3.)
+    self.assertAllClose(ans, expected, check_dtypes=False)
+
+    ans = jax.vmap(api.grad(lambda x: f(lst, x)))(jnp.arange(3.))
+    expected = 2. * jnp.cos(jnp.arange(3.))
+    self.assertAllClose(ans, expected, check_dtypes=False)
+
   def test_nondiff_argnums_argnames(self):
     @partial(jax.custom_vjp, nondiff_argnums=(0,), nondiff_argnames=('g',))
     def app(f, g, x):
@@ -2271,6 +2298,68 @@ class CustomVJPTest(jtu.JaxTestCase):
     ans = api.grad(g)(2.)
     expected = 4. * api.grad(lambda x: jnp.sin(jnp.sin(x)))(2.)
     self.assertAllClose(ans, expected, check_dtypes=False)
+
+  def test_remat_pytree_arg(self):
+    @jax.custom_vjp
+    def f(xy):
+      return xy['a'] * xy['b']
+    def f_fwd(xy):
+      return f(xy), xy
+    def f_bwd(xy, g):
+      return ({'a': g * xy['b'], 'b': g * xy['a']},)
+    f.defvjp(f_fwd, f_bwd)
+
+    @jax.remat
+    def g(xy):
+      return jnp.sin(f(xy))
+
+    xy = {'a': 2., 'b': 3.}
+    ans = g(xy)
+    expected = np.sin(2. * 3.)
+    self.assertAllClose(ans, expected, check_dtypes=False)
+
+    ans = api.grad(g)(xy)
+    expected = {'a': np.cos(6.) * 3., 'b': np.cos(6.) * 2.}
+    self.assertAllClose(ans, expected, check_dtypes=False)
+
+  def test_remat_nondiff_argnums(self):
+    @partial(jax.custom_vjp, nondiff_argnums=(0,))
+    def f(k, x):
+      return jnp.sin(k * x)
+    def f_fwd(k, x):
+      return f(k, x), jnp.cos(k * x)
+    def f_bwd(k, cos_kx, g):
+      return (k * cos_kx * g,)
+    f.defvjp(f_fwd, f_bwd)
+
+    @jax.remat
+    def g(x):
+      return f(2., x) * 3.
+
+    ans = g(0.5)
+    expected = 3. * np.sin(2. * 0.5)
+    self.assertAllClose(ans, expected, check_dtypes=False)
+
+    ans = api.grad(g)(0.5)
+    expected = 3. * 2. * np.cos(2. * 0.5)
+    self.assertAllClose(ans, expected, check_dtypes=False)
+
+  def test_symbolic_zeros_nondiff_argnums(self):
+    # With symbolic_zeros=True, fwd should receive nondiff args raw, and only
+    # diff args wrapped as CustomVJPPrimal (with a bool perturbed flag).
+    @partial(jax.custom_vjp, nondiff_argnums=(0,))
+    def f(k, x):
+      return k * x
+    def f_fwd(k, x):
+      self.assertIsInstance(k, float)
+      self.assertIsInstance(x.perturbed, bool)
+      return f(k, x.value), None
+    def f_bwd(k, _, g):
+      return (k * g,)
+    f.defvjp(f_fwd, f_bwd, symbolic_zeros=True)
+
+    ans = api.grad(lambda x: f(2., x))(3.)
+    self.assertAllClose(ans, 2., check_dtypes=False)
 
   def test_remat_higher_order(self):
     @jax.custom_vjp
@@ -4094,6 +4183,16 @@ class CustomApiTest(jtu.JaxTestCase):
       for methods in it.permutations(['defvjp', 'def_vmap']):
         for method in methods:
           self.assertIsInstance(getattr(f, method), Callable)
+
+
+@jtu.with_config(jax_remat3=True)
+class CustomJVPRemat3Test(CustomJVPTest):
+  ...
+
+
+@jtu.with_config(jax_remat3=True)
+class CustomVJP3Remat3Test(CustomVJP3Test):
+  ...
 
 
 if __name__ == '__main__':

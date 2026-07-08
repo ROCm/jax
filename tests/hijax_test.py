@@ -43,7 +43,10 @@ from jax._src.state.discharge import run_state
 from jax._src.hijax import (
     HiPrimitive, HiType, Box, new_box, box_set, box_get, box_effect,
     register_hitype, ShapedArray, Ty, custom_vjp3, MappingSpec, HiPspec, Log)
-from jax.experimental.hijax import VJPHiPrimitive
+from jax.experimental.hijax import (
+    VJPHiPrimitive, Zero, apply_derived_linearization, instantiate_zeros,
+    jvp_from_lin, linearize_from_jvp, transpose_jvp, transpose_linearized,
+    vjp_fwd_from_jvp, vjp_fwd_from_lin)
 
 jtu.request_cpu_devices(8)
 
@@ -818,6 +821,68 @@ class HijaxTest(jtu.JaxTestCase):
                    out_axes=TupSpec((0, 0)), axis_size=3)(tup)
     self.assertAllClose(out.elts, tup.elts)
 
+  def test_tuple_vmap_of_jit(self):
+    # https://github.com/jax-ml/jax/issues/38125
+    tup = make_tup(jnp.arange(3.), jnp.arange(3.))
+    out = jax.vmap(jax.jit(lambda x: x), in_axes=TupSpec((0, 0)),
+                   out_axes=TupSpec((0, 0)), axis_size=3)(tup)
+    self.assertAllClose(out.elts, tup.elts)
+
+  def test_tuple_vmap_int_in_axes_error(self):
+    tup = make_tup(jnp.arange(3.), jnp.arange(3.))
+    with self.assertRaisesRegex(ValueError, "non-array type"):
+      jax.vmap(lambda x: x, axis_size=3)(tup)
+
+  def test_tuple_device_put_error(self):
+    tup = make_tup(jnp.arange(3.), jnp.arange(3.))
+    with self.assertRaisesRegex(NotImplementedError,
+                                "device_put does not yet support"):
+      jax.device_put(tup, jax.devices()[0])
+
+  def test_missing_hitype_method_error(self):
+    @dataclass(frozen=True)
+    class Opaque:
+      val: Any
+
+    @dataclass(frozen=True)
+    class OpaqueTy(HiType):
+      pass
+
+    @dataclass(frozen=True)
+    class OpaqueSpec(MappingSpec):
+      pass
+
+    register_hitype(Opaque, lambda _: OpaqueTy())
+
+    with self.assertRaisesRegex(
+        NotImplementedError, r"vmap requires .*OpaqueTy.* to implement the "
+        r"`dec_rank` method"):
+      jax.vmap(lambda x: x, in_axes=OpaqueSpec(), out_axes=OpaqueSpec(),
+               axis_size=3)(Opaque(jnp.arange(3.)))
+
+  def test_tuple_vmap_internal(self):
+    @jax.vmap
+    def f(x):
+      tup = make_tup(x, 2 * x)
+      return get_tuple_element(tup, 0)
+    x = jnp.arange(3.)
+    self.assertAllClose(f(x), x)
+
+  def test_tuple_vmap_custom_vjp(self):
+    tup = make_tup(jnp.arange(3.), jnp.arange(3.) + 1)
+
+    @jax.custom_vjp
+    def inner(tup):
+      return get_tuple_element(tup, 1)
+    def fwd(tup):
+      assert False  # unused under vmap-of-primal
+    def bwd(*_):
+      assert False
+    inner.defvjp(fwd, bwd)
+
+    f = jax.jit(jax.vmap(inner, in_axes=TupSpec((0, 0)), axis_size=3))
+    self.assertAllClose(f(tup), jnp.arange(3.) + 1)
+
   def test_tuple_vmap_infer(self):
     tup = make_tup(jnp.arange(3.), jnp.arange(3.))
     jax.vmap(lambda _: make_tup(jnp.ones(3), jnp.ones(3)),
@@ -1293,6 +1358,263 @@ class HijaxTest(jtu.JaxTestCase):
 
     self.assertEqual(f(2.0), 8.0)
     self.assertEqual(jax.linearize(f, 2.0)[1](1.0), 12.0)
+
+  @parameterized.parameters([False, True])
+  def test_rules_derived_from_jvp(self, jit):
+    class Sin(VJPHiPrimitive):
+      def __init__(self, x_aval):
+        self.in_avals = (x_aval,)
+        self.out_aval = x_aval
+        self.params = {}
+        super().__init__()
+
+      def expand(self, x):
+        return jnp.sin(x)
+
+      def jvp(self, primals, tangents):
+        (x,), (x_dot,) = primals, tangents
+        return self(x), jnp.cos(x) * x_dot
+
+      lin = linearize_from_jvp
+      linearized = apply_derived_linearization
+      vjp_fwd = vjp_fwd_from_jvp
+      vjp_bwd_retval = transpose_jvp
+
+      def batch_dim_rule(self, _axis_data, in_dims):
+        return in_dims[0]
+
+    def sin(x):
+      return Sin(jax.typeof(x))(x)
+
+    f = jax.jit(sin) if jit else sin
+
+    self.assertAllClose(f(2.0), jnp.sin(2.0))
+    _, y_dot = jax.jvp(f, (2.0,), (1.0,))
+    self.assertAllClose(y_dot, jnp.cos(2.0))
+    y, f_lin = jax.linearize(f, 2.0)
+    self.assertAllClose(y, jnp.sin(2.0))
+    self.assertAllClose(f_lin(1.0), jnp.cos(2.0))
+    self.assertAllClose(jax.grad(f)(2.0), jnp.cos(2.0))
+    self.assertAllClose(jax.grad(jax.grad(f))(2.0), -jnp.sin(2.0))
+    xs = jnp.arange(3.0)
+    self.assertAllClose(jax.vmap(jax.grad(f))(xs), jnp.cos(xs))
+    # forward-over-reverse and one-pass jacobians, via the batch rule
+    self.assertAllClose(jax.hessian(f)(2.0), -jnp.sin(2.0))
+    self.assertAllClose(jax.jacfwd(f)(2.0), jnp.cos(2.0))
+    self.assertAllClose(jax.jacrev(f)(2.0), jnp.cos(2.0))
+
+  def test_rules_derived_from_jvp_multiple_args(self):
+    zero_tangents_seen = []
+
+    class Mul(VJPHiPrimitive):
+      def __init__(self, x_aval, y_aval):
+        self.in_avals = (x_aval, y_aval)
+        self.out_aval = x_aval
+        self.params = {}
+        super().__init__()
+
+      def expand(self, x, y):
+        return x * y
+
+      def jvp(self, primals, tangents):
+        (x, y), (x_dot, y_dot) = primals, tangents
+        zero_tangents_seen.append((isinstance(x_dot, Zero),
+                                   isinstance(y_dot, Zero)))
+        x_dot, y_dot = instantiate_zeros(x_dot), instantiate_zeros(y_dot)
+        return self(x, y), x_dot * y + x * y_dot
+
+      lin = linearize_from_jvp
+      linearized = apply_derived_linearization
+      vjp_fwd = vjp_fwd_from_jvp
+      vjp_bwd_retval = transpose_jvp
+
+    def mul(x, y):
+      return Mul(jax.typeof(x), jax.typeof(y))(x, y)
+
+    gx, gy = jax.grad(mul, (0, 1))(2.0, 3.0)
+    self.assertAllClose(gx, 3.0, check_dtypes=False)
+    self.assertAllClose(gy, 2.0, check_dtypes=False)
+    # symbolically-zero tangent for one argument
+    self.assertAllClose(jax.grad(mul, 1)(2.0, 3.0), 2.0, check_dtypes=False)
+    _, f_lin = jax.linearize(mul, 2.0, 3.0)
+    self.assertAllClose(f_lin(1.0, 0.0), 3.0, check_dtypes=False)
+    self.assertAllClose(f_lin(0.0, 1.0), 2.0, check_dtypes=False)
+    # the jvp rule sees a symbolic Zero tangent for the constant argument
+    zero_tangents_seen.clear()
+    _, f_lin = jax.linearize(lambda x: mul(x, 3.0), 2.0)
+    self.assertAllClose(f_lin(1.0), 3.0, check_dtypes=False)
+    self.assertIn((False, True), zero_tangents_seen)
+
+  @parameterized.parameters([False, True])
+  def test_vjp_derived_from_user_lin(self, jit):
+    class RaiseToStaticPower(VJPHiPrimitive):
+      def __init__(self, in_aval, *, power):
+        self.in_avals = (in_aval,)
+        self.out_aval = in_aval
+        self.params = dict(power=power)
+        super().__init__()
+
+      def expand(self, x):
+        return x ** self.power
+
+      def lin(self, nzs_in, x):
+        return self(x), x
+
+      def linearized(self, x, t):
+        return t * self.power * raise_to_static_power(x, self.power-1)
+
+      vjp_fwd = vjp_fwd_from_lin
+      vjp_bwd_retval = transpose_linearized
+
+    def raise_to_static_power(x, power):
+      return RaiseToStaticPower(jax.typeof(x), power=power)(x)
+
+    def f(x):
+      return raise_to_static_power(x, 3)
+
+    if jit:
+      f = jax.jit(f)
+
+    self.assertEqual(f(2.0), 8.0)
+    self.assertEqual(jax.linearize(f, 2.0)[1](1.0), 12.0)
+    self.assertEqual(jax.grad(f)(2.0), 12.0)
+    self.assertEqual(jax.grad(jax.grad(f))(2.0), 12.0)
+
+  def test_vjp_derived_from_derived_lin(self):
+    # the whole chain: jvp -> derived lin -> derived vjp
+    class Sin(VJPHiPrimitive):
+      def __init__(self, x_aval):
+        self.in_avals = (x_aval,)
+        self.out_aval = x_aval
+        self.params = {}
+        super().__init__()
+
+      def expand(self, x):
+        return jnp.sin(x)
+
+      def jvp(self, primals, tangents):
+        (x,), (x_dot,) = primals, tangents
+        return self(x), jnp.cos(x) * x_dot
+
+      lin = linearize_from_jvp
+      linearized = apply_derived_linearization
+      vjp_fwd = vjp_fwd_from_lin
+      vjp_bwd_retval = transpose_linearized
+
+    def sin(x):
+      return Sin(jax.typeof(x))(x)
+
+    self.assertAllClose(jax.grad(sin)(2.0), jnp.cos(2.0))
+    self.assertAllClose(jax.jit(jax.grad(sin))(2.0), jnp.cos(2.0))
+    self.assertAllClose(jax.grad(jax.grad(sin))(2.0), -jnp.sin(2.0))
+
+  def test_jvp_derived_from_lin(self):
+    class RaiseToStaticPower(VJPHiPrimitive):
+      def __init__(self, in_aval, *, power):
+        self.in_avals = (in_aval,)
+        self.out_aval = in_aval
+        self.params = dict(power=power)
+        super().__init__()
+
+      def expand(self, x):
+        return x ** self.power
+
+      def lin(self, nzs_in, x):
+        return self(x), x
+
+      def linearized(self, x, t):
+        return t * self.power * raise_to_static_power(x, self.power-1)
+
+      jvp = jvp_from_lin
+      vjp_fwd = vjp_fwd_from_lin
+      vjp_bwd_retval = transpose_linearized
+
+      def batch_dim_rule(self, _axis_data, in_dims):
+        return in_dims[0]
+
+    def raise_to_static_power(x, power):
+      return RaiseToStaticPower(jax.typeof(x), power=power)(x)
+
+    def f(x):
+      return raise_to_static_power(x, 3)
+
+    self.assertEqual(jax.jvp(f, (2.0,), (1.0,)), (8.0, 12.0))
+    self.assertEqual(jax.grad(f)(2.0), 12.0)
+    self.assertEqual(jax.hessian(f)(2.0), 12.0)
+
+  def test_jvp_from_lin_circular_error(self):
+    class Sin(VJPHiPrimitive):
+      def __init__(self, x_aval):
+        self.in_avals = (x_aval,)
+        self.out_aval = x_aval
+        self.params = {}
+        super().__init__()
+
+      def expand(self, x):
+        return jnp.sin(x)
+
+      jvp = jvp_from_lin
+      lin = linearize_from_jvp
+      linearized = apply_derived_linearization
+
+    def sin(x):
+      return Sin(jax.typeof(x))(x)
+
+    with self.assertRaisesRegex(TypeError, 'jvp_from_lin'):
+      jax.jvp(sin, (2.0,), (1.0,))
+
+  def test_derived_rules_with_static_params(self):
+    class ApplyAndScale(VJPHiPrimitive):
+      def __init__(self, x_aval, *, f, scale):
+        self.in_avals = (x_aval,)
+        self.out_aval = x_aval
+        self.params = dict(f=f, scale=scale)
+        super().__init__()
+
+      def expand(self, x):
+        return self.scale * self.f(x)
+
+      def jvp(self, primals, tangents):
+        (x,), (t,) = primals, tangents
+        return self(x), self.scale * jax.jvp(self.f, (x,), (t,))[1]
+
+      lin = linearize_from_jvp
+      linearized = apply_derived_linearization
+      vjp_fwd = vjp_fwd_from_jvp
+      vjp_bwd_retval = transpose_jvp
+
+    def apply_and_scale(f, scale, x):
+      return ApplyAndScale(jax.typeof(x), f=f, scale=scale)(x)
+
+    f = lambda x: apply_and_scale(jnp.sin, 2.0, x)
+    self.assertAllClose(f(2.0), 2 * jnp.sin(2.0))
+    self.assertAllClose(jax.grad(f)(2.0), 2 * jnp.cos(2.0))
+    self.assertAllClose(jax.jit(jax.grad(f))(2.0), 2 * jnp.cos(2.0))
+    self.assertAllClose(jax.grad(jax.grad(f))(2.0), -2 * jnp.sin(2.0))
+    self.assertAllClose(jax.linearize(f, 2.0)[1](1.0), 2 * jnp.cos(2.0))
+
+  def test_rules_derived_from_jvp_error_messages(self):
+    class Sin(VJPHiPrimitive):
+      def __init__(self, x_aval):
+        self.in_avals = (x_aval,)
+        self.out_aval = x_aval
+        self.params = {}
+        super().__init__()
+
+      def expand(self, x):
+        return jnp.sin(x)
+
+      def jvp(self, primals, tangents):
+        (x,), (x_dot,) = primals, tangents
+        return self(x), jnp.cos(x) * x_dot
+
+    def sin(x):
+      return Sin(jax.typeof(x))(x)
+
+    with self.assertRaisesRegex(NotImplementedError, 'vjp_fwd_from_jvp'):
+      jax.grad(sin)(2.0)
+    with self.assertRaisesRegex(NotImplementedError, 'linearize_from_jvp'):
+      jax.linearize(sin, 2.0)
 
   @jtu.with_explicit_mesh((2, 2), ('i', 'j'))
   def test_grad_remat_hitype(self, mesh):

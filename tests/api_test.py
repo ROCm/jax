@@ -5550,6 +5550,68 @@ class APITest(jtu.JaxTestCase):
     self.assertAllClose(y_grad, x)
     self.assertLen(g.trace().jaxpr.eqns, 1)
 
+  def test_vjp3_with_refs_tree_errors(self):
+    # wrong number of entries
+    _, f_vjp = jax.vjp(lambda x, y: x * y, 1., 2.)
+    with self.assertRaisesRegex(ValueError, "tree structures differ"):
+      f_vjp.with_refs(jax.new_ref(0.))
+
+    # None is an empty pytree, so it can't be used as a placeholder
+    _, f_vjp = jax.vjp(lambda x, y: x * y, 1., 2.)
+    with self.assertRaisesRegex(ValueError, "NoneType"):
+      f_vjp.with_refs(jax.new_ref(0.), None)
+
+  def test_vjp3_with_refs_aval_mismatch_errors(self):
+    # binding a gradient ref of the wrong shape errors at bind time
+    _, f_vjp = jax.vjp(lambda x: x.sum(), jnp.zeros(3))
+    with self.assertRaisesRegex(ValueError, "requires a ref of type"):
+      f_vjp.with_refs(jax.new_ref(jnp.zeros(4)))
+
+    # wrong dtype too
+    _, f_vjp = jax.vjp(lambda x: x.sum(), jnp.zeros(3))
+    with self.assertRaisesRegex(ValueError, "requires a ref of type"):
+      f_vjp.with_refs(jax.new_ref(jnp.zeros(3, 'int32')))
+
+  def test_vjp3_ref_arg_needs_with_refs_errors(self):
+    def f(x_ref):
+      return x_ref[...] ** 2
+
+    # differentiating wrt a ref-typed argument requires binding a gradient ref
+    _, f_vjp = jax.vjp(f, jax.new_ref(2.))
+    with self.assertRaisesRegex(ValueError, "with_refs"):
+      f_vjp(1.0)
+
+    # a GradValue entry doesn't cut it either...
+    _, f_vjp = jax.vjp(f, jax.new_ref(2.))
+    with self.assertRaisesRegex(ValueError, "can't be returned as a value"):
+      f_vjp.with_refs(jax.ad.GradValue())
+
+    # ...though a DontWant entry works
+    _, f_vjp = jax.vjp(f, jax.new_ref(2.))
+    out, = f_vjp.with_refs(jax.ad.DontWant())(1.)
+    self.assertIsInstance(out, jax.ad.DidntWant)
+
+  def test_grad_wrt_ref_arg_error(self):
+    def f(x_ref):
+      return x_ref[...] ** 2
+
+    with self.assertRaisesRegex(
+        TypeError, "grad cannot differentiate with respect to a Ref"):
+      jax.grad(f)(jax.new_ref(2.))
+
+    g = lambda x, y_ref: x * y_ref[...]
+    with self.assertRaisesRegex(
+        TypeError, "grad cannot differentiate with respect to a Ref"):
+      jax.grad(g, argnums=1)(1., jax.new_ref(2.))
+
+    with self.assertRaisesRegex(
+        TypeError, "jacrev cannot differentiate with respect to a Ref"):
+      jax.jacrev(f)(jax.new_ref(2.))
+
+    # ref args not selected by argnums are plumbing, and still work
+    self.assertAllClose(jax.grad(g)(3., jax.new_ref(2.)), 2.,
+                        check_dtypes=False)
+
   def test_while_jvp_debug_info_crash(self):
     def loop_fun(x, p):
       cond = lambda val: val[0] < 3
@@ -5841,6 +5903,20 @@ class RematTest(jtu.JaxTestCase):
     ans = api.grad(api.grad(g))(3.)
     expected = api.grad(api.grad(f))(3.)
     self.assertAllClose(ans, expected, check_dtypes=False)
+
+  @parameterized.named_parameters(
+      {"testcase_name": name, "f": f}
+      for name, f in [
+          ('basic', lambda x: jnp.sin(jnp.sin(x))),
+          ('cond', lambda x: lax.cond(x > 0, jnp.sin, jnp.cos, x)),
+      ])
+  def test_remat_higher_order_ad_preserves_remat_primitive(self, f):
+    g = jax.remat(f)
+    self.assertAllClose(api.grad(api.grad(g))(0.3),
+                        api.grad(api.grad(f))(0.3), check_dtypes=False)
+    jaxpr_text = str(jax.make_jaxpr(api.grad(api.grad(g)))(0.3))
+    needle = 'RematTraced' if config.remat3.value else 'remat2'
+    self.assertIn(needle, jaxpr_text)
 
   @parameterized.named_parameters(
       {"testcase_name": f"{suffix}", "remat": remat}
@@ -6701,6 +6777,107 @@ class RematTest(jtu.JaxTestCase):
     self.assertIn(' sin ', str(jaxpr))
     self.assertIn(' cos ', str(jaxpr))
 
+  def test_remat_of_scan_unused_extensive_output_grad(self):
+    # The scanned-over output `b` is unused by the differentiated function, so
+    # its cotangent is a symbolic zero with the stacked aval; the scan
+    # transpose must handle it.
+    def f(c, a):
+      b = jnp.sin(a).sum() + jnp.sin(c).sum()
+      return jnp.sin(c * b), b
+
+    g = jax.remat(partial(lax.scan, f),
+                  policy=jax.checkpoint_policies.nothing_saveable)
+    c = jnp.arange(4.) / 4.
+    as_ = jnp.arange(15.).reshape(5, 3) / 15.
+
+    ans = api.grad(lambda c, as_: g(c, as_)[0].sum())(c, as_)
+    expected = api.grad(lambda c, as_: lax.scan(f, c, as_)[0].sum())(c, as_)
+    self.assertAllClose(ans, expected, check_dtypes=False)
+
+  def test_remat_of_jit_residual_forwarding(self):
+    policy = jax.checkpoint_policies.save_only_these_names('y')
+    @partial(jax.remat, policy=policy)
+    def f(x):
+      y = checkpoint_name(jnp.sin(jnp.ones(2, 'float32')), 'y')
+      x = jax.jit(lambda: x * y)()
+      x = jax.jit(lambda: x * y)()
+      return x
+
+    res = saved_residuals(f, jnp.float32(3.))
+    self.assertLen(res, 1)
+
+    ans = api.grad(lambda x: f(x).sum())(jnp.float32(3.))
+    self.assertAllClose(ans, 2 * np.sin(1.) ** 2, check_dtypes=False)
+
+  def test_remat_offload_names_jaxpr(self):
+    # Jaxpr-level check of save_and_offload_only_these_names: offloaded values
+    # are device_put to the offload destination on the fwd pass and saved
+    # there, then device_put back on the bwd pass. (Execution needs a device
+    # with memory kinds; see tests/memories_test.py.)
+    policy = jax.checkpoint_policies.save_and_offload_only_these_names(
+        names_which_can_be_saved=['y'], names_which_can_be_offloaded=['z', 'w'],
+        offload_src='device', offload_dst='pinned_host')
+
+    @partial(jax.remat, policy=policy)
+    def f(x):
+      y = checkpoint_name(jnp.sin(x), 'y')
+      z = checkpoint_name(jnp.sin(y), 'z')
+      w = checkpoint_name(jnp.sin(z), 'w')
+      return jnp.sum(w * z)
+
+    jaxpr_text = str(api.make_jaxpr(api.grad(f))(jnp.arange(16.)))
+    self.assertEqual(jaxpr_text.count('MemorySpace.Host'), 2)
+    self.assertEqual(jaxpr_text.count('MemorySpace.Device'), 2)
+
+    with self.assertRaisesRegex(
+        ValueError, "The names should be exclusive and should not intersect"):
+      jax.checkpoint_policies.save_and_offload_only_these_names(
+          names_which_can_be_saved=['y'], names_which_can_be_offloaded=['y'],
+          offload_src='device', offload_dst='pinned_host')
+
+  def test_remat_offload_names_of_scan_jaxpr(self):
+    # Like test_remat_offload_names_jaxpr, but with the named values inside a
+    # scan body: the per-iteration offloaded copies are saved as stacked
+    # host-space residuals.
+    policy = jax.checkpoint_policies.save_and_offload_only_these_names(
+        names_which_can_be_saved=['y'], names_which_can_be_offloaded=['z', 'w'],
+        offload_src='device', offload_dst='pinned_host')
+
+    @partial(jax.remat, policy=policy)
+    def f(x):
+      def g(y, _):
+        y = checkpoint_name(jnp.sin(y), 'y')
+        z = checkpoint_name(jnp.sin(y), 'z')
+        w = checkpoint_name(jnp.sin(z), 'w')
+        return w, jnp.sum(w * z)
+      _, out = lax.scan(g, x, None, length=3)
+      return jnp.sum(out)
+
+    jaxpr_text = str(api.make_jaxpr(api.grad(f))(jnp.arange(16.)))
+    self.assertEqual(jaxpr_text.count('MemorySpace.Host'), 2)
+    self.assertEqual(jaxpr_text.count('MemorySpace.Device'), 2)
+    self.assertIn('<host>[3,16]', jaxpr_text)  # stacked host residuals
+
+  def test_remat_offload_dot_with_no_batch_dims_jaxpr(self):
+    # Jaxpr-level check of offload_dot_with_no_batch_dims: outputs of dots
+    # without batch dimensions are device_put to the offload destination on
+    # the fwd pass and saved there, then device_put back on the bwd pass;
+    # dots with batch dimensions are rematerialized as usual.
+    policy = jax.checkpoint_policies.offload_dot_with_no_batch_dims(
+        'device', 'pinned_host')
+
+    @partial(jax.remat, policy=policy)
+    def f(x, b):
+      x = jnp.einsum('ij,jk->ik', x, x)      # offloaded
+      b = jnp.einsum('bij,bjk->bik', b, b)   # batch dims: not offloaded
+      x = jnp.sin(x)
+      return jnp.sum(x) + jnp.sum(jnp.sin(b))
+
+    jaxpr_text = str(api.make_jaxpr(api.grad(f))(jnp.ones((4, 4)),
+                                                 jnp.ones((2, 4, 4))))
+    self.assertEqual(jaxpr_text.count('MemorySpace.Host'), 1)
+    self.assertEqual(jaxpr_text.count('MemorySpace.Device'), 1)
+
   @parameterized.named_parameters(
       {"testcase_name": f"{suffix}", "remat": remat}
       for suffix, remat in [
@@ -7545,6 +7722,24 @@ class Remat3Test(RematTest):
     jaxpr_text = str(jaxpr)
     self.assertEqual(jaxpr_text.count(' sin '), 0)
     self.assertEqual(jaxpr_text.count(' cos '), 0)
+
+  def test_remat_output_to_residual_forwarding(self):
+    # When a saved residual is also a primal output, the fwd jaxpr shouldn't
+    # return it twice; the wiring in fwds records the forwarding instead.
+    from jax._src.interpreters import remat as remat_internal
+
+    def body(x):
+      return checkpoint_name(jnp.sin(x), 'y')
+
+    jaxpr = jax.jit(body).trace(1.).jaxpr
+    policy = jax.checkpoint_policies.save_only_these_names('y')
+    fwd_jaxpr, _, fwds = remat_internal.remat_jaxpr(
+        jaxpr, policy, custom_vjp_rules=True, allow_fwds=True)
+    self.assertEqual(fwds, [0])
+    self.assertLen(fwd_jaxpr.jaxpr.outvars, len(jaxpr.jaxpr.outvars))
+
+    f = jax.remat(lambda x: jax.jit(body)(x), policy=policy)
+    self.assertAllClose(api.grad(f)(1.), jnp.cos(1.), check_dtypes=False)
 
   # We don't support everything_saveable with remat3
   def test_remat_custom_policy_save_anything_new_remat(self): pass

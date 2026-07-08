@@ -947,6 +947,22 @@ def _mgpu_broadcast_in_dim_op_lowering_rule(
   )
   return [fragmented_array_to_ir(out, out_ty)]
 
+# TODO(allanrenucci): Remove guard after jaxlib v0.11.0 release.
+if hasattr(mgpu, "VectorConcatOp"):
+  @_register_lowering(mgpu.VectorConcatOp)
+  def _mgpu_vector_concat_op_lowering_rule(
+      _: LoweringContext, op: mgpu.VectorConcatOp
+  ) -> Sequence[ir.Value]:
+    in_layouts = inference_utils.in_layouts(op)
+    out_layout, = inference_utils.out_layouts(op)
+    operands_fa = [
+        _fragmented_array_from_ir(opr, l)
+        for opr, l in zip(op.operands, in_layouts, strict=True)
+    ]
+    out = fa.concatenate(operands_fa, axis=op.dimension.value)
+    assert out.layout == layouts_lib.from_layout_attr(out_layout)
+    return [fragmented_array_to_ir(out, op.result.type)]
+
 
 def swizzle_from_transforms_attr(attr: ir.ArrayAttr) -> mgpu.SwizzlingMode:
   swizzle = None
@@ -1289,7 +1305,9 @@ def _mgpu_async_store_op_lowering_rule(
   return []
 
 
-@_register_lowering(mgpu.AsyncStoreScalesSmemToTmemOp)
+@_register_lowering(
+    mgpu.AsyncStoreScalesSmemToTmemOp, support_warp_semantics=True
+)
 def _async_copy_scales_smem_to_tmem_lowering_rule(
     ctx: LoweringContext, op: mgpu.AsyncStoreScalesSmemToTmemOp
 ) -> Sequence[ir.Value]:
@@ -1887,8 +1905,6 @@ def _memref_subview_op_lowering_rule(
     raise NotImplementedError("SubViewOp only supports static sizes.")
   src_ty = ir.MemRefType(op.source.type)
 
-  if utils.is_memref_transposed(src_ty):
-    raise NotImplementedError("SubViewOp does not support transposed memrefs.")
 
   if utils.is_tmem_ref(src_ty):
     [in_tmem_layout] = inference_utils.in_tmem_layouts(op)

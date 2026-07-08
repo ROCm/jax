@@ -468,7 +468,7 @@ class PjitParams(NamedTuple):
 def _trace_for_jit(
     fun: Callable, ji: PjitInfo, ctx_mesh: mesh_lib.Mesh,
     dbg: core.DebugInfo, avals, args, kwargs) -> PjitParams:
-  args_ft = ft.flatten_static_argnums_argnames(
+  args_ft, in_tree_nones, in_tree_filtered = ft.flatten_static_argnums_argnames_and_return_various_trees(
       args, kwargs, ji.static_argnums, ji.static_argnames)
   avals_ft = args_ft.update(avals)
 
@@ -484,7 +484,7 @@ def _trace_for_jit(
 
   if (ji.donate_argnums or ji.donate_argnames) and not config.debug_nans.value:
     donated_invars = donation_vector(ji.donate_argnums, ji.donate_argnames,
-                                     avals_ft.tree)
+                                     in_tree_nones)
   else:
     donated_invars = (False,) * len(avals_ft)
 
@@ -519,7 +519,7 @@ def _trace_for_jit(
   in_shardings_flat, in_layouts_flat = _process_in_axis_resources(
       in_shardings_treedef, in_shardings_leaves,
       ji.in_layouts_treedef, ji.in_layouts_leaves,
-      avals_ft, dbg, device_or_backend_set, has_kwargs)
+      avals_ft, in_tree_filtered, dbg, device_or_backend_set, has_kwargs)
 
   qdd_token = _qdd_cache_index(fun, in_type.vals)  # represents qdd state context
 
@@ -584,7 +584,7 @@ def _trace_for_jit(
       inline=ji.inline,
       compiler_options_kvs=ji.compiler_options_kvs,
   )
-  return PjitParams(consts, params, avals_ft.vals, avals_ft.tree_without_statics,
+  return PjitParams(consts, params, avals_ft.vals, in_tree_filtered,
                     out_avals.tree, dbg.safe_arg_names(len(avals_ft)))
 
 
@@ -747,12 +747,10 @@ def _create_sharding_with_device_backend(device, backend):
 @util.cache(max_size=4096, trace_context_in_key=False)
 def _process_in_axis_resources(in_shardings_treedef, in_shardings_leaves,
                                in_layouts_treedef, in_layouts_leaves,
-                               in_avals, dbg: core.DebugInfo,
+                               in_avals, in_tree, dbg: core.DebugInfo,
                                device_or_backend_set, kws):
-  if kws:
-    in_tree = in_avals.tree_without_statics
-  else:
-    in_tree, _ = treedef_children(in_avals.tree_without_statics)
+  if not kws:
+    in_tree, _ = treedef_children(in_tree)
 
   orig_in_shardings = tree_unflatten(in_shardings_treedef, in_shardings_leaves)
   # Only do this if original in_shardings are unspecified.
@@ -1473,13 +1471,12 @@ def _pjit_batcher(axis_data, vals_in,
   new_jaxpr, axes_out = batching.batch_jaxpr2(jaxpr, axis_data, dims_in)
   in_shardings = tuple(
       _pjit_batcher_for_sharding(i, axis_in, axis_data.spmd_name, ctx_mesh,
-                                 aval.ndim)
+                                 aval)
       if axis_in is not None else i
       for axis_in, i, aval in zip(dims_in, in_shardings, new_jaxpr.in_avals))
   out_shardings = tuple(
-
       _pjit_batcher_for_sharding(o, axis_out, axis_data.spmd_name, ctx_mesh,
-                                 aval.ndim)
+                                 aval)
       if axis_out is not None else o
       for axis_out, o, aval in zip(axes_out, out_shardings, new_jaxpr.out_avals))
   # TODO(yashkatariya): Figure out layouts should change under vmap.
@@ -1509,9 +1506,16 @@ batching.fancy_primitive_batchers[jit_p] = _pjit_batcher
 
 def _pjit_batcher_for_sharding(
     s, dim: int, spmd_axis_name: tuple[str, ...] | None,
-    mesh, ndim: int):
+    mesh, aval: core.AbstractValue):
   if isinstance(s, UnspecifiedValue):
     return s
+  if not hasattr(aval, 'ndim'):
+    # TODO(mattjj,yashkatariya): implement this?
+    raise NotImplementedError(
+        f'vmap-of-jit with a specified sharding {s} on a value of non-array '
+        f'type {aval} is not supported; only unspecified shardings are '
+        'supported for non-array types.')
+  ndim = aval.ndim
   hlo_s = s._to_xla_hlo_sharding(ndim)
   if spmd_axis_name is None:
     if sharding_impls.is_hlo_sharding_replicated(hlo_s):
@@ -1671,28 +1675,33 @@ def _pjit_linearize(is_vjp, nzs, *primals_in, jaxpr, in_shardings, out_shardings
 ad.primitive_linearizations[jit_p] = _pjit_linearize
 
 
-def _pjit_remat(policy, *args, jaxpr, **params):
-  jaxpr_fwd, jaxpr_rem, num_res = remat.remat_jaxpr(jaxpr, policy)
-  params_fwd, params_rem = _add_res_to_params(num_res, **params)
+def _pjit_remat(trace, *args, jaxpr, **params):
+  jaxpr_fwd, jaxpr_rem, fwds = remat.remat_jaxpr(
+      jaxpr, trace.policy, trace.custom_vjp_rules, allow_fwds=True)
+  num_res_out = sum(f is None for f in fwds)
+  params_fwd, params_rem = _add_res_to_params(num_res_out, len(fwds), **params)
   primals_res_out = jit_p.bind(*args, jaxpr=jaxpr_fwd, **params_fwd)
   primals_out, res = split_list(primals_res_out, [len(jaxpr.outvars)])
-  return primals_out, partial(jit_p.bind, *res, jaxpr=jaxpr_rem, **params_rem)
+  res_ = iter(res)
+  res_full = [primals_out[f] if f is not None else next(res_) for f in fwds]
+  assert next(res_, None) is None
+  return primals_out, partial(jit_p.bind, *res_full, jaxpr=jaxpr_rem, **params_rem)
 remat.rules[jit_p] = _pjit_remat
 
-def _add_res_to_params(num_res, in_shardings, out_shardings, in_layouts,
-                       out_layouts, donated_invars, **params):
+def _add_res_to_params(num_res_out, num_res_in, in_shardings, out_shardings,
+                       in_layouts, out_layouts, donated_invars, **params):
   params_fwd = dict(params,
                     in_shardings=in_shardings,
-                    out_shardings=out_shardings + (UNSPECIFIED,) * num_res,
+                    out_shardings=out_shardings + (UNSPECIFIED,) * num_res_out,
                     in_layouts=in_layouts,
-                    out_layouts=out_layouts + (None,) * num_res,
+                    out_layouts=out_layouts + (None,) * num_res_out,
                     donated_invars=donated_invars)
   params_rem = dict(params,
-                    in_shardings=(UNSPECIFIED,) * num_res + in_shardings,
+                    in_shardings=(UNSPECIFIED,) * num_res_in + in_shardings,
                     out_shardings=out_shardings,
-                    in_layouts=(None,) * num_res + in_layouts,
+                    in_layouts=(None,) * num_res_in + in_layouts,
                     out_layouts=out_layouts,
-                    donated_invars=(False,) * num_res + donated_invars)
+                    donated_invars=(False,) * num_res_in + donated_invars)
   return params_fwd, params_rem
 
 
@@ -2251,10 +2260,11 @@ def _sharding_constraint_batcher(
   if axis_data.spmd_name is None:
     unconstrained_dims.add(d)
 
+  aval = core.typeof(x)
   vmapped_sharding = _pjit_batcher_for_sharding(
-      sharding, d, axis_data.spmd_name, context_mesh, x.ndim)
+      sharding, d, axis_data.spmd_name, context_mesh, aval)
   if unconstrained_dims and isinstance(vmapped_sharding, NamedSharding):
-    new_spec = list(vmapped_sharding.spec) + [None] * (x.ndim - len(vmapped_sharding.spec))
+    new_spec = list(vmapped_sharding.spec) + [None] * (aval.ndim - len(vmapped_sharding.spec))
     for u in unconstrained_dims:
       new_spec[u] = PartitionSpec.UNCONSTRAINED
     vmapped_sharding = NamedSharding(

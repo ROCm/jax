@@ -935,6 +935,21 @@ jax_multiplatform_test(
 )
 
 jax_multiplatform_test(
+    name = "triton_gpu_info_test",
+    srcs = [
+        "triton_gpu_info_test.py",
+    ],
+    enable_backends = ["gpu"],
+    shard_count = 1,
+    deps = [
+        "//jax/experimental:pallas",
+        "//jax/experimental:pallas_triton",
+    ] + py_deps([
+        "absl/testing",
+    ]),
+)
+
+jax_multiplatform_test(
     name = "triton_pallas_test",
     srcs = [
         "triton_pallas_test.py",
@@ -1606,6 +1621,26 @@ jax_multiplatform_test(
         "//jax/_src/pallas/mosaic_gpu/interpret:interpret_pallas_call",
         "//jax/experimental:pallas",
         "//jax/experimental:pallas_tpu",
+    ] + py_deps([
+        "absl/testing",
+        "numpy",
+    ]),
+)
+
+jax_multiplatform_test(
+    name = "gpu_pallas_interpret_cluster_barrier_test",
+    srcs = ["gpu_pallas_interpret_cluster_barrier_test.py"],
+    enable_backends = ["cpu"],
+    shard_count = 8,
+    tags = [
+        "noasan",
+        "nomsan",
+        "notsan",
+    ],
+    deps = [
+        "//jax/_src/pallas/mosaic_gpu/interpret:interpret_pallas_call",
+        "//jax/experimental:pallas",
+        "//jax/experimental:pallas_mosaic_gpu",
     ] + py_deps([
         "absl/testing",
         "numpy",

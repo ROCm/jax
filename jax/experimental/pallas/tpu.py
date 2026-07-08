@@ -20,7 +20,7 @@ from jax._src import core as _jax_core
 from jax._src.pallas.einshape import einshape as einshape
 from jax._src.pallas.mosaic import core as core
 from jax._src.pallas.mosaic.core import CoreType as CoreType
-from jax._src.pallas.mosaic.core import create_tensorcore_mesh as create_tensorcore_mesh
+from jax._src.pallas.mosaic.core import TensorCoreMesh as TensorCoreMesh
 from jax._src.pallas.mosaic.core import dma_semaphore as dma_semaphore
 from jax._src.pallas.mosaic.core import GridDimensionSemantics as GridDimensionSemantics
 from jax._src.pallas.mosaic.core import MemorySpace as MemorySpace
@@ -39,6 +39,7 @@ from jax._src.pallas.mosaic.lowering import LoweringException as LoweringExcepti
 from jax._src.pallas.mosaic.pipeline import BufferedRef as BufferedRef
 from jax._src.pallas.mosaic.pipeline import BufferedRefBase as BufferedRefBase
 from jax._src.pallas.mosaic.pipeline import BufferType as BufferType
+from jax._src.pallas.mosaic.pipeline import PipelineStep as PipelineStep
 from jax._src.pallas.mosaic.pipeline import emit_pipeline as emit_pipeline
 from jax._src.pallas.mosaic.pipeline import emit_pipeline_with_allocations as emit_pipeline_with_allocations
 from jax._src.pallas.mosaic.primitives import async_copy as async_copy
@@ -90,6 +91,12 @@ SEMAPHORE = MemorySpace.SEMAPHORE
 
 
 _deprecations = {
+    # Added June 30, 2026
+    "create_tensorcore_mesh": (
+        "pltpu.create_tensorcore_mesh is deprecated, use pltpu.TensorCoreMesh"
+        " instead.",
+        core.create_tensorcore_mesh,
+    ),
     # Added June 4, 2026
     "HOST": (
         "pltpu.HOST is deprecated, use pl.HOST instead.",
@@ -126,6 +133,7 @@ _deprecations = {
 
 if typing.TYPE_CHECKING:
   HOST = _jax_core.MemorySpace.Host
+  from jax._src.pallas.mosaic.core import create_tensorcore_mesh as create_tensorcore_mesh
 else:
   from jax._src.deprecations import deprecation_getattr as _deprecation_getattr
   __getattr__ = _deprecation_getattr(__name__, _deprecations)

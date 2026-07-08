@@ -40,19 +40,15 @@ py_library(
 cc_library(
     name = "tpu_dialect",
     srcs = [
-        "dialect/tpu/array_util.cc",
         "dialect/tpu/layout.cc",
         "dialect/tpu/tpu_dialect.cc",
         "dialect/tpu/tpu_ops.cc",
         "dialect/tpu/util.cc",
-        "dialect/tpu/vreg_util.cc",
     ],
     hdrs = [
-        "dialect/tpu/array_util.h",
         "dialect/tpu/layout.h",
         "dialect/tpu/tpu_dialect.h",
         "dialect/tpu/util.h",
-        "dialect/tpu/vreg_util.h",
     ],
     # compatible with libtpu
     deps = [
@@ -101,31 +97,6 @@ cc_library(
         "@llvm-project//mlir:Pass",
         "@llvm-project//mlir:Support",
         "@llvm-project//mlir:VectorDialect",
-    ],
-)
-
-cc_library(
-    name = "tpu_linalg_vectorization_pass",
-    srcs = ["dialect/tpu/transforms/linalg_vectorization.cc"],
-    hdrs = ["dialect/tpu/transforms/linalg_vectorization.h"],
-    # compatible with libtpu
-    deps = [
-        ":pass_boilerplate",
-        ":tpu_dialect",
-        "@com_google_absl//absl/algorithm:container",
-        "@com_google_absl//absl/container:flat_hash_set",
-        "@llvm-project//mlir:ArithDialect",
-        "@llvm-project//mlir:DialectUtils",
-        "@llvm-project//mlir:FuncDialect",
-        "@llvm-project//mlir:IR",
-        "@llvm-project//mlir:LinalgTransforms",
-        "@llvm-project//mlir:MathDialect",
-        "@llvm-project//mlir:Pass",
-        "@llvm-project//mlir:Support",
-        "@llvm-project//mlir:TensorDialect",
-        "@llvm-project//mlir:TransformUtils",
-        "@llvm-project//mlir:VectorDialect",
-        "@llvm-project//mlir:VectorTransforms",
     ],
 )
 
@@ -294,31 +265,6 @@ cc_test(
         "@llvm-project//mlir:IR",
         "@llvm-project//mlir:Support",
         "@xla//xla:shape_util",
-    ],
-)
-
-cc_test(
-    name = "vreg_util_test",
-    srcs = ["dialect/tpu/vreg_util_test.cc"],
-    deps = [
-        ":tpu_dialect",
-        "@com_google_googletest//:gtest_main",
-        "@llvm-project//llvm:Support",
-        "@llvm-project//mlir:ArithDialect",
-        "@llvm-project//mlir:IR",
-        "@llvm-project//mlir:Support",
-        "@llvm-project//mlir:VectorDialect",
-    ],
-)
-
-cc_test(
-    name = "array_util_test",
-    srcs = ["dialect/tpu/array_util_test.cc"],
-    deps = [
-        ":tpu_dialect",
-        "@com_google_googletest//:gtest_main",
-        "@llvm-project//mlir:Support",
-        "@xla//xla:array",
     ],
 )
 

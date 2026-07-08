@@ -462,11 +462,11 @@ class VectorSubcoreTest(PallasSCTest):
 
   @parameterized.product(major_dim=[2, 3, 4])
   def test_get_index(self, major_dim):
+    if not jtu.is_libtpu_at_least("0.0.43"):
+      self.skipTest("Requires libtpu 0.0.43 or newer")
+
     @self.vector_subcore_kernel(
-        out_shape=jax.ShapeDtypeStruct(
-            shape=(self.num_lanes,), dtype=jnp.int32
-        ),
-        compiler_params=pltpu.CompilerParams(needs_layout_passes=False),
+        out_shape=jax.ShapeDtypeStruct(shape=(self.num_lanes,), dtype=jnp.int32)
     )
     def kernel(x_ref, o_ref):
       o_ref[...] = lax.fori_loop(
@@ -1845,6 +1845,16 @@ class VectorSubcoreTest(PallasSCTest):
     expected = np.where(has_valid_value_so_far, expected, x)
     np.testing.assert_array_equal(kernel(x), expected)
 
+  @parameterized.parameters(lax.sqrt, lax.rsqrt)
+  def test_sqrt_rsqrt(self, op):
+    x = jnp.arange(1, 1 + self.num_lanes, dtype=jnp.float32)   # positive domain
+
+    @self.vector_subcore_kernel(out_shape=x)
+    def kernel(x_ref, o_ref):
+      o_ref[...] = op(x_ref[...])
+
+    np.testing.assert_allclose(kernel(x), op(x))
+
   def test_parallel_loop_with_carry(self):
     self.skip_if_tc_tiling("The test assumes SC tiling")
 
@@ -2395,6 +2405,26 @@ class VectorSubcoreTest(PallasSCTest):
 
     expected = jnp.full(shape, val, dtype=dtype)
     np.testing.assert_array_equal(kernel(), expected)
+
+  # TODO(anlunx): Allow compiling with O{0,1}.
+  @parameterized.parameters(
+      jax.experimental.mosaic.OptLevel.O2,
+      jax.experimental.mosaic.OptLevel.O3,
+  )
+  def test_opt_levels(self, opt_level):
+    if not jtu.is_libtpu_at_least("0.0.43"):
+      self.skipTest("opt_level requires libtpu 0.0.43 or newer.")
+
+    x = jnp.arange(self.num_lanes, dtype=jnp.int32)
+
+    @self.vector_subcore_kernel(
+        out_shape=x,
+        compiler_params=pltpu.CompilerParams(opt_level=opt_level),
+    )
+    def kernel(x_ref, o_ref):
+      o_ref[...] = x_ref[...]
+
+    np.testing.assert_array_equal(kernel(x), x)
 
 
 class VectorSubcoreTestWithTCTiling(VectorSubcoreTest):

@@ -16,12 +16,11 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 import contextlib
-import dataclasses
 import functools
 import itertools
 import threading
 import types
-from typing import Any, Self
+from typing import Any
 
 import jax
 from jax import numpy as jnp
@@ -34,6 +33,8 @@ from jax._src.pallas.mosaic.interpret.race_detection_state import RaceDetectionS
 from jax._src.pallas.mosaic_gpu import core as mosaic_gpu_core
 from jax._src.pallas.mosaic_gpu.interpret import shared_memory as memory
 from jax._src.pallas.mosaic_gpu.interpret.params import InterpretGPUParams
+from jax._src.pallas.mosaic_gpu.interpret.shared_memory import HostAllocationKey
+from jax._src.pallas.mosaic_gpu.interpret.shared_memory import HostAllocationRequest
 from jax._src.state import indexing
 from jax.experimental.mosaic import gpu as mgpu
 import numpy as np
@@ -63,7 +64,7 @@ def is_gmem_memory_space(space: mosaic_gpu_core.MemorySpace | None) -> bool:
 
 _shared_memory: memory.GPUSharedMemory | None = None
 _shared_memory_init_lock = threading.Lock()
-_races: RaceDetectionState | None = None
+_races: RaceDetectionState[memory.GPUSharedMemory.ThreadKey] | None = None
 
 
 def _get_shared_memory() -> memory.GPUSharedMemory:
@@ -77,7 +78,7 @@ def _clear_shared_memory():
     _shared_memory = None
 
 
-def get_races() -> RaceDetectionState:
+def get_races() -> RaceDetectionState[memory.GPUSharedMemory.ThreadKey]:
   assert _races is not None
   return _races
 
@@ -163,11 +164,6 @@ def _initialize_shared_memory(
           ),
           logging_mode=interpret_params.logging_mode,
       )
-  # The naming of the `num_cores` property of `SharedMemory` originates from the
-  # support for multipl cores in a (Megacore) TPU device. As commented above, on
-  # GPU we model multiple Pallas threads per device as _cores_ in the
-  # (TPU-/Megacore-)inspired terminology of `SharedMemory`.
-  assert _shared_memory.num_cores == num_total_concurrent_threads
   return token
 
 
@@ -222,57 +218,6 @@ def call_update_clocks_for_device_barrier(token, device_id: jax.Array):
   )
 
 
-@dataclasses.dataclass(frozen=True, kw_only=True)
-class HostAllocationRequest:
-  """Request for an allocation on a device/thread and in a memory space."""
-
-  memory_space_id: int
-  device_id: int
-  # Defaults to zero for `AllocationRequest`s that do not specify a thread ID.
-  thread_id: int = 0
-  # The reference count is needed only for allocations that are explicitly
-  # deallocated (with _deallocate_buffer below). This currently only applies to
-  # allocations made by a `run_scoped` primitive.
-  initial_ref_count: int = 1
-
-  def __iter__(self):
-    # We make `self` iterable to ease conversion into arrays (cf. method
-    # `as_jax_array` below). Note that for this purpose it would suffice to have
-    # any method that return a suitable iterator, instead of implementing the
-    # special `__iter__` method. Not implementing `__iter__` would mean that
-    # objects of this class cannot (accidentally) be iterated over by clients of
-    # the class.
-    return iter((
-        self.memory_space_id,
-        self.device_id,
-        self.thread_id,
-        self.initial_ref_count,
-    ))
-
-  @classmethod
-  def shape_and_dtype(cls) -> jax.ShapeDtypeStruct:
-    num_fields = len(dataclasses.fields(cls))
-    return jax.ShapeDtypeStruct((num_fields,), jnp.int32)
-
-  @property
-  def as_np_array(self) -> np.ndarray:
-    return np.array(list(self), dtype=np.int32)
-
-  @classmethod
-  def from_array(cls, request: jax.Array) -> Self:
-    if request.shape != cls.shape_and_dtype().shape:
-      raise ValueError(
-          f"Expected shape {cls.shape_and_dtype().shape} but got"
-          f" {request.shape}"
-      )
-    if not interpret_utils.is_int(request.dtype):
-      raise ValueError(f"Expected integer dtype but got {request.dtype}")
-
-    arg_names = [f.name for f in dataclasses.fields(cls)]
-    values = map(int, np.asarray(request).tolist())
-    return cls(**dict(zip(arg_names, values)))
-
-
 def _make_allocation_request_array(
     *,
     token: jax.Array,
@@ -313,19 +258,6 @@ def call_make_allocation_request_array(
       # relative to other callbacks.
       ordered=False,
   )
-
-
-@dataclasses.dataclass(frozen=True, kw_only=True)
-class HostAllocationKey(HostAllocationRequest):
-  """Key for an allocation in shared memory."""
-
-  buffer_id: int
-
-  def __iter__(self):
-    # Note that implementing `__iter__` here affects the bahviour of the
-    # `as_array` and `as_jax_array` methods of the base class. This is intended.
-    yield from super().__iter__()
-    yield self.buffer_id
 
 
 def _allocate_buffer_for_all_threads(
@@ -378,9 +310,9 @@ def _allocate_buffer_for_all_threads(
 
   key: HostAllocationKey | None = None
   buffer_id: int | None = None
-  for thread_id in range(shared_memory.num_cores_per_device):
+  for thread_id in range(shared_memory.num_concurrent_threads):
     buffer_id_for_thread_id = shared_memory.get_next_buffer_id(
-        device_id_as_int, thread_id
+        (device_id_as_int, thread_id)
     )
     if not buffer_id:
       buffer_id = buffer_id_for_thread_id
@@ -478,7 +410,8 @@ def _allocate_buffer(
         device_id_as_int, thread_id_as_int)
   else:
     buffer_id = shared_memory.get_next_buffer_id(
-        device_id_as_int, thread_id_as_int)
+        (device_id_as_int, thread_id_as_int)
+    )
 
   key = HostAllocationKey(
       memory_space_id=allocation_request.memory_space_id,
@@ -680,15 +613,11 @@ def _get(
 
   shared_memory = _get_shared_memory()
 
-  global_thread_id = shared_memory.get_global_thread_id(
-      device_id_as_int, thread_id_as_int
-  )
-
   read_range = interpret_utils.to_range(transforms)
   ret, (shape, dtype), clock_ = shared_memory.get_buffer_content(
       allocation_key,
       read_range,
-      global_thread_id,
+      (device_id_as_int, thread_id_as_int),
       increment_clock=increment_clock,
       logging_info=interpret_utils.GPULoggingInfo(
           device_id=device_id_as_int,
@@ -737,8 +666,7 @@ def _get(
 
   if shared_memory.detect_races:
     get_races().check_read(
-        device_id_as_int,
-        thread_id_as_int,
+        (device_id_as_int, thread_id_as_int),
         clock,
         allocation_key,
         read_range,
@@ -807,17 +735,13 @@ def _swap(
 
   shared_memory = _get_shared_memory()
 
-  global_thread_id = shared_memory.get_global_thread_id(
-      device_id_as_int, thread_id_as_int
-  )
-
   read_write_range = interpret_utils.to_range(transforms)
   ret, (shape, _), clock_ = shared_memory.swap_buffer_content(
       allocation_key,
       read_write_range,
       np.array(val),
       np.array(mask) if mask is not None else None,
-      global_thread_id,
+      (device_id_as_int, thread_id_as_int),
       increment_clock=increment_clock,
       logging_info=interpret_utils.GPULoggingInfo(
           device_id=device_id_as_int,
@@ -845,8 +769,7 @@ def _swap(
 
   if shared_memory.detect_races:
     get_races().check_write(
-        device_id_as_int,
-        thread_id_as_int,
+        (device_id_as_int, thread_id_as_int),
         clock,
         allocation_key,
         read_write_range,
@@ -919,7 +842,7 @@ def _allocate_barriers(
     thread_id: jax.Array,
     axes_dims: tuple[int, ...],
     num_arrivals: jax.Array,
-    num_barriers: jax.Array,
+    flat_num_barriers: jax.Array,
     ref_count: jax.Array,
     source_info: source_info_util.SourceInfo | None = None,
 ) -> tuple[jax.Array, np.ndarray]:
@@ -928,18 +851,18 @@ def _allocate_barriers(
   thread_id_as_int = int(thread_id)
   axes_dims = tuple(int(x) for x in axes_dims)
   num_arrivals_as_int = int(num_arrivals)
-  num_barriers_as_int = int(num_barriers)
+  flat_num_barriers_as_int = int(flat_num_barriers)
   ref_count_as_int = int(ref_count)
-  del device_id, grid_point_coords, thread_id, num_arrivals, num_barriers, ref_count
+  del device_id, grid_point_coords, thread_id, num_arrivals, flat_num_barriers, ref_count
 
   shared_memory = _get_shared_memory()
 
   keys = []
-  for _ in range(num_barriers_as_int):
+  for _ in range(flat_num_barriers_as_int):
     # Advance `shared_memory`'s internal buffer id counter for all threads that
     # call into this function.
     barrier_id = shared_memory.get_next_buffer_id(
-        device_id_as_int, thread_id_as_int
+        (device_id_as_int, thread_id_as_int)
     )
     smem_space_id = IDX_BY_GPU_MEMORY_SPACE[mosaic_gpu_core.SMEM]
 
@@ -972,7 +895,7 @@ def _allocate_barriers(
     )
     keys.append(key.as_np_array)
 
-  assert len(keys) == num_barriers_as_int
+  assert len(keys) == flat_num_barriers_as_int
   return token, np.array(keys, dtype=np.int32)
 
 
@@ -984,12 +907,12 @@ def call_allocate_barriers(
     thread_id: jax.Array,
     axes_dims: tuple[int, ...],
     num_arrivals: jax.Array,
-    num_barriers: jax.Array,
+    flat_num_barriers: int | jax.Array,
     ref_count: jax.Array,
     source_info: source_info_util.SourceInfo | None = None,
 ) -> tuple[jax.Array, jax.Array]:
   shape_and_dtype = HostAllocationKey.shape_and_dtype()
-  result_shape = (num_barriers, *shape_and_dtype.shape)
+  result_shape = (flat_num_barriers, *shape_and_dtype.shape)
   result_shape_and_dtype = jax.ShapeDtypeStruct(
       result_shape, shape_and_dtype.dtype
   )
@@ -1005,7 +928,7 @@ def call_allocate_barriers(
       grid_point_coords=grid_point_coords,
       thread_id=thread_id,
       num_arrivals=num_arrivals,
-      num_barriers=num_barriers,
+      flat_num_barriers=flat_num_barriers,
       ref_count=ref_count,
   )
 
@@ -1017,6 +940,7 @@ def _deallocate_barrier(
     thread_id: jax.Array,
     allocation_key_as_array: jax.Array,
     source_info: source_info_util.SourceInfo | None = None,
+    cluster_barrier: bool = False,
 ):
   # TODO(paulbib): Add race-check validation on deallocation, i.e.: make sure
   # there are no outstanding async copies from or to the deallocated buffer.
@@ -1025,18 +949,30 @@ def _deallocate_barrier(
   thread_id_as_int = int(thread_id)
   del device_id, grid_point_coords, thread_id
 
-  assert len(allocation_key_as_array.shape) == 2
-  num_barriers = allocation_key_as_array.shape[0]
+  flat_allocation_keys = np.reshape(
+      allocation_key_as_array, (-1, *HostAllocationKey.shape_and_dtype().shape)
+  )
+  num_barriers = flat_allocation_keys.shape[0]
 
   keys_to_deallocate = []
   for i in range(num_barriers):
-    keys_to_deallocate.append(allocation_key_as_array[i, :])
+    keys_to_deallocate.append(flat_allocation_keys[i, :])
 
   shared_memory = _get_shared_memory()
 
+  # TODO(nrink): If we had a dedicated memory space for cluster barriers
+  # (and/or for 'normal' barriers too), we could select the deallocation
+  # function based on the memory space of the allocation key (instead of needing
+  # the `deallocate_cluster_barrier` argument).
+  deallocate_fn = (
+      shared_memory.deallocate_cluster_barrier
+      if cluster_barrier
+      else shared_memory.deallocate_barrier
+  )
+
   for key in keys_to_deallocate:
     barrier_allocation_key = HostAllocationKey.from_array(key)
-    shared_memory.deallocate_barrier(
+    deallocate_fn(
         barrier_allocation_key,
         logging_info=interpret_utils.GPULoggingInfo(
             device_id=device_id_as_int,
@@ -1055,6 +991,7 @@ def call_deallocate_barrier(
     thread_id: jax.Array,
     allocation_key_as_array: jax.Array,
     source_info: source_info_util.SourceInfo | None = None,
+    cluster_barrier: bool = False,
 ):
   return callback.io_callback(
       functools.partial(_deallocate_barrier, source_info=source_info),
@@ -1064,6 +1001,7 @@ def call_deallocate_barrier(
       grid_point_coords,
       thread_id,
       allocation_key_as_array,
+      cluster_barrier=cluster_barrier,
   )
 
 
@@ -1087,8 +1025,8 @@ def _barrier_wait(
       barrier_key, device_id_as_int, thread_id_as_int
   )
   barrier.wait(
-      device_id_as_int,
-      thread_id_as_int,
+      device_id=device_id_as_int,
+      thread_id=thread_id_as_int,
       logging_info=interpret_utils.GPULoggingInfo(
           device_id=device_id_as_int,
           grid_point_coords=grid_point_coords_as_tuple,
@@ -1099,6 +1037,7 @@ def _barrier_wait(
   return token
 
 
+# Note that this callback is also used for waiting on cluster barriers.
 def call_barrier_wait(
     token: jax.Array,
     device_id: jax.Array,
@@ -1138,11 +1077,12 @@ def _barrier_arrive(
       barrier_key, device_id_as_int, thread_id_as_int
   )
   smem_commit_clock = shared_memory.get_smem_commit_clock(
-      shared_memory.get_global_thread_id(device_id_as_int, thread_id_as_int)
+      (device_id_as_int, thread_id_as_int)
   )
   barrier.arrive(
-      clock,
-      smem_commit_clock,
+      thread_id=thread_id_as_int,
+      clock=clock,
+      smem_commit_clock=smem_commit_clock,
       logging_info=interpret_utils.GPULoggingInfo(
           device_id=device_id_as_int,
           grid_point_coords=grid_point_coords_as_tuple,
@@ -1153,6 +1093,7 @@ def _barrier_arrive(
   return token
 
 
+# Note that this callback is also used for arriving at cluster barriers.
 def call_barrier_arrive(
     token: jax.Array,
     device_id: jax.Array,
@@ -1180,6 +1121,111 @@ def _assert_no_barriers_allocated(token):
 def call_assert_no_barriers_allocated(token):
   return callback.io_callback(
       _assert_no_barriers_allocated, TOKEN_SHAPE_DTYPE, token
+  )
+
+
+def _allocate_cluster_barriers(
+    *,
+    token: jax.Array,
+    device_id: jax.Array,
+    grid_point_coords: jax.Array,
+    thread_id: jax.Array,
+    axes_dims: tuple[int, ...],
+    is_axis_collective: tuple[bool, ...],
+    num_arrivals: jax.Array,
+    flat_num_barriers: jax.Array,
+    ref_count: jax.Array,
+    source_info: source_info_util.SourceInfo | None = None,
+) -> tuple[jax.Array, np.ndarray]:
+  device_id_as_int = int(device_id)
+  grid_point_coords_as_tuple = tuple(int(x) for x in grid_point_coords)
+  thread_id_as_int = int(thread_id)
+  num_arrivals_as_int = int(num_arrivals)
+  flat_num_barriers_as_int = int(flat_num_barriers)
+  ref_count_as_int = int(ref_count)
+  del device_id, grid_point_coords, thread_id, num_arrivals, flat_num_barriers, ref_count
+
+  shared_memory = _get_shared_memory()
+
+  keys = []
+  for _ in range(flat_num_barriers_as_int):
+    # Advance `shared_memory`'s internal buffer id counter for all threads that
+    # call into this function.
+    barrier_id = shared_memory.get_next_buffer_id(
+        (device_id_as_int, thread_id_as_int)
+    )
+
+    # Use `SMEM` for the cluster barrier's allocation key below. Note that on
+    # real GPUs, there is not a single cluster barrier object that resides in
+    # SMEM (or any other memory space). We nonetheless use `SMEM` here to
+    # indicate that the (per thread-block) `Barrier`s that the `ClusterBarrier`
+    # is composed of are each allocated in `SMEM` (on a real GPU).
+    smem_space_id = IDX_BY_GPU_MEMORY_SPACE[mosaic_gpu_core.SMEM]
+
+    # Cluster barriers are shared between all threads in a cluster. Hence use 0
+    # for the thread ID in the allocation `key` below.
+    thread_id_for_key = 0
+
+    key = HostAllocationKey(
+        memory_space_id=smem_space_id,
+        device_id=device_id_as_int,
+        thread_id=thread_id_for_key,
+        initial_ref_count=ref_count_as_int,
+        buffer_id=barrier_id,
+    )
+
+    shared_memory.allocate_cluster_barrier(
+        key,
+        axes_dims=axes_dims,
+        is_axis_collective=is_axis_collective,
+        ref_count=ref_count_as_int,
+        num_arrivals=num_arrivals_as_int,
+        logging_info=interpret_utils.GPULoggingInfo(
+            device_id=device_id_as_int,
+            grid_point_coords=grid_point_coords_as_tuple,
+            thread_id=thread_id_as_int,
+            source_info=source_info,
+        ),
+    )
+    keys.append(key.as_np_array)
+
+  assert len(keys) == flat_num_barriers_as_int
+  return token, np.array(keys, dtype=np.int32)
+
+
+def call_allocate_cluster_barriers(
+    *,
+    token: jax.Array,
+    device_id: jax.Array,
+    grid_point_coords: jax.Array,
+    thread_id: jax.Array,
+    axes_dims: tuple[int, ...],
+    is_axis_collective: tuple[bool, ...],
+    num_arrivals: jax.Array,
+    flat_num_barriers: int | jax.Array,
+    ref_count: jax.Array,
+    source_info: source_info_util.SourceInfo | None = None,
+) -> tuple[jax.Array, jax.Array]:
+  shape_and_dtype = HostAllocationKey.shape_and_dtype()
+  result_shape = (flat_num_barriers, *shape_and_dtype.shape)
+  result_shape_and_dtype = jax.ShapeDtypeStruct(
+      result_shape, shape_and_dtype.dtype
+  )
+  return callback.io_callback(
+      functools.partial(
+          _allocate_cluster_barriers,
+          source_info=source_info,
+          axes_dims=axes_dims,
+          is_axis_collective=is_axis_collective,
+      ),
+      (TOKEN_SHAPE_DTYPE, result_shape_and_dtype),
+      token=token,
+      device_id=device_id,
+      grid_point_coords=grid_point_coords,
+      thread_id=thread_id,
+      num_arrivals=num_arrivals,
+      flat_num_barriers=flat_num_barriers,
+      ref_count=ref_count,
   )
 
 
@@ -1249,23 +1295,26 @@ class AsyncCopyTask:
 
   def __call__(self, tma_thread_id: int):
     shared_memory = _get_shared_memory()
-    global_thread_id = shared_memory.get_global_thread_id(
-        self.device_id, self.thread_id
-    )
 
     self.pre_read(tma_thread_id, shared_memory)
 
     val, _, _ = shared_memory.get_buffer_content(
-        self.src_allocation_key, interpret_utils.to_range(self.src_transforms),
-        global_thread_id, logging_info=self.logging_info)
+        self.src_allocation_key,
+        interpret_utils.to_range(self.src_transforms),
+        (self.device_id, self.thread_id),
+        logging_info=self.logging_info,
+    )
     assert val is not None
 
     self.post_read(tma_thread_id, shared_memory)
 
     shared_memory.store_buffer_content(
-        self.dst_allocation_key, interpret_utils.to_range(self.dst_transforms),
+        self.dst_allocation_key,
+        interpret_utils.to_range(self.dst_transforms),
         val,
-        global_thread_id, logging_info=self.logging_info)
+        (self.device_id, self.thread_id),
+        logging_info=self.logging_info,
+    )
 
     self.post_write(tma_thread_id, shared_memory)
 
@@ -1322,8 +1371,7 @@ class AsyncCopyGmemToSmemTask(AsyncCopyTask):
       assert self.smem_commit_clock is not None
       vc.inc_vector_clock(self.clock, tma_thread_id)
       get_races().check_read(
-          self.device_id,
-          self.thread_id,
+          (self.device_id, self.thread_id),
           vc.copy_vector_clock(self.clock),
           self.src_allocation_key,
           interpret_utils.to_range(self.src_transforms),
@@ -1338,8 +1386,7 @@ class AsyncCopyGmemToSmemTask(AsyncCopyTask):
       vc.inc_vector_clock(self.smem_commit_clock, tma_thread_id)
 
       get_races().check_write(
-          self.device_id,
-          self.thread_id,
+          (self.device_id, self.thread_id),
           vc.copy_vector_clock(self.smem_commit_clock),
           self.dst_allocation_key,
           interpret_utils.to_range(self.dst_transforms),
@@ -1348,6 +1395,7 @@ class AsyncCopyGmemToSmemTask(AsyncCopyTask):
 
   def post_write(self, tma_thread_id: int, shared_memory: memory.GPUSharedMemory):
     self.barrier.arrive(
+        thread_id=tma_thread_id,
         clock=vc.copy_vector_clock(self.clock),
         smem_commit_clock=vc.copy_vector_clock(self.smem_commit_clock),
         logging_info=self.logging_info,
@@ -1395,8 +1443,7 @@ class AsyncCopySmemToGmemTask(AsyncCopyTask):
       vc.inc_vector_clock(self.smem_commit_clock, tma_thread_id)
       self.read_clock = vc.copy_vector_clock(self.clock)
       get_races().check_read(
-          self.device_id,
-          self.thread_id,
+          (self.device_id, self.thread_id),
           self.smem_commit_clock,
           self.src_allocation_key,
           interpret_utils.to_range(self.src_transforms),
@@ -1410,8 +1457,7 @@ class AsyncCopySmemToGmemTask(AsyncCopyTask):
       vc.inc_vector_clock(self.clock, tma_thread_id)
       self.write_clock = vc.copy_vector_clock(self.clock)
       get_races().check_write(
-          self.device_id,
-          self.thread_id,
+          (self.device_id, self.thread_id),
           self.smem_commit_clock,
           self.dst_allocation_key,
           interpret_utils.to_range(self.dst_transforms),
@@ -1423,7 +1469,7 @@ class AsyncCopySmemToGmemTask(AsyncCopyTask):
       assert self.read_clock is not None
       assert self.write_clock is not None
       shared_memory.add_copy_smem_to_gmem_clocks(
-          shared_memory.get_global_thread_id(self.device_id, self.thread_id),
+          (self.device_id, self.thread_id),
           self.read_clock,
           self.write_clock,
       )
@@ -1472,7 +1518,6 @@ def wgmma(
   acc_transforms = jax.tree.map(int, _remove_noop_transforms(acc_transforms))
 
   shared_memory = _get_shared_memory()
-  global_thread_id = shared_memory.get_global_thread_id(device_id, thread_id)
 
   logging_info = interpret_utils.GPULoggingInfo(
       device_id=device_id,
@@ -1482,23 +1527,36 @@ def wgmma(
   )
 
   a, _, _ = shared_memory.get_buffer_content(
-      a_allocation_key, interpret_utils.to_range(a_transforms),
-      global_thread_id, logging_info=logging_info)
+      a_allocation_key,
+      interpret_utils.to_range(a_transforms),
+      (device_id, thread_id),
+      logging_info=logging_info,
+  )
   b, _, _ = shared_memory.get_buffer_content(
-      b_allocation_key, interpret_utils.to_range(b_transforms),
-      global_thread_id, logging_info=logging_info)
+      b_allocation_key,
+      interpret_utils.to_range(b_transforms),
+      (device_id, thread_id),
+      logging_info=logging_info,
+  )
   assert a is not None
   assert b is not None
   acc_range = interpret_utils.to_range(acc_transforms)
   acc, _, _ = shared_memory.get_buffer_content(
-      acc_allocation_key, acc_range, global_thread_id,
-      logging_info=logging_info)
+      acc_allocation_key,
+      acc_range,
+      (device_id, thread_id),
+      logging_info=logging_info,
+  )
 
   res = acc + np.matmul(a, b, dtype=acc_dtype)
 
   shared_memory.store_buffer_content(
-      acc_allocation_key, acc_range, res,
-      global_thread_id, logging_info=logging_info)
+      acc_allocation_key,
+      acc_range,
+      res,
+      (device_id, thread_id),
+      logging_info=logging_info,
+  )
 
   return token
 
@@ -1522,7 +1580,6 @@ def wgmma_accumulator_deref(
   acc_allocation_key = HostAllocationKey.from_array(acc_allocation_key_as_array)
 
   shared_memory = _get_shared_memory()
-  global_thread_id = shared_memory.get_global_thread_id(device_id, thread_id)
 
   logging_info = interpret_utils.GPULoggingInfo(
       device_id=device_id,
@@ -1532,7 +1589,8 @@ def wgmma_accumulator_deref(
   )
 
   acc, _, _ = shared_memory.get_buffer_content(
-      acc_allocation_key, (), global_thread_id, logging_info=logging_info)
+      acc_allocation_key, (), (device_id, thread_id), logging_info=logging_info
+  )
   return token, acc
 
 
@@ -1571,10 +1629,10 @@ def copy_smem_to_gmem(
   shared_memory = _get_shared_memory()
   if shared_memory.detect_races:
     clock = shared_memory.incr_clock(
-        shared_memory.get_global_thread_id(device_id, thread_id)
+        (device_id, thread_id)
     )
     smem_commit_clock = shared_memory.get_smem_commit_clock(
-        shared_memory.get_global_thread_id(device_id, thread_id)
+        (device_id, thread_id)
     )
 
   task = AsyncCopySmemToGmemTask(
@@ -1610,11 +1668,8 @@ def wait_smem_to_gmem(
   device_id_as_int = int(device_id)
   thread_id_as_int = int(thread_id)
   shared_memory = _get_shared_memory()
-  global_thread_id = shared_memory.get_global_thread_id(
-      device_id_as_int, thread_id_as_int
-  )
   shared_memory.wait_smem_to_gmem(
-      global_thread_id, n, wait_read_only)
+      device_id_as_int, thread_id_as_int, n, wait_read_only)
   return token
 
 
@@ -1647,11 +1702,9 @@ def copy_gmem_to_smem(
 
   shared_memory = _get_shared_memory()
   if shared_memory.detect_races:
-    clock = shared_memory.incr_clock(
-        shared_memory.get_global_thread_id(device_id_as_int, thread_id_as_int)
-    )
+    clock = shared_memory.incr_clock((device_id_as_int, thread_id_as_int))
     smem_commit_clock = shared_memory.get_smem_commit_clock(
-        shared_memory.get_global_thread_id(device_id_as_int, thread_id_as_int)
+        (device_id_as_int, thread_id_as_int)
     )
 
   transfer = AsyncCopyGmemToSmemTask(
@@ -1686,10 +1739,7 @@ def commit_smem(
   device_id_as_int = int(device_id)
   thread_id_as_int = int(thread_id)
   shared_memory = _get_shared_memory()
-  global_thread_id = shared_memory.get_global_thread_id(
-      device_id_as_int, thread_id_as_int
-  )
-  shared_memory.update_smem_commit_clock(global_thread_id)
+  shared_memory.update_smem_commit_clock((device_id_as_int, thread_id_as_int))
 
   return token
 
@@ -1735,9 +1785,6 @@ def tcgen05_mma(
   accumulate: bool = bool(accumulate)  # pyrefly: ignore[redefinition]
 
   shared_memory = _get_shared_memory()
-  global_thread_id = shared_memory.get_global_thread_id(
-      device_id_as_int, thread_id_as_int
-  )
 
   logging_info = interpret_utils.GPULoggingInfo(
       device_id=device_id_as_int,
@@ -1749,13 +1796,13 @@ def tcgen05_mma(
   a, _, _ = shared_memory.get_buffer_content(
       a_allocation_key,
       interpret_utils.to_range(a_transforms),
-      global_thread_id,
+      (device_id_as_int, thread_id_as_int),
       logging_info=logging_info,
   )
   b, _, _ = shared_memory.get_buffer_content(
       b_allocation_key,
       interpret_utils.to_range(b_transforms),
-      global_thread_id,
+      (device_id_as_int, thread_id_as_int),
       logging_info=logging_info,
   )
   assert a is not None
@@ -1767,7 +1814,7 @@ def tcgen05_mma(
     acc, _, _ = shared_memory.get_buffer_content(
         acc_allocation_key,
         acc_range,
-        global_thread_id,
+        (device_id_as_int, thread_id_as_int),
         logging_info=logging_info,
     )
     assert acc is not None
@@ -1779,7 +1826,7 @@ def tcgen05_mma(
       acc_allocation_key,
       acc_range,
       res,
-      global_thread_id,
+      (device_id_as_int, thread_id_as_int),
       logging_info=logging_info,
   )
 
@@ -1788,7 +1835,8 @@ def tcgen05_mma(
     barrier, clock = shared_memory.get_barrier_and_increment_clock(
         barrier_key, device_id_as_int, thread_id_as_int)
     barrier.arrive(
-        clock,
+        thread_id=thread_id_as_int,
+        clock=clock,
         logging_info=logging_info)
 
   return token
@@ -1811,9 +1859,6 @@ def async_load_tmem(
   src_transforms = jax.tree.map(int, _remove_noop_transforms(src_transforms))
 
   shared_memory = _get_shared_memory()
-  global_thread_id = shared_memory.get_global_thread_id(
-      device_id_as_int, thread_id_as_int
-  )
 
   logging_info = interpret_utils.GPULoggingInfo(
       device_id=device_id_as_int,
@@ -1825,7 +1870,7 @@ def async_load_tmem(
   val, _, _ = shared_memory.get_buffer_content(
       src_allocation_key,
       interpret_utils.to_range(src_transforms),
-      global_thread_id,
+      (device_id_as_int, thread_id_as_int),
       logging_info=logging_info,
   )
 

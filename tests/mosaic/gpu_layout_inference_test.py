@@ -148,21 +148,24 @@ class LayoutInferenceTest(parameterized.TestCase):
     ]
     self.assertSequenceEqual(op.attributes["out_tmem_layouts"], out_layouts)
 
-  def test_infer_strided_layout_default(self):
+  @parameterized.parameters(
+      ((128,), lambda: ir.BF16Type.get(), 1),
+      ((32, 256), lambda: ir.IntegerType.get_signless(4), 16),
+      ((32, 256), lambda: ir.IntegerType.get_signless(2), 32),
+  )
+  def test_infer_strided_layout_default(self, shape, dtype, expected_vec_size):
     with ir.InsertionPoint(self.module.body):
-      ty = ir.VectorType.get((128,), ir.BF16Type.get())
-      x = llvm.UndefOp(ty)
+      ty = ir.VectorType.get(shape, dtype())
+      op = llvm.UndefOp(ty)
 
     # Not setting any layouts on the module should default in ops having a
     # strided fragmented layout.
     mgpu.infer_layout(self.module)
 
-    strided_layout = mgpu.WGStridedFragLayout.from_shaped_type(ty)
-    assert strided_layout is not None
-    layout = layouts.to_layout_attr(strided_layout)
-
-    self.assertNotIn("in_layouts", x.attributes)
-    self.checkOutLayouts(x, [layout])
+    layout = mgpu.WGStridedFragLayout.from_shaped_type(ty)
+    self.assertEqual(layout, mgpu.WGStridedFragLayout(shape, expected_vec_size))
+    self.assertNotIn("in_layouts", op.attributes)
+    self.checkOutLayouts(op, [layout])
 
   @parameterized.parameters(
       (mgpu.WGMMA_LAYOUT, None), (None, mgpu.WGMMA_LAYOUT)
@@ -376,6 +379,39 @@ class LayoutInferenceTest(parameterized.TestCase):
       out = mgpu.dialect.broadcast_in_dim(out_type, x, [1])
       out_layout = mgpu.WGStridedFragLayout((2, 128), vec_size=2)
       layout_cast(out, out_layout)
+
+    with self.assertRaisesRegex(
+        ValueError, "user-provided layout casts are unsatisfiable"
+    ):
+      mgpu.infer_layout(self.module)
+
+  def test_infer_vector_concat_layout(self):
+    shape1, shape2 = (64, 32), (128, 32)
+    layout = mgpu.WGMMA_LAYOUT
+    dtype = ir.F32Type.get()
+
+    with ir.InsertionPoint(self.module.body):
+      x, y = undefs(
+          ir.VectorType.get(shape1, dtype), ir.VectorType.get(shape2, dtype)
+      )
+      x = layout_cast(x, layout)
+      op = mgpu.dialect.VectorConcatOp([x, y], 0)
+
+    mgpu.infer_layout(self.module)
+    self.checkInLayouts(op, [layout, layout])
+    self.checkOutLayouts(op, [layout])
+
+  def test_infer_vector_concat_rejects_strided_layout(self):
+    shape1, shape2 = (64, 32), (128, 32)
+    dtype = ir.F32Type.get()
+    layout = mgpu.WGStridedFragLayout(shape1, vec_size=1)
+
+    with ir.InsertionPoint(self.module.body):
+      x, y = undefs(
+          ir.VectorType.get(shape1, dtype), ir.VectorType.get(shape2, dtype)
+      )
+      x = layout_cast(x, layout)
+      mgpu.dialect.VectorConcatOp([x, y], 0)
 
     with self.assertRaisesRegex(
         ValueError, "user-provided layout casts are unsatisfiable"
@@ -3519,7 +3555,6 @@ class LayoutInferenceTest(parameterized.TestCase):
 
     with self.assertRaisesRegex(ValueError, "Cannot apply.*tiling"):
       mgpu.infer_layout(self.module)
-
 
   @parameterized.product(
       lhs_swizzle=(32, 64, 128),

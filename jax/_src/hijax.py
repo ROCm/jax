@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from functools import partial, update_wrapper
 import inspect
 import itertools as it
-from typing import Any
+from typing import Any, NoReturn
 from collections.abc import Hashable, Callable
 
 from jax._src import api
@@ -26,7 +26,9 @@ from jax._src import config
 from jax._src import core
 from jax._src import dtypes
 from jax._src import effects
-from jax._src.api_util import resolve_kwargs, infer_argnums_and_argnames
+from jax._src.api_util import (
+    resolve_kwargs, infer_argnums_and_argnames, debug_info, is_hashable)
+from jax._src import linear_util as lu
 from jax._src import traceback_util
 from jax._src.core import typeof
 from jax._src.interpreters import ad
@@ -44,8 +46,8 @@ from jax._src.util import (
 from jax._src import flattree as ft
 from jax._src.tree_util import (
     tree_map, tree_flatten, tree_unflatten, tree_leaves, tree_leaves_checked,
-    broadcast_prefix, register_static, tree_map_with_path, keystr,
-    tracing_registry)
+    broadcast_prefix, register_static, register_pytree_node, tree_map_with_path,
+    keystr, tracing_registry)
 map, unsafe_map = safe_map, map
 zip, unsafe_zip = safe_zip, zip
 
@@ -93,54 +95,61 @@ class HiPrimitive(core.Primitive):
 
 AxisName = Any
 
+def _must_override(ty, method: str, needed_for: str) -> NoReturn:
+  raise NotImplementedError(
+      f"{needed_for} requires {type(ty).__name__} to implement the "
+      f"`{method}` method")
+
 class HiType(core.AbstractValue):
   is_high = True
   has_qdd = False  # immutable
 
   # type equality
-  def __hash__(self): assert False, "must override"
-  def __eq__(self, other): assert False, "must override"
+  def __hash__(self):
+    _must_override(self, "__hash__", "type equality")
+  def __eq__(self, other):
+    _must_override(self, "__eq__", "type equality")
 
   # lowering from hijax type to lojax types
   def lo_ty(self) -> list[core.AbstractValue]:
-    assert False, "must override"
+    _must_override(self, "lo_ty", "lowering (e.g. under jit)")
 
   # define lowering from hijax value to lojax values and back (like pytrees)
   def lower_val(self, hi_val: HiVal) -> list[LoVal]:  # TODO(mattjj): not lovals
-    assert False, "must override"
+    _must_override(self, "lower_val", "lowering values (e.g. under jit)")
   def raise_val(self, *lo_vals: LoVal) -> HiVal:
-    assert False, "must override"
+    _must_override(self, "raise_val", "raising lowered values (e.g. under jit)")
 
   # autodiff interface
   def to_tangent_aval(self) -> HiType:
-    assert False, "must override"
+    _must_override(self, "to_tangent_aval", "autodiff")
   def to_ct_aval(self) -> HiType:
     return self.to_tangent_aval()
   # the next two are required if this type is itself a tangent type
   def vspace_zero(self) -> HiVal:
-    assert False, "must override"
+    _must_override(self, "vspace_zero", "use as a tangent/cotangent type")
   def vspace_add(self, x: HiVal, y: HiVal) -> HiVal:
-    assert False, "must override"
+    _must_override(self, "vspace_add", "use as a tangent/cotangent type")
 
   # vmap interface (also needed for scan)
   def dec_rank(self, size: int | None, spec: MappingSpec) -> HiType:
-    assert False, "must override"
+    _must_override(self, "dec_rank", "vmap")
   def inc_rank(self, size: int | None, spec: MappingSpec) -> HiType:
-    assert False, "must override"
+    _must_override(self, "inc_rank", "vmap")
 
   # scan interface
   def leading_axis_spec(self) -> MappingSpec:
-    assert False, "must override"
+    _must_override(self, "leading_axis_spec", "scan")
 
   # shard_map interface
   def shard(self, mesh, manual_axes: frozenset, check_vma: bool, spec: HiPspec
             ) -> HiType:
-    assert False, "must override"
+    _must_override(self, "shard", "shard_map")
   def unshard(self, mesh, check_vma: bool, spec: HiPspec) -> HiType:
-    assert False, "must override"
+    _must_override(self, "unshard", "shard_map")
   def nospec(self, mesh, check_vma: bool, all_names: tuple[AxisName, ...]
              ) -> HiPspec:
-    assert False, "must override"
+    _must_override(self, "nospec", "autodiff through shard_map")
 
 
 class MutableHiType(core.AbstractValue):
@@ -150,20 +159,20 @@ class MutableHiType(core.AbstractValue):
   type_state = core.aval_method(core.cur_qdd)
 
   # type equality
-  def __hash__(self): assert False, "must override"
-  def __eq__(self, other): assert False, "must override"
+  def __hash__(self): _must_override(self, "__hash__", "type equality")
+  def __eq__(self, other): _must_override(self, "__eq__", "type equality")
 
   # define lowering from (mutable) hijax type to (immutable) lojax types
   def lo_ty_qdd(self, state: QDD, /) -> list[core.AbstractValue]:  # pyrefly: ignore[bad-override]
-    assert False, "must override"
+    _must_override(self, "lo_ty_qdd", "lowering (e.g. under jit)")
   def lo_ty(self):
     assert False, "mutable hitypes should use lo_ty_qdd instead"
 
   # define lowering from hijax value to lojax values and back, depending on qdd
   def new_from_loval(self, state: QDD, /, *vals: LoVal) -> HiVal:
-    assert False, "must override"
+    _must_override(self, "new_from_loval", "raising lowered values")
   def read_loval(self, state: QDD, val: HiVal, /) -> list[LoVal]:
-    assert False, "must override"
+    _must_override(self, "read_loval", "lowering values")
   # default implementations of newer apis
   def read_loval_in(self, state, val, /):
     return self.read_loval(state, val)
@@ -172,14 +181,14 @@ class MutableHiType(core.AbstractValue):
 
   # define how to mutate/set the mutable hijax value given immutable lojax vals
   def update_from_loval(self, state: QDD, val: HiVal, /, *lo_vals: LoVal) -> None:
-    assert False, "must override"
+    _must_override(self, "update_from_loval", "updating values from lowered values")
   # default implementation of newer api
   def update_from_loval2(self, state, val, lo_vals_ft, /) -> None:
     self.update_from_loval(state, val, *lo_vals_ft.unflatten())
 
   # autodiff interface
   def to_tangent_aval(self) -> HiType:
-    assert False, "must override"
+    _must_override(self, "to_tangent_aval", "autodiff")
 
   # Subclasses should override if the cotangent type is a function of primal
   # type. For example, CT unreduced = reduced and vice-versa.
@@ -413,8 +422,10 @@ class VJPHiPrimitive:
 
   # reverse-mode AD interface
   def vjp_fwd(self, nzs_in, /, *args):
-    raise NotImplementedError(f"for grad support, subclass {type(self)} must "
-                              "implement `vjp_fwd`")
+    raise NotImplementedError(
+        f"for grad support, subclass {type(self)} must implement `vjp_fwd`, "
+        "or derive one from its jvp or lin rule by setting `vjp_fwd = "
+        "vjp_fwd_from_jvp` or `vjp_fwd = vjp_fwd_from_lin`")
 
   def vjp_bwd(self, res, outgrad, /, *arg_accums):
     args_grad = self.vjp_bwd_retval(res, outgrad)
@@ -423,8 +434,10 @@ class VJPHiPrimitive:
 
   def vjp_bwd_retval(self, res, outgrad, /):
     # Classic API: returns values instead of using accumulators
-    raise NotImplementedError(f"for grad support, subclass {type(self)} must "
-                              "implement `vjp_bwd` or `vjp_bwd_retval`")
+    raise NotImplementedError(
+        f"for grad support, subclass {type(self)} must implement `vjp_bwd` or "
+        "`vjp_bwd_retval` (when deriving `vjp_fwd`, pair it with "
+        "`vjp_bwd_retval = transpose_jvp` or `transpose_linearized`)")
 
   # optional forward-mode AD interfaces
   def jvp(self, primals, tangents):
@@ -432,12 +445,17 @@ class VJPHiPrimitive:
                               "implement `jvp`")
 
   def lin(self, nzs_in, *primals):
-    raise NotImplementedError(f"for linearize support, subclass {type(self)} "
-                              "must implement `lin` and `linearized`")
+    raise NotImplementedError(
+        f"for linearize support, subclass {type(self)} must implement `lin` "
+        "and `linearized`, or derive them from its `jvp` rule by setting "
+        "`lin = linearize_from_jvp` and "
+        "`linearized = apply_derived_linearization`")
 
   def linearized(self, residuals, *tangents):
-    raise NotImplementedError(f"for linearize support, subclass {type(self)} "
-                              "must implement `lin` and `linearized`")
+    raise NotImplementedError(
+        f"for linearize support, subclass {type(self)} must implement `lin` "
+        "and `linearized` (when using `lin = linearize_from_jvp`, pair it "
+        "with `linearized = apply_derived_linearization`)")
 
   # optional transpose rule, for primitives that are linear in some inputs
   def transpose(self, out_ct, *maybe_accums):
@@ -462,7 +480,7 @@ class VJPHiPrimitive:
       return True, True, self
 
   # optional remat control
-  def remat(self, _policy, *args):
+  def remat(self, _trace, *args):
     return self(*args), self  # full remat by default
 
   def __call__(self, *args):
@@ -608,16 +626,22 @@ def _call_hi_primitive_linearize(is_vjp, nz_in_flat, *args_flat, _prim):
   ans_flat = tree_leaves_checked(_prim.out_tree, ans)
   nzs_out = maybe_nzs_out[0] if maybe_nzs_out else True
   nzs_out_flat = broadcast_prefix(nzs_out, ans)
+  linearized = partial(linearized, nzs_out_flat) if is_vjp else linearized
   return ans_flat, nzs_out_flat, residuals, linearized
 ad.primitive_linearizations[call_hi_primitive_p] = _call_hi_primitive_linearize
 
-def fake_linear_op(prim, nz_in_flat, rs, *tangents):
+def fake_linear_op(prim, nz_in_flat, nz_out_flat, rs, *tangents):
   residuals_flat, residuals_tree = tree_flatten(rs)
   assert nz_in_flat == [not isinstance(t, ad_util.Zero) for t in tangents]
   nz_tangents = tree_leaves(tangents)
-  return call_hi_primitive_linearized_p.bind(
+  out_nz = call_hi_primitive_linearized_p.bind(
       *residuals_flat, *nz_tangents, residuals_tree=residuals_tree, _prim=prim,
-      nz_in_flat=tuple(nz_in_flat))
+      nz_in_flat=tuple(nz_in_flat), nz_out_flat=tuple(nz_out_flat))
+  out_nz_iter = iter(out_nz)
+  out = [next(out_nz_iter) if nz else ad_util.Zero(a.to_tangent_aval())
+         for a, nz in zip(prim.out_avals_flat, nz_out_flat)]
+  assert next(out_nz_iter, sentinel := object()) is sentinel
+  return out
 
 def flatten_user_linearized(prim, residuals, *tangents_flat):
   tangents = tree_unflatten(prim.in_tree, tangents_flat)
@@ -629,11 +653,12 @@ call_hi_primitive_linearized_p = core.Primitive("call_hi_primitive_linearized")
 call_hi_primitive_linearized_p.multiple_results = True
 call_hi_primitive_linearized_p.is_high = lambda *args, _prim, **_: True
 @call_hi_primitive_linearized_p.def_abstract_eval
-def _call_hi_primitive_linearized_abstract_eval(*_args, _prim, residuals_tree, nz_in_flat):
-  return [t.to_tangent_aval() for t in _prim.out_avals_flat]  # TODO(dougalm): handle nonzeros
+def _call_hi_primitive_linearized_abstract_eval(
+    *_args, _prim, residuals_tree, nz_in_flat, nz_out_flat):
+  return [t.to_tangent_aval() for t, nz in zip(_prim.out_avals_flat, nz_out_flat) if nz]
 
-def _call_hi_primitive_linearized_transpose(cts_flat, *args, _prim,
-                                            residuals_tree, nz_in_flat):
+def _call_hi_primitive_linearized_transpose(
+    cts_flat_, *args, _prim, residuals_tree, nz_in_flat, nz_out_flat):
   residuals_flat, accums_flat = split_list(args, [residuals_tree.num_leaves])
   residuals = tree_unflatten(residuals_tree, residuals_flat)
   accums_flat_ = iter(accums_flat)
@@ -641,6 +666,10 @@ def _call_hi_primitive_linearized_transpose(cts_flat, *args, _prim,
                  for aval, nz in zip(_prim.in_avals_flat, nz_in_flat)]
   assert next(accums_flat_, None) is None
   accums = tree_unflatten(_prim.in_tree, accums_flat)
+  cts_flat_iter = iter(cts_flat_)
+  cts_flat = [next(cts_flat_iter) if nz else ad_util.Zero(a.to_ct_aval())
+              for a, nz in zip(_prim.out_avals_flat, nz_out_flat)]
+  assert next(cts_flat_iter, sentinel := object()) is sentinel
   cts = tree_unflatten(_prim.out_tree, cts_flat)
   none = _prim.vjp_bwd(residuals, cts, *accums)
   assert none is None
@@ -686,15 +715,146 @@ pe.dce_rules[call_hi_primitive_p] = _call_hi_primitive_dce
 call_hi_primitive_linearized_p.to_lojax = ad.raise_custom_vjp_error_on_jvp
 batching.fancy_primitive_batchers[call_hi_primitive_linearized_p] = ad.raise_custom_vjp_error_on_jvp
 
-def _call_hi_primitive_remat(policy, *args_flat, _prim):
+def _call_hi_primitive_remat(trace, *args_flat, _prim):
   args = tree_unflatten(_prim.in_tree, args_flat)
-  out, rem_ = _prim.remat(policy, *args)
+  out, rem_ = _prim.remat(trace, *args)
   def rem(*args_flat):
     args = tree_unflatten(_prim.in_tree, args_flat)
     out = rem_(*args)
     return tree_leaves_checked(_prim.out_tree, out)
   return tree_leaves_checked(_prim.out_tree, out), rem
 remat.rules[call_hi_primitive_p] = _call_hi_primitive_remat
+
+
+# === deriving lin and vjp rules from jvp and lin rules ===
+
+class DerivedLinearization:
+  """Residuals of `linearize_from_jvp`, closing over the linear map."""
+  __slots__ = ['consts', 'apply']
+
+  def __init__(self, consts, apply):
+    self.consts = consts
+    self.apply = apply
+
+register_pytree_node(DerivedLinearization,
+                     lambda res: ((res.consts,), res.apply),
+                     lambda apply, children: DerivedLinearization(children[0], apply))
+
+def linearize_from_jvp(self, nzs_in, *primals):
+  """A `lin` rule derived from a `jvp` rule.
+
+  Assign it as a class attribute on a `VJPHiPrimitive` subclass that defines a
+  `jvp` method, paired with `linearized = apply_derived_linearization`, to
+  support `jax.linearize` by partially evaluating the `jvp` rule::
+
+    class MyPrim(VJPHiPrimitive):
+      def jvp(self, primals, tangents): ...
+      lin = linearize_from_jvp
+      linearized = apply_derived_linearization
+
+  The tangents for inputs that aren't being differentiated are passed to the
+  `jvp` rule as symbolic `Zero`s, just as on the `jax.jvp` path.
+  """
+  primals_flat = tree_leaves_checked(self.in_tree, primals)
+  nzs_in_flat = tree_leaves_checked(self.in_tree, nzs_in)
+
+  def jvp_flat(primals_flat, tangents_flat):
+    primals = tree_unflatten(self.in_tree, primals_flat)
+    tangents = tree_unflatten(self.in_tree, tangents_flat)
+    out_primals, out_tangents = self.jvp(primals, tangents)
+    out_primals_flat = tree_leaves_checked(self.out_tree, out_primals)
+    out_tangents_flat = self.out_tree.flatten_up_to(out_tangents)
+    return out_primals_flat, out_tangents_flat
+
+  dbg = debug_info('linearize_from_jvp', self.jvp, (primals, primals), {})
+  out_primals_flat, nzs_out_flat, consts, linearized = ad.linearize_from_jvp(
+      lu.wrap_init(jvp_flat, debug_info=dbg), True, nzs_in_flat,
+      False, False, primals_flat, {})
+  out_primals = tree_unflatten(self.out_tree, out_primals_flat)
+  nzs_out = tree_unflatten(self.out_tree, list(nzs_out_flat))
+  return out_primals, DerivedLinearization(consts, linearized), nzs_out
+
+def apply_derived_linearization(self, residuals, *tangents):
+  """The `linearized` rule paired with `lin = linearize_from_jvp`."""
+  tangents_flat = self.in_tree.flatten_up_to(tangents)
+  out_tangents_flat = residuals.apply(residuals.consts, *tangents_flat)
+  return tree_unflatten(self.out_tree, out_tangents_flat)
+
+def jvp_from_lin(self, primals, tangents):
+  """A `jvp` rule derived from `lin` and `linearized` rules.
+
+  Assign it as a class attribute on a `VJPHiPrimitive` subclass that defines
+  `lin` and `linearized` methods, to support forward-mode autodiff::
+
+    class MyPrim(VJPHiPrimitive):
+      def lin(self, nzs_in, *primals): ...
+      def linearized(self, residuals, *tangents): ...
+      jvp = jvp_from_lin
+  """
+  if type(self).lin is linearize_from_jvp:
+    raise TypeError(
+        f"subclass {type(self)} can't set both `jvp = jvp_from_lin` and "
+        "`lin = linearize_from_jvp`, since each would be defined in terms of "
+        "the other")
+  tangents_flat = self.in_tree.flatten_up_to(tangents)
+  nzs_in = tree_unflatten(
+      self.in_tree, [not isinstance(t, ad_util.Zero) for t in tangents_flat])
+  out_primals, residuals, *_ = self.lin(nzs_in, *primals)
+  out_tangents = self.linearized(residuals, *tangents)
+  return out_primals, out_tangents
+
+def vjp_fwd_from_jvp(self, nzs_in, *primals):
+  """A `vjp_fwd` rule derived from a `jvp` rule.
+
+  Assign it as a class attribute on a `VJPHiPrimitive` subclass that defines a
+  `jvp` method, paired with `vjp_bwd_retval = transpose_jvp`, to support
+  reverse-mode autodiff by storing the primal inputs as residuals and then, on
+  the backward pass, linearizing and transposing the `jvp` rule (like
+  `jax.custom_jvp`)::
+
+    class MyPrim(VJPHiPrimitive):
+      def jvp(self, primals, tangents): ...
+      vjp_fwd = vjp_fwd_from_jvp
+      vjp_bwd_retval = transpose_jvp
+  """
+  return self(*primals), primals
+
+def transpose_jvp(self, primals, out_ct):
+  """The `vjp_bwd_retval` rule paired with `vjp_fwd = vjp_fwd_from_jvp`."""
+  def tangent_map(*tangents):
+    _, out_tangents = self.jvp(primals, tangents)
+    return out_tangents
+  return _transpose_tangent_map(self, tangent_map, out_ct)
+
+def vjp_fwd_from_lin(self, nzs_in, *primals):
+  """A `vjp_fwd` rule derived from a `lin` rule.
+
+  Assign it as a class attribute on a `VJPHiPrimitive` subclass that defines
+  `lin` and `linearized` methods (possibly themselves derived from a `jvp`
+  rule), paired with `vjp_bwd_retval = transpose_linearized`, to support
+  reverse-mode autodiff by storing the linearization's residuals and then, on
+  the backward pass, transposing the `linearized` rule::
+
+    class MyPrim(VJPHiPrimitive):
+      def lin(self, nzs_in, *primals): ...
+      def linearized(self, residuals, *tangents): ...
+      vjp_fwd = vjp_fwd_from_lin
+      vjp_bwd_retval = transpose_linearized
+  """
+  return self.lin(nzs_in, *primals)
+
+def transpose_linearized(self, residuals, out_ct):
+  """The `vjp_bwd_retval` rule paired with `vjp_fwd = vjp_fwd_from_lin`."""
+  def tangent_map(*tangents):
+    return self.linearized(residuals, *tangents)
+  return _transpose_tangent_map(self, tangent_map, out_ct)
+
+def _transpose_tangent_map(self, tangent_map, out_ct):
+  zero = lambda x: isinstance(x, ad_util.Zero)
+  out_ct = tree_map(ad_util.instantiate, out_ct, is_leaf=zero)
+  dummies = tree_map(lambda a: ad_util.zeros_like_aval(a.to_tangent_aval()),
+                     self.in_avals)
+  return api.linear_transpose(tangent_map, *dummies)(out_ct)
 
 
 class CustomVJPTraced(VJPHiPrimitive):
@@ -717,10 +877,9 @@ class CustomVJPTraced(VJPHiPrimitive):
     return self.traced(*args)
 
   def vjp_fwd(self, in_nzs, *args):
-    in_nzs = tuple(x.val if isinstance(x, Static) else x for x in in_nzs)
-    args_ = tuple(x.val if isinstance(x, Static) else x for x in args)
     if self.symbolic_zeros:
-      args_ = tree_map(CustomVJPPrimal, args_, in_nzs)
+      args = tree_map(CustomVJPPrimal, args, in_nzs)  # tree_map skips Statics
+    args_ = tuple(x.val if isinstance(x, Static) else x for x in args)
     out, res = self.fwd(*args_)
     if config.mutable_array_checks.value:
       _check_for_returned_refs(self.fwd, (out, res), "fwd", tree_leaves(args),
@@ -773,7 +932,11 @@ class CustomVJPTraced(VJPHiPrimitive):
       primals_out, residuals = OptRemat(self, fwd_traced)(*primals)
     else:
       primals_out, residuals, *_ = self.vjp_fwd((True,) * len(primals), *primals)
-    tangents_out_flat = fake_linear_op(self, [True] * len(tangents), residuals, *tangents)
+    nzs_in_flat = [True] * len(self.in_avals_flat)
+    nzs_out_flat = [True] * len(self.out_avals_flat)
+    tangents_flat = tree_leaves_checked(self.in_tree, tangents)
+    tangents_out_flat = fake_linear_op(self, nzs_in_flat, nzs_out_flat, residuals,
+                                       *tangents_flat)
     tangents_out = tree_unflatten(self.out_tree, tangents_out_flat)
     return primals_out, tangents_out
 
@@ -788,7 +951,11 @@ class CustomVJPTraced(VJPHiPrimitive):
     if disallowed:
       raise NotImplementedError(f'Effects not supported in `custom_jvp`: {disallowed}')
 
-  def remat(self, policy, *args):  # type: ignore
+  def remat(self, trace, *args):  # type: ignore
+    if self.opt_remat:
+      return self(*args), self
+    if not trace.custom_vjp_rules:
+      return self(*args), self  # see https://github.com/jax-ml/jax/pull/38914
     if not self.static_argnums:
       fwd, dyn_args = self.fwd, args
     else:
@@ -796,7 +963,10 @@ class CustomVJPTraced(VJPHiPrimitive):
       dyn_args, static_args = partition_list(which_static, args)
       static_args = [x.val for x in static_args]
       fwd = lambda *dyn_args: self.fwd(*merge_lists(which_static, dyn_args, static_args))
-    (out, _), rem_ = remat.remat_transform(policy, fwd, *dyn_args)
+    # custom_vjp_rules=False so that custom_vjp applications inside fwd hit
+    # the early return above rather than recursively tracing their fwds.
+    (out, _), rem_ = remat.remat_transform(trace.policy, fwd, *dyn_args,
+                                           custom_vjp_rules=False)
     rem = lambda *args: rem_(*[x for i, x in enumerate(args) if i not in self.static_argnums])
     helper = CustomVJPTraced(self.traced, rem, self.bwd, self.in_avals,
                              False, self.static_argnums, False)
@@ -872,7 +1042,16 @@ class custom_vjp3:
     if any(isinstance(args[i], core.Tracer) for i in self.static_argnums):
       raise UnexpectedTracerError("custom_vjp inputs marked with nondiff_argnums "
                                   "must be static, not Tracers")
-    traced = api.jit(self.f, static_argnums=(*self.static_argnums,)).trace(*args)
+    if all(is_hashable(args[i]) for i in self.static_argnums):
+      traced = api.jit(self.f, static_argnums=(*self.static_argnums,)).trace(*args)
+    else:
+      # jit requires hashable static_argnums values, but classic custom_vjp
+      # accepted unhashable nondiff_argnums values, so close over them instead
+      which_static = [i in self.static_argnums for i in range(len(args))]
+      dyn_args, static_args = partition_list(which_static, args)
+      f = lambda *dyn: self.f(*merge_lists(which_static, dyn, static_args))
+      f.__name__ = getattr(self.f, '__name__', '<unnamed function>')
+      traced = api.jit(f).trace(*dyn_args)
     if any(isinstance(x, core.Tracer) for x in traced._consts):
       t = next(x for x in traced._consts if isinstance(x, core.Tracer))
       raise UnexpectedTracerError(
@@ -928,9 +1107,12 @@ class Static:
 
 class MappingSpec: pass
 class HiPspec:
-  def to_lo(self) -> tuple[PartitionSpec, ...]: assert False, "must override"
-  def to_tangent_spec(self) -> HiPspec: assert False, "must override"
-  def to_ct_spec(self) -> HiPspec: assert False, "must override"
+  def to_lo(self) -> tuple[PartitionSpec, ...]:
+    _must_override(self, "to_lo", "shard_map")
+  def to_tangent_spec(self) -> HiPspec:
+    _must_override(self, "to_tangent_spec", "autodiff through shard_map")
+  def to_ct_spec(self) -> HiPspec:
+    _must_override(self, "to_ct_spec", "autodiff through shard_map")
 
 # Logs
 
