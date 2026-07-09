@@ -30,6 +30,11 @@ source ci/envs/default.env
 export HIP_VISIBLE_DEVICES=0
 export ROCR_VISIBLE_DEVICES=0
 
+# Just in case, unset JAX_PLATFORMS. This allows
+# JAX to decide the best platform for a given test.
+# This should allow ROCm + CPU.
+unset JAX_PLATFORMS
+
 # Install jaxlib and ROCm plugin wheels inside the $JAXCI_OUTPUT_DIR directory
 echo "Installing wheels locally..."
 source ./ci/utilities/install_wheels_locally.sh
