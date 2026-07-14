@@ -33,6 +33,31 @@ concurrency:
 permissions: {}
 
 jobs:
+  therock-config:
+    # Single source of truth for the TheRock ROCm version, reused by the
+    # build / pytest / bazel matrices below so the version is defined once.
+    # TODO: bump the TV value here when moving to the next TheRock rc/release.
+    if: github.repository_owner == 'ROCm'
+    runs-on: ubuntu-latest
+    outputs:
+      build-matrix: ${{ steps.set.outputs.build-matrix }}
+      test-matrix: ${{ steps.set.outputs.test-matrix }}
+    steps:
+      - id: set
+        run: |
+          TV="7.14.0rc3"
+          IMG="ghcr.io/rocm/jax-manylinux_2_28-therock-${TV}:latest"
+          {
+            echo "build-matrix<<JSON"
+            echo "[{\"label\": \"ROCm 7.2.0\", \"wheel-version\": \"7\", \"release-version\": \"7.2.0\", \"manylinux-image\": \"\"},"
+            echo " {\"label\": \"TheRock ${TV}\", \"wheel-version\": \"7\", \"release-version\": \"therock-${TV}\", \"manylinux-image\": \"${IMG}\"}]"
+            echo "JSON"
+            echo "test-matrix<<JSON"
+            echo "[{\"label\": \"ROCm 7.2.0\", \"wheel-version\": \"7\", \"release-version\": \"7.2.0\", \"tag\": \"rocm720\"},"
+            echo " {\"label\": \"TheRock ${TV}\", \"wheel-version\": \"7\", \"release-version\": \"therock-${TV}\", \"tag\": \"therock-${TV}\"}]"
+            echo "JSON"
+          } >> "$GITHUB_OUTPUT"
+
   compute-post-suffix:
     if: github.repository_owner == 'ROCm'
     runs-on: ubuntu-latest
@@ -72,7 +97,7 @@ jobs:
 
   build-rocm-artifacts:
     if: github.repository_owner == 'ROCm'
-    needs: [compute-post-suffix]
+    needs: [compute-post-suffix, therock-config]
     uses: ./.github/workflows/build_rocm_artifacts.yml
     permissions:
       id-token: write
@@ -84,9 +109,7 @@ jobs:
         runner: ["amd-do-linux.jax.gpu.gfx950.1"]
         artifact: ["jax-rocm-plugin", "jax-rocm-pjrt"]
         python: ["3.11", "3.12", "3.13", "3.14"]
-        rocm:
-          - {label: "ROCm 7.2.0",     wheel-version: "7", release-version: "7.2.0",        manylinux-image: ""}
-          - {label: "TheRock latest", wheel-version: "7", release-version: "therock-latest", manylinux-image: "ghcr.io/rocm/jax-manylinux_2_28-therock-latest:latest"}
+        rocm: ${{ fromJSON(needs.therock-config.outputs.build-matrix) }}
         exclude:
           - artifact: "jax-rocm-pjrt"
             python: "3.11"
@@ -110,7 +133,7 @@ jobs:
 
   run-pytest-rocm:
     if: ${{ !cancelled() && github.repository_owner == 'ROCm' }}
-    needs: [build-rocm-artifacts]
+    needs: [build-rocm-artifacts, therock-config]
     permissions:
       id-token: write
       contents: read
@@ -121,9 +144,7 @@ jobs:
       matrix:
         runner: ["amd-do-linux.jax.gpu.gfx950.1", "amd-do-linux.jax.gpu.gfx950.4", "amd-do-linux.jax.gpu.gfx950.8"]
         python: ["3.11", "3.12", "3.13", "3.14"]
-        rocm:
-          - {label: "ROCm 7.2.0",     wheel-version: "7", release-version: "7.2.0",        tag: "rocm720"}
-          - {label: "TheRock latest", wheel-version: "7", release-version: "therock-latest", tag: "therock-latest"}
+        rocm: ${{ fromJSON(needs.therock-config.outputs.test-matrix) }}
     name: "Pytest ROCm (${{ matrix.rocm.label }})"
     with:
       runner: ${{ matrix.runner }}
@@ -138,7 +159,7 @@ jobs:
 
   run-bazel-test-rocm:
     if: ${{ !cancelled() && github.repository_owner == 'ROCm' }}
-    needs: [build-rocm-artifacts]
+    needs: [build-rocm-artifacts, therock-config]
     permissions:
       id-token: write
       contents: read
@@ -148,9 +169,7 @@ jobs:
       matrix:
         runner: ["amd-do-linux.jax.gpu.gfx950.1", "amd-do-linux.jax.gpu.gfx950.8"]
         python: ["3.11", "3.12", "3.13", "3.14"]
-        rocm:
-          - {label: "ROCm 7.2.0",     wheel-version: "7", release-version: "7.2.0",        tag: "rocm720"}
-          - {label: "TheRock latest", wheel-version: "7", release-version: "therock-latest", tag: "therock-latest"}
+        rocm: ${{ fromJSON(needs.therock-config.outputs.test-matrix) }}
         enable-x64: [0]
     name: "Bazel ROCm (${{ matrix.rocm.label }})"
     with:
