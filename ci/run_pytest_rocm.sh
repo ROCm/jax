@@ -131,6 +131,10 @@ mkdir -p test-artifacts
 # commands below.
 set +e
 
+num_processes=16
+echo "Bug-test, Setting Final number of processes to run: $num_processes"
+
+
 # Run single-accelerator tests in parallel
 "$JAXCI_PYTHON" -m pytest -n $num_processes --tb=short \
 --json-report --json-report-file=${LOGS_DIR}/pytest_results_single.json \
