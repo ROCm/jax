@@ -7711,6 +7711,30 @@ class Remat3Test(RematTest):
     f = jax.remat(lambda x: jax.jit(body)(x), policy=policy)
     self.assertAllClose(api.grad(f)(1.), jnp.cos(1.), check_dtypes=False)
 
+  def test_remat_of_jit_output_to_residual_forwarding(self):
+    # Like test_remat_output_to_residual_forwarding, but through the jit remat
+    # rule: the saved value is both a bwd residual (for y * y) and demanded by
+    # a consumer of the primal output (for a ** 2), so without forwarding the
+    # jit eqn in the traced vjp jaxpr would carry a duplicated live output.
+    policy = jax.checkpoint_policies.save_only_these_names('y')
+    @partial(jax.remat, policy=policy)
+    def f(x):
+      y = jax.jit(lambda: checkpoint_name(jnp.sin(x), 'y'))()
+      return y, y * y
+    def g(x):
+      a, b = f(x)
+      return a ** 2 + b
+
+    jaxpr = api.make_jaxpr(lambda x: api.vjp(g, x))(1.)
+    [jit_eqn] = [e for e in jaxpr.jaxpr.eqns if e.primitive.name == 'jit']
+    self.assertLen(jit_eqn.outvars, 1)
+
+    def g_ref(x):
+      a, b = jnp.sin(x), jnp.sin(x) * jnp.sin(x)
+      return a ** 2 + b
+    self.assertAllClose(api.grad(g)(1.), api.grad(g_ref)(1.),
+                        check_dtypes=False)
+
   # We don't support everything_saveable with remat3
   def test_remat_custom_policy_save_anything_new_remat(self): pass
   def test_remat_residual_logging(self): pass
@@ -8547,6 +8571,106 @@ class InputSavedVJPTest(jtu.JaxTestCase):
     _, vjp = jax.vjp(lambda x: 1., 3.14)
     ans, = vjp(1.0)
     self.assertIsInstance(ans, jax.Array)
+
+  def test_saveable_args_basic(self):
+    def f2(x, w):
+      x = 1. * x
+      x = x @ w
+      x = 2. * x
+      return x
+
+    x = jnp.ones((3, 4))
+    w = jnp.ones((4, 4))
+    y, f2_vjp = api.vjp(f2, x, w, saveable_args=(True, False))
+    self.assertIsInstance(f2_vjp.args_res[1], api.NotSaveable)
+    y_grad = jnp.ones_like(y)
+    with self.assertRaisesRegex(
+        ValueError, re.compile(r"not-saveable.*args\[1\]", re.DOTALL)):
+      f2_vjp(y_grad)
+    f2_vjp.args_res[1] = w
+    x_grad, w_grad = f2_vjp(y_grad)
+    self.assertAllClose(x_grad, 2. * y_grad @ w.T)
+    self.assertAllClose(w_grad, 2. * x.T @ y_grad)
+
+  def test_saveable_args_broadcasts(self):
+    def f(x, w):
+      return x @ w
+
+    x = jnp.ones((3, 4))
+    w = jnp.ones((4, 4))
+    _, f_vjp = api.vjp(f, x, w, saveable_args=False)
+    self.assertIsInstance(f_vjp.args_res[0], api.NotSaveable)
+    self.assertIsInstance(f_vjp.args_res[1], api.NotSaveable)
+    self.assertLen(jax.tree.leaves(f_vjp), 0)  # nothing saved at all
+    f_vjp.args_res = [x, w]
+    x_grad, w_grad = f_vjp(jnp.ones((3, 4)))
+    self.assertAllClose(x_grad, jnp.ones((3, 4)) @ w.T)
+    self.assertAllClose(w_grad, x.T @ jnp.ones((3, 4)))
+
+  def test_saveable_args_loose_prefix(self):
+    # a tuple entry in saveable_args can correspond to a dict argument
+    def f(d):
+      return d['bye'] @ d['hi']
+
+    d = {'hi': jnp.ones((4, 5)), 'bye': jnp.ones((3, 4))}
+    _, f_vjp = api.vjp(f, d, saveable_args=((True, False),))
+    bye_res, hi_res = f_vjp.args_res[0]  # tuple-tree, dict flatten order
+    self.assertAllClose(bye_res, d['bye'])
+    self.assertIsInstance(hi_res, api.NotSaveable)
+    with self.assertRaisesRegex(
+        ValueError,
+        re.compile(r"not-saveable.*args\[0\]\['hi'\]", re.DOTALL)):
+      f_vjp(jnp.ones((3, 5)))
+    f_vjp.args_res = [d]  # can restore with the original pytree structure
+    d_grad, = f_vjp(jnp.ones((3, 5)))
+    self.assertAllClose(d_grad['hi'], d['bye'].T @ jnp.ones((3, 5)))
+    self.assertAllClose(d_grad['bye'], jnp.ones((3, 5)) @ d['hi'].T)
+
+  def test_saveable_args_unused_arg_stays_not_needed(self):
+    _, f_vjp = api.vjp(jnp.sin, 3., saveable_args=False)
+    self.assertIsInstance(f_vjp.args_res[0], api.NotNeeded)
+    x_ct, = f_vjp(1.)  # nothing to restore
+    self.assertAllClose(x_ct, jnp.cos(3.))
+
+  def test_saveable_args_pass_through_jit(self):
+    def f2(x, w):
+      x = 1. * x
+      x = x @ w
+      x = 2. * x
+      return x
+
+    @jax.jit
+    def g(x, w):
+      return jax.vjp(f2, x, w, saveable_args=(True, False))
+
+    @jax.jit
+    def h(f2_vjp, w, ct):
+      f2_vjp.args_res[1] = w
+      return f2_vjp(ct)
+
+    x = jnp.ones((3, 4))
+    w = jnp.ones((4, 4))
+    y, f2_vjp = g(x, w)
+    self.assertIsInstance(f2_vjp.args_res[1], api.NotSaveable)
+    y_grad = jnp.ones_like(y)
+    with self.assertRaisesRegex(ValueError, "not-saveable"):
+      jax.jit(lambda f_vjp, ct: f_vjp(ct))(f2_vjp, y_grad)
+    x_grad, w_grad = h(f2_vjp, w, y_grad)
+    self.assertAllClose(x_grad, 2. * y_grad @ w.T)
+    self.assertAllClose(w_grad, 2. * x.T @ y_grad)
+
+  def test_saveable_args_structure_errors(self):
+    f = lambda x, w: x @ w
+    x = jnp.ones((3, 4))
+    w = jnp.ones((4, 4))
+    with self.assertRaisesRegex(ValueError, "number of children"):
+      api.vjp(f, x, w, saveable_args=(True,))
+    with self.assertRaisesRegex(ValueError, "leaf"):
+      api.vjp(f, x, w, saveable_args=(True, (True, True)))
+    with self.assertRaisesRegex(ValueError, "tuple-tree of bools"):
+      api.vjp(f, x, w, saveable_args=(1, True))
+    with self.assertRaisesRegex(ValueError, "tuple-tree of bools"):
+      api.vjp(f, x, w, saveable_args=[True, True])  # tuples only, not lists
 
 
 class TracebackTest(jtu.JaxTestCase):

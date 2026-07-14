@@ -1738,7 +1738,16 @@ def _async_load_tmem_constraint_system(
       bitwidth=utils.bitwidth(op.source.type.element_type),
   )
   return (
-      cs.ConstraintSystem(constraints=[constraint]),
+      cs.ConstraintSystem(
+          constraints=[
+              constraint,
+              # The following `NotOfType` constraints are shortcuts, helping
+              # the layout inference system converge faster.
+              # They are implicitly rejected by `IsTransferableTmemRegisters`.
+              cs.NotOfType(destination_variable, fa.WGSplatFragLayout),
+              cs.NotOfType(destination_variable, fa.WGStridedFragLayout),
+          ]
+      ),
       {source_variable: [source], destination_variable: [destination]},
   )
 
@@ -2655,6 +2664,11 @@ def infer_layout(
       global_constraint_system
   )
   assert not isinstance(global_constraint_system, cs.Unsatisfiable)
+  global_constraint_system = (
+      cs.canonicalize_strict_non_splat_relayouts_to_equals(
+          global_constraint_system
+      )
+  )
   global_constraint_system = cs.saturate_divides_constraints_for_equal_vars(
       global_constraint_system
   )
