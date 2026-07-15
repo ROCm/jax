@@ -41,7 +41,9 @@ RUN --mount=type=cache,target=/var/cache/apt \
 
 # Install pyenv with different python versions
 ARG PYTHON_VERSION=3.11.13
-RUN git clone https://github.com/pyenv/pyenv.git /pyenv
+ARG PYENV_COMMIT=135adbb192d32142a648cae7c2f7e491f5c57202
+RUN git clone https://github.com/pyenv/pyenv.git /pyenv && \
+    git -C /pyenv checkout ${PYENV_COMMIT}
 ENV PYENV_ROOT /pyenv
 ENV PATH $PYENV_ROOT/shims:$PYENV_ROOT/bin:$PATH
 RUN pyenv install $PYTHON_VERSION
