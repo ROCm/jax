@@ -27,6 +27,11 @@ jtu.request_cpu_devices(8)
 
 class ControlDepsTest(jtu.JaxTestCase):
 
+  def setUp(self):
+    super().setUp()
+    if not jtu.is_libtpu_at_least("0.0.44"):
+      self.skipTest("Requires libtpu 0.0.44 or newer")
+
   def create_explicit_mesh(self, axes, names):
     axis_types = (jax.sharding.AxisType.Explicit,) * len(axes)
     return jtu.create_mesh(axes, names, iota_order=False, axis_types=axis_types)
@@ -98,8 +103,6 @@ class ControlDepsTest(jtu.JaxTestCase):
 
   @jtu.run_on_devices("tpu", "cpu")
   def test_scan_fsdp(self):
-    if not jtu.is_libtpu_at_least("0.0.44"):
-      self.skipTest("Requires libtpu 0.0.44 or newer")
     k = 4
     n = jax.device_count()
     with jax.set_mesh(self.create_explicit_mesh((n,), ("i",))):

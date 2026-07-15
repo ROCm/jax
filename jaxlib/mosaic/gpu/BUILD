@@ -364,6 +364,8 @@ cc_library(
         "@xla//xla/backends/cpu:target_machine_options",
         "@xla//xla/backends/gpu:ffi",
         "@xla//xla/backends/gpu/collectives:gpu_clique_key",
+        "@xla//xla/backends/gpu/collectives:gpu_collectives",
+        "@xla//xla/backends/gpu/collectives:gpu_communicator",
         "@xla//xla/backends/gpu/runtime:collective_clique_requests",
         "@xla//xla/backends/gpu/runtime:collective_cliques",
         "@xla//xla/backends/gpu/runtime:collective_execution",
@@ -396,6 +398,7 @@ cc_library(
 cc_test(
     name = "custom_call_test",
     srcs = ["custom_call_test.cc"],
+    args = ["--heap_check="],  # TODO(b/452513034): Enable heapcheck once the bug is fixed.
     tags = ["requires-gpu-sm90"],
     deps = [
         ":mosaic_gpu_support",
