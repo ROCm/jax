@@ -45,7 +45,7 @@ jobs:
     steps:
       - id: set
         run: |
-          TV="7.14.0rc3"
+          TV="7.14"
           IMG="ghcr.io/rocm/jax-manylinux_2_28-therock-${TV}:latest"
           {
             echo "build-matrix<<JSON"
