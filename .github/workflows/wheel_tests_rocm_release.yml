@@ -4,22 +4,24 @@
 # uploads them to a per-run staging path in S3, and runs ROCm tests against that
 # exact build. Lives in ROCm/jax only — not upstreamed.
 #
-# S3 layout under s3://jax-ci-amd/rocm-wheels/<branch>/<rocm-ver>/:
-#   staging/<run_number>/<run_attempt>/   ← this workflow uploads here
-#   upstream/GATE_CHECK/                  ← promoted by rocm_release_promote_gate.yml
-#   release/                              ← published by rocm_release_publish.yml
+# S3 layout under s3://jax-ci-amd/rocm-wheels/<repo>/<branch>/<rocm-ver>/:
+#   release-validation/<run_number>/<run_attempt>/   ← this workflow uploads here
+#   release/                                         ← published by rocm_release_publish.yml
 name: CI - ROCm Release Wheel Build + Test
 
 on:
   push:
-    branches:
-      - 'rocm-jaxlib-v*'
   workflow_dispatch:
     inputs:
       halt-for-connection:
         description: 'Should this workflow run wait for a remote connection? (yes/no)'
         required: false
         default: 'no'
+        type: string
+      wheel-version-suffix:
+        description: "Version suffix (e.g., .post1). Use 'auto' to compute from PyPI. Leave empty for no suffix."
+        required: false
+        default: ''
         type: string
 
 concurrency:
@@ -29,8 +31,71 @@ concurrency:
 permissions: {}
 
 jobs:
+  therock-config:
+    # Single source of truth for the TheRock ROCm version, reused by the
+    # build / pytest / bazel matrices below so the version is defined once.
+    # TODO: bump the TV value here when moving to the next TheRock rc/release.
+    if: github.repository_owner == 'ROCm'
+    runs-on: ubuntu-latest
+    outputs:
+      build-matrix: ${{ steps.set.outputs.build-matrix }}
+      test-matrix: ${{ steps.set.outputs.test-matrix }}
+    steps:
+      - id: set
+        run: |
+          TV="7.13.0"
+          IMG="ghcr.io/rocm/jax-manylinux_2_28-therock-${TV}:latest"
+          {
+            echo "build-matrix<<JSON"
+            echo "[{\"label\": \"ROCm 7.2.0\", \"wheel-version\": \"7\", \"release-version\": \"7.2.0\", \"manylinux-image\": \"\"},"
+            echo " {\"label\": \"TheRock ${TV}\", \"wheel-version\": \"7\", \"release-version\": \"therock-${TV}\", \"manylinux-image\": \"${IMG}\"}]"
+            echo "JSON"
+            echo "test-matrix<<JSON"
+            echo "[{\"label\": \"ROCm 7.2.0\", \"wheel-version\": \"7\", \"release-version\": \"7.2.0\", \"tag\": \"rocm720\"},"
+            echo " {\"label\": \"TheRock ${TV}\", \"wheel-version\": \"7\", \"release-version\": \"therock-${TV}\", \"tag\": \"therock-${TV}\"}]"
+            echo "JSON"
+          } >> "$GITHUB_OUTPUT"
+
+  compute-post-suffix:
+    if: github.repository_owner == 'ROCm'
+    runs-on: ubuntu-latest
+    outputs:
+      suffix: ${{ steps.compute.outputs.suffix }}
+      jax_version: ${{ steps.compute.outputs.jax_version }}
+    steps:
+      - id: compute
+        run: |
+          SUFFIX_INPUT="${{ inputs.wheel-version-suffix }}"
+
+          # Determine latest JAX version from PyPI
+          BASE_VERSION=$(pip index versions jax 2>/dev/null | head -1 | grep -oP '\(.*?\)' | tr -d '()')
+          echo "jax_version=${BASE_VERSION}" >> $GITHUB_OUTPUT
+
+          # Determine suffix
+          if [[ -n "${SUFFIX_INPUT}" && "${SUFFIX_INPUT}" != "auto" ]]; then
+            echo "suffix=${SUFFIX_INPUT}" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          if [[ "${SUFFIX_INPUT}" == "auto" ]]; then
+            VERSIONS=$(pip index versions jax-rocm7-plugin 2>/dev/null | grep "Available versions" | sed 's/.*: //')
+            LATEST_POST=$(echo "$VERSIONS" | tr ',' '\n' | tr -d ' ' | grep "^${BASE_VERSION}\.post" | sort -V | tail -1)
+
+            if [[ -n "$LATEST_POST" ]]; then
+              N=$(echo "$LATEST_POST" | grep -oP 'post\K\d+')
+              echo "suffix=.post$((N+1))" >> $GITHUB_OUTPUT
+            elif echo "$VERSIONS" | tr ',' '\n' | tr -d ' ' | grep -q "^${BASE_VERSION}$"; then
+              echo "suffix=.post1" >> $GITHUB_OUTPUT
+            else
+              echo "suffix=" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "suffix=" >> $GITHUB_OUTPUT
+          fi
+
   build-rocm-artifacts:
     if: github.repository_owner == 'ROCm'
+    needs: [compute-post-suffix, therock-config]
     uses: ./.github/workflows/build_rocm_artifacts.yml
     permissions:
       id-token: write
@@ -42,9 +107,7 @@ jobs:
         runner: ["amd-do-linux.jax.gpu.gfx950.1"]
         artifact: ["jax-rocm-plugin", "jax-rocm-pjrt"]
         python: ["3.11", "3.12", "3.13", "3.14"]
-        rocm:
-          - {label: "ROCm 7.2.0",     wheel-version: "7", release-version: "7.2.0",        manylinux-image: ""}
-          - {label: "TheRock latest", wheel-version: "7", release-version: "therock-latest", manylinux-image: "ghcr.io/rocm/jax-manylinux_2_28-therock-latest:latest"}
+        rocm: ${{ fromJSON(needs.therock-config.outputs.build-matrix) }}
         exclude:
           - artifact: "jax-rocm-pjrt"
             python: "3.11"
@@ -60,14 +123,14 @@ jobs:
       rocm-version: ${{ matrix.rocm.wheel-version }}
       rocm-release-version: ${{ matrix.rocm.release-version }}
       manylinux-image: ${{ matrix.rocm.manylinux-image }}
-      artifact-type: release
+      wheel-version-suffix: ${{ needs.compute-post-suffix.outputs.suffix }}
       clone_main_xla: 0
       upload_artifacts_to_s3: true
-      s3_upload_uri: 's3://jax-ci-amd/rocm-wheels/${{ github.ref_name }}/${{ matrix.rocm.release-version }}/staging/${{ github.run_number }}/${{ github.run_attempt }}'
+      s3_upload_uri: 's3://jax-ci-amd/rocm-wheels/${{ github.repository }}/${{ github.ref_name }}/${{ matrix.rocm.release-version }}/release-validation/${{ github.run_number }}/${{ github.run_attempt }}'
 
   run-pytest-rocm:
     if: ${{ !cancelled() && github.repository_owner == 'ROCm' }}
-    needs: [build-rocm-artifacts]
+    needs: [build-rocm-artifacts, therock-config]
     permissions:
       id-token: write
       contents: read
@@ -78,9 +141,7 @@ jobs:
       matrix:
         runner: ["amd-do-linux.jax.gpu.gfx950.1", "amd-do-linux.jax.gpu.gfx950.4", "amd-do-linux.jax.gpu.gfx950.8"]
         python: ["3.11", "3.12", "3.13", "3.14"]
-        rocm:
-          - {label: "ROCm 7.2.0",     wheel-version: "7", release-version: "7.2.0",        tag: "rocm720"}
-          - {label: "TheRock latest", wheel-version: "7", release-version: "therock-latest", tag: "therock-latest"}
+        rocm: ${{ fromJSON(needs.therock-config.outputs.test-matrix) }}
     name: "Pytest ROCm (${{ matrix.rocm.label }})"
     with:
       runner: ${{ matrix.runner }}
@@ -88,12 +149,13 @@ jobs:
       rocm-version: ${{ matrix.rocm.wheel-version }}
       rocm-release-version: ${{ matrix.rocm.release-version }}
       rocm-tag: ${{ matrix.rocm.tag }}
-      jaxlib-version: release
-      s3_download_uri: 's3://jax-ci-amd/rocm-wheels/${{ github.ref_name }}/${{ matrix.rocm.release-version }}/staging/${{ github.run_number }}/${{ github.run_attempt }}'
+      jaxlib-version: head
+      skip-download-jaxlib-and-plugins-from-gcs: '0'
+      s3_download_uri: 's3://jax-ci-amd/rocm-wheels/${{ github.repository }}/${{ github.ref_name }}/${{ matrix.rocm.release-version }}/release-validation/${{ github.run_number }}/${{ github.run_attempt }}'
 
   run-bazel-test-rocm:
     if: ${{ !cancelled() && github.repository_owner == 'ROCm' }}
-    needs: [build-rocm-artifacts]
+    needs: [build-rocm-artifacts, therock-config]
     permissions:
       id-token: write
       contents: read
@@ -103,9 +165,7 @@ jobs:
       matrix:
         runner: ["amd-do-linux.jax.gpu.gfx950.1", "amd-do-linux.jax.gpu.gfx950.8"]
         python: ["3.11", "3.12", "3.13", "3.14"]
-        rocm:
-          - {label: "ROCm 7.2.0",     wheel-version: "7", release-version: "7.2.0",        tag: "rocm720"}
-          - {label: "TheRock latest", wheel-version: "7", release-version: "therock-latest", tag: "therock-latest"}
+        rocm: ${{ fromJSON(needs.therock-config.outputs.test-matrix) }}
         enable-x64: [0]
     name: "Bazel ROCm (${{ matrix.rocm.label }})"
     with:
@@ -115,9 +175,10 @@ jobs:
       rocm-release-version: ${{ matrix.rocm.release-version }}
       rocm-tag: ${{ matrix.rocm.tag }}
       enable-x64: ${{ matrix.enable-x64 }}
-      jaxlib-version: release
+      jaxlib-version: head
+      download-jax-from-gcs: '0'
       build_jaxlib: 'false'
       build_jax: 'false'
-      s3_download_uri: 's3://jax-ci-amd/rocm-wheels/${{ github.ref_name }}/${{ matrix.rocm.release-version }}/staging/${{ github.run_number }}/${{ github.run_attempt }}'
+      s3_download_uri: 's3://jax-ci-amd/rocm-wheels/${{ github.repository }}/${{ github.ref_name }}/${{ matrix.rocm.release-version }}/release-validation/${{ github.run_number }}/${{ github.run_attempt }}'
       run_multiaccelerator_tests: 'true'
       clone_main_xla: 0
