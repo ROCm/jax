@@ -74,6 +74,7 @@ bazel --bazelrc=build/rocm/rocm.bazelrc test \
     --repo_env=ROCM_DISTRO_HASH=12afeccd06e6caf0699d86d688f16083aafa35474d0ec1d8063477fb5c119d49 \
     --test_output=errors \
     --test_env=TF_CPP_MIN_LOG_LEVEL=0 \
+    --test_env=LD_DEBUG=libs \
     --test_env=JAX_EXCLUDE_TEST_TARGETS=PmapTest.testSizeOverflow \
     --build_tag_filters=${TAG_FILTERS} \
     --test_tag_filters=${TAG_FILTERS} \
