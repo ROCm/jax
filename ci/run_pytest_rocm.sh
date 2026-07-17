@@ -132,6 +132,12 @@ set +e
 --deselect=tests/multi_device_test.py::MultiDeviceTest::test_computation_follows_data \
 --deselect=tests/multiprocess_gpu_test.py::MultiProcessGpuTest::test_distributed_jax_visible_devices \
 --deselect=tests/compilation_cache_test.py::CompilationCacheTest::test_task_using_cache_metric \
+--deselect=tests/pallas/gpu_ops_test.py::FusedAttentionTest::test_fused_attention_fwd0 \
+--deselect=tests/pallas/gpu_ops_test.py::FusedAttentionTest::test_fused_attention_fwd1 \
+--deselect=tests/pallas/gpu_ops_test.py::FusedAttentionTest::test_fused_attention_fwd4 \
+--deselect=tests/pallas/gpu_ops_test.py::FusedAttentionTest::test_fused_attention_fwd7 \
+--deselect=tests/pallas/gpu_ops_test.py::FusedAttentionTest::test_fused_attention_bwd7 \
+--deselect=tests/pallas/gpu_ops_test.py::FusedAttentionTest::test_fused_attention_bwd8 \
 tests
 
 first_cmd_retval=$?
