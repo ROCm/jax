@@ -75,6 +75,7 @@ bazel --bazelrc=build/rocm/rocm.bazelrc test \
     --test_output=errors \
     --test_env=TF_CPP_MIN_LOG_LEVEL=0 \
     --test_env=LD_DEBUG=libs \
+    --experimental_ui_max_stdouterr_bytes=8388608 \
     --test_env=JAX_EXCLUDE_TEST_TARGETS=PmapTest.testSizeOverflow \
     --build_tag_filters=${TAG_FILTERS} \
     --test_tag_filters=${TAG_FILTERS} \
