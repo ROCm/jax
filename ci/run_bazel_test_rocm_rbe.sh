@@ -70,6 +70,8 @@ bazel --bazelrc=build/rocm/rocm.bazelrc test \
     --config=rocm_rbe_dynamic \
     $OVERRIDE_XLA_REPO \
     --test_env=XLA_PYTHON_CLIENT_ALLOCATOR=platform \
+    --repo_env=ROCM_DISTRO_URL=https://repo.amd.com/rocm/tarball-multi-arch/therock-dist-linux-gfx950-dcgpu-7.14.0.tar.gz \
+    --repo_env=ROCM_DISTRO_HASH=12afeccd06e6caf0699d86d688f16083aafa35474d0ec1d8063477fb5c119d49 \
     --test_output=errors \
     --test_env=TF_CPP_MIN_LOG_LEVEL=0 \
     --test_env=JAX_EXCLUDE_TEST_TARGETS=PmapTest.testSizeOverflow \
