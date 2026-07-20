@@ -580,9 +580,7 @@ jobs:
           runner: ["amd-do-linux.jax.gpu.gfx950.4", "amd-do-linux.jax.gpu.gfx950.8"]
           python: ["3.12"]
           rocm: [
-            {label: "ROCm 7.2.0",     wheel-version: "7", release-version: "7.2.0",        tag: "rocm720"},
-            {label: "TheRock 7.13",   wheel-version: "7", release-version: "therock-7.13.0",  tag: "therock-7.13.0"},
-            {label: "TheRock latest", wheel-version: "7", release-version: "therock-latest", tag: "therock-latest"},
+            {label: "TheRock latest", wheel-version: "7", release-version: "therock-latest", tag: "therock-latest"}
           ]
           enable-x64: [0]
     name: "Bazel ROCm (${{ matrix.rocm.label }})"
