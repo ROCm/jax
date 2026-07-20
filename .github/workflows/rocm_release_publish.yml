@@ -17,7 +17,7 @@ on:
         required: true
         type: string
       rocm-release-version:
-        description: "ROCm release version (e.g. 7.2.0, therock-7.13.0, therock-latest)"
+        description: "ROCm release version (e.g. therock-7.14, therock-latest)"
         required: true
         type: string
       run-number:
@@ -37,7 +37,7 @@ jobs:
     if: github.repository_owner == 'ROCm'
     runs-on: amd-do-linux.jax.gpu.gfx950.1
     container:
-      image: ghcr.io/rocm/jax-base-ubu24.rocm720:latest  # zizmor: ignore[unpinned-images]
+      image: ghcr.io/rocm/jax-base-ubu24.therock-7.14:latest  # zizmor: ignore[unpinned-images]
     defaults:
       run:
         shell: bash

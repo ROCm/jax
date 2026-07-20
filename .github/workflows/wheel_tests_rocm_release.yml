@@ -49,12 +49,10 @@ jobs:
           IMG="ghcr.io/rocm/jax-manylinux_2_28-therock-${TV}:latest"
           {
             echo "build-matrix<<JSON"
-            echo "[{\"label\": \"ROCm 7.2.0\", \"wheel-version\": \"7\", \"release-version\": \"7.2.0\", \"manylinux-image\": \"\"},"
-            echo " {\"label\": \"TheRock ${TV}\", \"wheel-version\": \"7\", \"release-version\": \"therock-${TV}\", \"manylinux-image\": \"${IMG}\"}]"
+            echo "[{\"label\": \"TheRock ${TV}\", \"wheel-version\": \"7\", \"release-version\": \"therock-${TV}\", \"manylinux-image\": \"${IMG}\"}]"
             echo "JSON"
             echo "test-matrix<<JSON"
-            echo "[{\"label\": \"ROCm 7.2.0\", \"wheel-version\": \"7\", \"release-version\": \"7.2.0\", \"tag\": \"rocm720\"},"
-            echo " {\"label\": \"TheRock ${TV}\", \"wheel-version\": \"7\", \"release-version\": \"therock-${TV}\", \"tag\": \"therock-${TV}\"}]"
+            echo "[{\"label\": \"TheRock ${TV}\", \"wheel-version\": \"7\", \"release-version\": \"therock-${TV}\", \"tag\": \"therock-${TV}\"}]"
             echo "JSON"
           } >> "$GITHUB_OUTPUT"
 
