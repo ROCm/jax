@@ -33,15 +33,15 @@ on:
       rocm-version:
         description: "Which ROCm version to test?"
         type: choice
-        default: "7.2.0"
+        default: "7"
         options:
-          - "7.2.0"
+          - "7"
       rocm-tag:
-        description: "ROCm tag for container image (e.g., rocm720)"
+        description: "ROCm tag for container image (e.g., therock-7.14)"
         type: string
-        default: "rocm720"
+        default: "therock-7.14"
       rocm-release-version:
-        description: "Release version for S3 path resolution (e.g., 7.2.0 or therock-latest)"
+        description: "Release version for S3 path resolution (e.g., therock-7.14 or therock-latest)"
         type: string
         default: ""
       jaxlib-version:
@@ -83,13 +83,13 @@ on:
       rocm-version:
         description: "Which ROCm version to test?"
         type: string
-        default: "7.2.0"
+        default: "7"
       rocm-tag:
-        description: "ROCm tag for container image (e.g., rocm720)"
+        description: "ROCm tag for container image (e.g., therock-7.14)"
         type: string
-        default: "rocm720"
+        default: "therock-7.14"
       rocm-release-version:
-        description: "Release version for S3 path resolution (e.g., 7.2.0 or therock-latest)"
+        description: "Release version for S3 path resolution (e.g., therock-7.14 or therock-latest)"
         type: string
         default: ""
       jaxlib-version:
@@ -142,7 +142,7 @@ jobs:
       JAXCI_HERMETIC_PYTHON_VERSION: "${{ inputs.python }}"
       JAXCI_PYTHON: "python${{ inputs.python }}"
       JAXCI_ENABLE_X64: "0"
-      # Required on gfx950 with ROCm 7.13 to avoid HIP "invalid device function"
+      # Required on gfx950 with ROCm 7.14+ to avoid HIP "invalid device function"
       # failures during multi-accelerator collectives. RCCL emits an explicit
       # warning when this is unset; the env var must be in place before HIP
       # initialization, which happens at JAX import time.
