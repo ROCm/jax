@@ -25,7 +25,6 @@ import unittest
 from absl.testing import absltest
 from absl.testing import parameterized
 import numpy as np
-
 import concurrent.futures
 
 import jax
@@ -10538,6 +10537,63 @@ class ShardingInTypesTest(jtu.JaxTestCase):
         ValueError, "must be reduced over the same mesh axes as operand"):
       jnp.reshape(arr, (4, 2), out_sharding=P('x'))
 
+  @jtu.with_explicit_mesh((2,), 'x')
+  def test_gather_reduced_fwd_unreduced_bwd(self, mesh):
+    operand = jax.device_put(jnp.arange(16.).reshape(8, 2),
+                             P(None, None, reduced={'x'}))
+    indices = jax.device_put(jnp.arange(4), P())
+
+    @jax.jit
+    def f(op, idx):
+      return op.at[idx].get()
+
+    out = f(operand, indices)
+    self.assertEqual(out.sharding,
+                     NamedSharding(mesh, P(None, None, reduced={'x'})))
+
+    def loss(op, idx):
+      return f(op, idx).sum()
+
+    out_g = jax.jit(jax.grad(loss))(operand, indices)
+    self.assertEqual(out_g.sharding,
+                     NamedSharding(mesh, P(None, None, unreduced={'x'})))
+
+    ex_operand = jax.device_put(jnp.arange(16.).reshape(8, 2), P())
+    ex_out_g = jax.jit(jax.grad(loss))(ex_operand, indices)
+    self.assertArraysEqual(reshard(out_g, P()), ex_out_g)
+
+  @jtu.with_explicit_mesh((2,), 'x')
+  def test_scatter_unreduced_fwd_reduced_bwd(self, mesh):
+    operand = jax.device_put(jnp.zeros((8, 2)), P(None, None, unreduced={'x'}))
+    indices = jax.device_put(jnp.array([1, 3, 5]), P())
+    updates = jax.device_put(jnp.arange(6.).reshape(3, 2),
+                             P(None, None, unreduced={'x'}))
+
+    @jax.jit
+    def f(op, idx, upd):
+      return op.at[idx].add(upd)
+
+    out = f(operand, indices, updates)
+    self.assertEqual(out.sharding,
+                     NamedSharding(mesh, P(None, None, unreduced={'x'})))
+
+    def loss(op, idx, upd):
+      return f(op, idx, upd).sum()
+
+    _, (grad_op, grad_upd) = jax.jit(jax.value_and_grad(loss, argnums=(0, 2))
+                                     )(operand, indices, updates)
+    self.assertEqual(grad_op.sharding,
+                     NamedSharding(mesh, P(None, None, reduced={'x'})))
+    self.assertEqual(grad_upd.sharding,
+                     NamedSharding(mesh, P(None, None, reduced={'x'})))
+
+    ex_operand = jax.device_put(jnp.zeros((8, 2)), P())
+    ex_updates = jax.device_put(jnp.arange(6.).reshape(3, 2), P())
+    ex_grad_op, ex_grad_upd = jax.jit(jax.grad(loss, argnums=(0, 2))
+                                      )(ex_operand, indices, ex_updates)
+    self.assertArraysEqual(reshard(grad_op, P()), ex_grad_op)
+    self.assertArraysEqual(reshard(grad_upd, P()), ex_grad_upd)
+
   @jtu.with_explicit_mesh((1,), 'x')
   def test_broadcast_transpose_unit_dims(self, mesh):
     x = jnp.ones((1,), out_sharding=P('x'))
@@ -11752,6 +11808,33 @@ class ShardingInTypesTest(jtu.JaxTestCase):
     with self.assertRaisesRegex(
         ValueError, "out_sharding.*cannot be more unreduced than the input"):
       jax.reshard(arr2, P(unreduced={'x'}, unreduced_kind=UnreducedKind.max))
+
+  @jtu.with_explicit_mesh((1, 2), ('x', 'y'))
+  def test_reshape_preserve_singleton_dim_spec(self, mesh):
+    # https://github.com/jax-ml/jax/issues/39309
+    arr = jax.device_put(np.ones((1, 512)), P('x', 'y'))
+
+    @jax.jit
+    def f(x):
+      y = x.reshape(1, 4, 128)
+      self.assertEqual(y.aval.sharding.spec, P('x', 'y', None))
+      z = y[..., :0]
+      self.assertEqual(z.aval.sharding.spec, P('x', 'y', None))
+      out = jnp.concatenate([y, z], axis=-1)
+      self.assertEqual(out.aval.sharding.spec, P('x', 'y', None))
+      return out
+
+    out = f(arr)
+    self.assertEqual(out.sharding, NamedSharding(mesh, P('x', 'y', None)))
+
+    @jax.jit
+    def merge(x):
+      out = x.reshape(1, 512)
+      self.assertEqual(out.aval.sharding.spec, P('x', 'y'))
+      return out
+
+    out2 = merge(out)
+    self.assertEqual(out2.sharding, NamedSharding(mesh, P('x', 'y')))
 
 
 @jtu.pytest_mark_if_available('multiaccelerator')
