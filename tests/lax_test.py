@@ -1180,6 +1180,15 @@ class LaxTest(jtu.JaxTestCase):
           raise SkipTest(
               f"The dot algorithm '{algorithm}' requires CUDA compute "
               "capability >= 8.0.")
+        # TF32 is not supported on Navi/RDNA GPUs. XLA only allows it on
+        # MI100+ (gfx9 CDNA) -- see xla/service/algorithm_util.cc.
+        if (algorithm in {lax.DotAlgorithmPreset.TF32_TF32_F32,
+                          lax.DotAlgorithmPreset.TF32_TF32_F32_X3}
+            and jtu.is_device_rocm()
+            and "Radeon" in jax.local_devices()[0].device_kind):
+          raise SkipTest(
+              f"The dot algorithm '{algorithm}' is not supported on "
+              "Navi/RDNA GPUs.")
       elif algorithm not in {
           lax.DotAlgorithmPreset.DEFAULT,
           lax.DotAlgorithmPreset.ANY_F8_ANY_F8_F32,
@@ -1189,15 +1198,6 @@ class LaxTest(jtu.JaxTestCase):
       }:
         raise SkipTest(
             f"The dot algorithm '{algorithm}' is not supported on GPU.")
-    if jtu.test_device_matches(["tpu"]):
-      if algorithm not in {
-          lax.DotAlgorithmPreset.DEFAULT,
-          lax.DotAlgorithmPreset.BF16_BF16_F32,
-          lax.DotAlgorithmPreset.BF16_BF16_F32_X3,
-          lax.DotAlgorithmPreset.BF16_BF16_F32_X6,
-      }:
-        raise SkipTest(
-            f"The dot algorithm '{algorithm}' is not supported on TPU."
         )
     lhs_shape = (3, 4)
     rhs_shape = (4, 3)
