@@ -72,7 +72,8 @@ from jax.errors import (UnexpectedTracerError, TracerIntegerConversionError,
 from jax.interpreters import ad
 from jax.interpreters import batching
 import jax.numpy as jnp
-from jax.sharding import PartitionSpec as P
+from jax.sharding import (PartitionSpec as P, AbstractMesh, AbstractDevice,
+                          AxisType)
 import numpy as np
 
 config.parse_flags_with_absl()
@@ -1382,27 +1383,29 @@ class JitTest(jtu.BufferDonationTestCase):
             "xla_gpu_auto_spmd_partitioning_memory_budget_ratio": 0.5,
         })(1.0)  # doesn't crash.
 
-  def test_optimization_level_compiler_option(self):
+  def test_effort_level_compiler_option(self):
     def f(x):
       return jnp.sqrt(x**2) + 1.0
 
     jit(
         f,
         compiler_options={
-            "optimization_level": config.EffortLevel.O1.value,
+            "optimization_level": jax.CompilerEffortLevel.O1,
+            "memory_fitting_level": jax.CompilerEffortLevel.O1,
         },
     )(
         1.0
     )  # doesn't crash.
 
-  def test_memory_fitting_level_compiler_option(self):
+  def test_effort_level_as_strings_compiler_option(self):
     def f(x):
       return jnp.sqrt(x**2) + 1.0
 
     jit(
         f,
         compiler_options={
-            "memory_fitting_level": config.EffortLevel.O0.value,
+            "optimization_level": "O0",
+            "memory_fitting_level": "O0",
         },
     )(
         1.0
@@ -3026,6 +3029,23 @@ class APITest(jtu.JaxTestCase):
     primal, tangent = jax.jvp(fun, (2.,), (1.,))
     self.assertAllClose(primal, np.int32(3))
     self.assertEqual(tangent, np.zeros((), dtype=float0))
+
+  @jtu.run_on_devices('cpu')
+  def test_lax_logistic(self):
+    arr = np.arange(4.)
+
+    @jax.jit
+    def f(x):
+      return jax.lax.logistic(x)
+
+    lowered = f.trace(arr).lower(lowering_platforms=('tpu',))
+    self.assertNotIn('stablehlo.logistic', lowered.as_text())
+
+    adev = AbstractDevice('TPU7x', 1, 'tpu')
+    am = AbstractMesh((1,), ('x',), (AxisType.Explicit,), abstract_device=adev)
+    with jax.sharding.use_abstract_mesh(am):
+      lowered = f.trace(arr).lower()
+      self.assertIn('stablehlo.logistic', lowered.as_text())
 
   def test_vjp_of_int_index(self):
     primal, fn_vjp = api.vjp(lambda x, i: x[i], np.ones(2)*2, 1)
