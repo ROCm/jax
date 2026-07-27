@@ -2263,7 +2263,10 @@ def _make_lengths_same(sharding, ndim):
   if ndim > len(pspec):
     return sharding.update(spec=pspec._normalized_spec_for_aval(ndim))
   if ndim < len(pspec):
-    assert all(s is None for s in pspec.partitions[ndim:]), (ndim, pspec)
+    if not all(s is None for s in pspec.partitions[ndim:]):
+      raise ValueError(
+          "Input's ndim is less than the length of PartitionSpec which is not"
+          f" allowed. Got input ndim={ndim} and pspec={pspec}")
     return sharding.update(spec=sharding.spec.update(
         partitions=pspec.partitions[:ndim]))
   assert False, "unreachable"
@@ -3953,7 +3956,11 @@ class ShapeDtypeStruct:
 
   def __init__(self, shape, dtype, *, sharding=None, weak_type=False,
                manual_axis_type=None, is_ref=False):
-    object.__setattr__(self, 'shape', tuple(shape))
+    shape = tuple(shape)
+    if any(s is None for s in shape):
+      raise ValueError('`shape` passed to `ShapeDtypeStruct` cannot have '
+                       f'None in it. Got {shape=}')
+    object.__setattr__(self, 'shape', shape)
     if dtype is None:
       raise ValueError("ShapeDtypeStruct: dtype must be specified.")
     dtype = dtype if dtypes.issubdtype(dtype, dtypes.extended) else np.dtype(dtype)

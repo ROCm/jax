@@ -1189,9 +1189,19 @@ def vmap(fun: F,
   def vmap_f(*args, **kwargs):
     nonlocal spmd_axis_name
     if isinstance(in_axes, tuple) and len(in_axes) != len(args):
-      raise ValueError("vmap in_axes must be an int, None, or a tuple of entries corresponding "
-                       "to the positional arguments passed to the function, "
-                       f"but got {len(in_axes)=}, {len(args)=}")
+      msg = ("vmap in_axes must be an int, None, or a tuple of entries "
+             "corresponding to the positional arguments passed to the "
+             f"function, but got {len(in_axes)=}, {len(args)=}.")
+      if kwargs:
+        msg += (" Note that the function was called with keyword arguments "
+                f"{list(kwargs)}, which the entries of a tuple in_axes never "
+                "correspond to: keyword arguments are always mapped along "
+                "their leading axis (axis 0). If that is the intended "
+                "mapping, make in_axes correspond to the positional "
+                "arguments only; otherwise pass the arguments positionally, "
+                "or bind unmapped keyword arguments with functools.partial "
+                "before applying vmap.")
+      raise ValueError(msg)
 
     args_flat, in_tree  = tree_flatten((args, kwargs), is_leaf=batching.is_vmappable)
     dbg = debug_info("vmap", fun, args, kwargs)
@@ -2042,14 +2052,14 @@ def linear_transpose(fun: Callable, *primals, reduce_axes=()) -> Callable:
                    debug_info=debug_info("linear_transpose", fun, primals, {})),
       in_tree)
   in_avals = [shaped_abstractify(x) for x in primals_flat]
-  in_dtypes = map(lambda a: a.dtype, in_avals)
+  in_dtypes = [a.dtype for a in in_avals if not a.is_high]
 
   in_pvals = map(pe.PartialVal.unknown, in_avals)
   jaxpr, out_pvals, const = pe.trace_to_jaxpr_nounits(flat_fun, in_pvals,
                                                       instantiate=True)
   jaxpr, _ = pe.dce_jaxpr(jaxpr, [True] * len(jaxpr.outvars), True)
   out_avals, _ = unzip2(out_pvals)
-  out_dtypes = map(lambda a: a.dtype, out_avals)
+  out_dtypes = [a.dtype for a in out_avals if not a.is_high]
   if not (all(dtypes.issubdtype(d, np.inexact) for d in in_dtypes + out_dtypes)
           or all(dtypes.issubdtype(d, np.integer)
                  for d in in_dtypes + out_dtypes)):

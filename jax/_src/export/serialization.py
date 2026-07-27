@@ -54,8 +54,10 @@ SerT = TypeVar("SerT")
 # Version 2, Dec 16th, 2023, adds the f0 dtype.
 # Version 3, October 16th, 2024, adds serialization for namedtuple and custom types
 #   This version is backwards compatible with Version 2.
+#   This version is beyond the 6 months compat window and not supported anymore.
 # Version 4, April 7th, 2025, adds serialization for PRNGs key types.
 #   This version is backwards compatible with Version 2 and 3.
+#   This version is beyond the 6 months compat window and not supported anymore.
 # Version 5, November 23rd, 2025, adds serialization for aval memory_space,
 #   upgrade num_devices to a 32 bit value.
 #   This version is backwards compatible with Version 2 to 4.
@@ -223,12 +225,8 @@ def _serialize_exported(
               for s in exp._out_named_shardings], dtype=np.uint32))
 
   ser_flatbuf.ExportedStart(builder)
-  # TODO(necula): we cannot really store the actual serialization_version
-  # in the flatbuffer because prior to 11/25/2025 deserializers checked
-  # if the version is 2 or 3. I have now removed that check, but for the
-  # sake of old deserializers we can only store version 3. Starting
-  # on January 2026 we can store the actual version.
-  ser_flatbuf.ExportedAddSerializationVersion(builder, 3)
+  # Started saving the actual serialization version on 7/27/2026.
+  ser_flatbuf.ExportedAddSerializationVersion(builder, _SERIALIZATION_VERSION)
   ser_flatbuf.ExportedAddFunctionName(builder, fun_name)
   ser_flatbuf.ExportedAddInTree(builder, in_tree)
   ser_flatbuf.ExportedAddInAvals(builder, in_avals)
@@ -279,6 +277,9 @@ def _serialize_array(
 
 
 def _deserialize_exported(exp: ser_flatbuf.Exported) -> _export.Exported:
+  # TODO(b/539419341): check the minimum serialization version.
+  # We only started to save the actual serialization version on 7/27/2026, so
+  # we can add this check after 1/27/2027.
   scope = shape_poly.SymbolicScope(())  # TODO(necula): serialize the constraints
 
   unique_avals = [
@@ -301,10 +302,14 @@ def _deserialize_exported(exp: ser_flatbuf.Exported) -> _export.Exported:
 
   fun_name = exp.FunctionName().decode("utf-8")
 
-  # TODO(necula): remove the fallback to NrDevicesShort and mark
-  # the field "deprecated" once we abandon the old
-  # serialization format (6 months after 11/24/2025).
-  nr_devices = exp.NrDevices() or exp.NrDevicesShort()
+  nr_devices = exp.NrDevices()
+  if nr_devices == 0 and exp.NrDevicesShort() > 0:
+    raise ValueError(
+        "Exported being deserialized seems to be from before 11/25/2025 and "
+        "cannot be deserialized anymore because it is older than the 6-month "
+        "backward-compatibility window. The Exported has serialization version "
+        f"{exp.SerializationVersion()}."
+    )
   def sharding_by_idx(idx):
     if idx == 0:
       return None

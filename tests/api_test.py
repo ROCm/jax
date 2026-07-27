@@ -47,6 +47,7 @@ import jax
 from jax import device_put, float0, grad, hessian, jacfwd, jacrev, jit
 from jax import lax
 from jax import tree_util
+from jax._src import ad_checkpoint
 from jax._src import api, api_util, dtypes, lib
 from jax._src import array
 from jax._src import config
@@ -3024,6 +3025,10 @@ class APITest(jtu.JaxTestCase):
     _, out_tangent = api.jvp(jax.jit(lambda x: x+1), primals, tangents)
     self.assertEqual(out_tangent, np.zeros(shape=(), dtype=float0))
 
+  def test_none_in_sds_shape_error(self):
+    with self.assertRaisesRegex(ValueError, "`shape`.*cannot have None."):
+      jax.ShapeDtypeStruct((None, 2), np.int32)
+
   def test_jvp_of_convert_element_type(self):
     fun = lambda x: x.astype(np.int32) + 1
     primal, tangent = jax.jvp(fun, (2.,), (1.,))
@@ -3385,6 +3390,32 @@ class APITest(jtu.JaxTestCase):
         re.escape("vmap in_axes must be an int, None, or a tuple of entries corresponding to the "
                   "positional arguments passed to the function, but got len(in_axes)=2, len(args)=1")):
       jax.vmap(lambda x: x['a'], in_axes=(0, {'a': 0}))({'a': jnp.zeros((3, 3))})
+
+  def test_vmap_in_axes_tuple_with_kwargs_error(self):
+    # https://github.com/jax-ml/jax/issues/7465
+    def f(a, b, c):
+      return a + b + c
+
+    with self.assertRaisesRegex(
+        ValueError,
+        re.escape("but got len(in_axes)=3, len(args)=0. Note that the function "
+                  "was called with keyword arguments ['a', 'b', 'c'], which "
+                  "the entries of a tuple in_axes never correspond to: "
+                  "keyword arguments are always mapped along their leading "
+                  "axis (axis 0)")):
+      jax.vmap(f, in_axes=(0, 0, None))(
+          a=jnp.array([1, 2]), b=jnp.array([2, 4]), c=0.5)
+
+  def test_vmap_in_axes_tuple_with_kwonly_error(self):
+    # https://github.com/jax-ml/jax/issues/7465
+    def g(a, *, b):
+      return a @ b
+
+    with self.assertRaisesRegex(
+        ValueError,
+        re.escape("but got len(in_axes)=2, len(args)=1. Note that the function "
+                  "was called with keyword arguments ['b']")):
+      jax.vmap(g, in_axes=(None, 0))(jnp.ones((2, 4)), b=jnp.ones((10, 4, 2)))
 
   def test_vmap_in_axes_tree_prefix_error(self):
     # https://github.com/jax-ml/jax/issues/795
@@ -5218,14 +5249,17 @@ class APITest(jtu.JaxTestCase):
                     modes=['rev'], atol=1e-3, rtol=1e-3)
 
   def test_remat_of_jit_input_to_output_forwarding(self):
-    @partial(jax.remat, policy=lambda *_, **__: True)
-    def f(x):
-      y = jnp.ones(2, 'float32')
-      x = jax.jit(lambda: x * y)()
-      x = jax.jit(lambda: x * y)()
-      return x
-    res = saved_residuals(f, jnp.float32(3.))
-    self.assertLen(res, 1)
+    # Old-remat-only: remat3 doesn't recognize bare-callable policies, treating
+    # them as full remat, under which this function saves no residuals.
+    with config.remat3(False):
+      @partial(jax.remat, policy=lambda *_, **__: True)
+      def f(x):
+        y = jnp.ones(2, 'float32')
+        x = jax.jit(lambda: x * y)()
+        x = jax.jit(lambda: x * y)()
+        return x
+      res = saved_residuals(f, jnp.float32(3.))
+      self.assertLen(res, 1)
 
   @unittest.skip # TODO(dougalm): figure out with Matt what to do with this feature
   def test_inner_jit_forwarded_consts_stay_const(self):
@@ -6346,6 +6380,42 @@ class RematTest(jtu.JaxTestCase):
     # 2 calls made while transposing g, no reevaluation for transposition of f
     with assertEvals(2):
       vjp(v)
+
+  def test_remat_recursive_checkpoint_recompute_counts(self):
+    add_one_p = core.Primitive('add_one')
+    num_evals = 0
+
+    def add_one_impl(x):
+      nonlocal num_evals
+      num_evals += 1
+      return x + 1
+    add_one_p.def_impl(add_one_impl)
+    add_one_p.def_abstract_eval(lambda x: x)
+
+    def add_one_jvp(pin, tin):
+      pout = add_one_p.bind(pin[0])
+      return pout, pout * tin[0]
+    ad.primitive_jvps[add_one_p] = add_one_jvp
+
+    def recursive_checkpoint(funs):
+      if len(funs) == 1:
+        return funs[0]
+      elif len(funs) == 2:
+        f1, f2 = funs
+        return lambda x: f1(f2(x))
+      else:
+        f1 = recursive_checkpoint(funs[:len(funs)//2])
+        f2 = recursive_checkpoint(funs[len(funs)//2:])
+        return lambda x: f1(jax.checkpoint(f2)(x))
+
+    for n, expected_bwd_evals in [(4, 2), (8, 8), (16, 24)]:
+      f = recursive_checkpoint([add_one_p.bind] * n)
+      num_evals = 0
+      _, vjp = jax.vjp(f, np.ones(()))
+      self.assertEqual(num_evals, n)
+      num_evals = 0
+      vjp(np.ones(()))
+      self.assertEqual(num_evals, expected_bwd_evals)
 
   @parameterized.named_parameters(
       {"testcase_name": f"{suffix}", "remat": remat}
@@ -8028,6 +8098,24 @@ class Remat3Test(RematTest):
     self.assertNotIn('cos', fwd_str)
     self.assertIn('cos ', bwd_str)
     jtu.check_grads(f, (3.,), order=2, modes=['rev'])
+
+  def test_remat_dce_input_to_output_forwarding(self):
+    traced = jax.jit(lambda x, y: (x, x * y)).trace(
+        jnp.float32(1.), jnp.float32(2.))
+    used, rem = ad_checkpoint.dce(traced, None)
+    self.assertEqual(used, [True, True])
+    self.assertLen(rem.func.args[0].outvars, 1)
+    self.assertAllClose(rem(jnp.float32(3.), jnp.float32(4.)), (3., 12.),
+                        check_dtypes=False)
+
+    # a forwarding source is kept even if the pruned jaxpr doesn't use it
+    traced = jax.jit(lambda x, y: (x, y * y)).trace(
+        jnp.float32(1.), jnp.float32(2.))
+    used, rem = ad_checkpoint.dce(traced, None)
+    self.assertEqual(used, [True, True])
+    self.assertLen(rem.func.args[0].invars, 1)
+    self.assertAllClose(rem(jnp.float32(3.), jnp.float32(4.)), (3., 16.),
+                        check_dtypes=False)
 
 
 @jtu.with_config(jax_pprint_use_color=False)

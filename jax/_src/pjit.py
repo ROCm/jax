@@ -673,7 +673,7 @@ def _infer_input_type(fun: Callable, dbg_fn: Callable[[], core.DebugInfo],
       "An overflow was encountered while parsing an argument to a jitted "
       f"computation, whose {arg_path}. Got {type(x)} with value {x}"
     ) from None
-  except TypeError:
+  except TypeError as e:
     dbg = dbg_fn()
     arg_description = f"path {dbg.arg_names[i] if dbg.arg_names is not None else 'unknown'}"
     raise TypeError(
@@ -683,7 +683,7 @@ def _infer_input_type(fun: Callable, dbg_fn: Callable[[], core.DebugInfo],
       "This typically means that a jit-wrapped function was called with a non-array"
       " argument, and this argument was not marked as static using the"
       " static_argnums or static_argnames parameters of jax.jit."
-    ) from None
+    ) from e
   if config.mutable_array_checks.value:
     check_no_aliased_ref_args(dbg_fn, avals, explicit_args)
   return tuple(avals)

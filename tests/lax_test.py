@@ -3747,6 +3747,14 @@ class LaxTest(jtu.JaxTestCase):
     g = jax.grad(f)(5.)  # doesn't crash
     self.assertAllClose(g, 3., check_dtypes=False)
 
+  def test_optimization_barrier_backward_pass_zeros(self):
+    def f(x):
+      y = jnp.log(x)
+      y, x = jax.lax.optimization_barrier((y, x))
+      return x
+    not_nan = jax.grad(f)(0.)
+    self.assertFalse(jnp.isnan(not_nan))
+
   def test_shape_as_value_handles_static_shapes(self):
     result = lax.shape_as_value(())
     self.assertArraysEqual(result, lax.full((0,), np.array(0, np.int32)))
