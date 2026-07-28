@@ -180,9 +180,9 @@ jobs:
           runner: ["amd-do-linux.jax.gpu.gfx950.1"]
           artifact: ["jax-rocm-plugin", "jax-rocm-pjrt"]
           python: ["3.12", "3.13", "3.14"]
+          # FLAKE-HUNT: build only TheRock 7.14 (skip therock-latest/7.15).
           rocm: [
             {label: "TheRock 7.14",   wheel-version: "7", release-version: "therock-7.14",   manylinux-image: "ghcr.io/rocm/jax-manylinux_2_28-therock-7.14:latest"},
-            {label: "TheRock latest", wheel-version: "7", release-version: "therock-latest", manylinux-image: "ghcr.io/rocm/jax-manylinux_2_28-therock-latest:latest"},
           ]
           exclude:
             - artifact: "jax-rocm-pjrt"
@@ -214,9 +214,9 @@ jobs:
         matrix:
           runner: ["amd-do-linux.jax.gpu.gfx950.1", "amd-do-linux.jax.gpu.gfx950.4", "amd-do-linux.jax.gpu.gfx950.8"]
           python: ["3.12", "3.13", "3.14"]
+          # FLAKE-HUNT: 7.14 only (skip therock-latest/7.15). All runner x python combos kept.
           rocm: [
             {label: "TheRock 7.14",   wheel-version: "7", release-version: "therock-7.14",   tag: "therock-7.14"},
-            {label: "TheRock latest", wheel-version: "7", release-version: "therock-latest", tag: "therock-latest"},
           ]
     name: "Pytest ROCm (${{ matrix.rocm.label }})"
     with:
@@ -231,7 +231,8 @@ jobs:
       s3_download_uri: 's3://jax-ci-amd/rocm-wheels/${{ github.repository }}/${{ github.ref_name }}/${{ matrix.rocm.release-version }}/wheel-tests-nightly/${{ github.run_number }}/${{ github.run_attempt }}'
 
   run-bazel-test-rocm:
-    if: ${{ !cancelled() && (github.repository_owner == 'jax-ml' || github.repository_owner == 'ROCm') }}
+    # FLAKE-HUNT: bazel ROCm disabled for this run (pytest-only focus).
+    if: false
     needs: [build-rocm-artifacts]
     permissions:
       id-token: write

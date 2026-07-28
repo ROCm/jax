@@ -115,6 +115,27 @@ export XLA_PYTHON_CLIENT_PREALLOCATE=false
 export XLA_FLAGS="--xla_gpu_force_compilation_parallelism=1 --xla_gpu_enable_nccl_comm_splitting=false --xla_gpu_enable_command_buffer="
 
 # ==============================================================================
+# FLAKE-HUNT LOGGING (branch magaonka/pytest) -- capture WHAT the flaked test did.
+# Goal: when a test flakes, its captured log should tell us WHICH GPU kernel /
+# hipBLASLt solution / autotuner config was in play (our leading hypotheses:
+# autotuner-selected-bad-kernel + hipBLASLt GSU split-K).
+#
+# Design note: these are mostly COMPILE-TIME / autotune-time logs (low runtime
+# perturbation), chosen so the timing-dependent flake still occurs. A full
+# AMD_LOG_LEVEL=4 per-HIP-call firehose across a 16-worker full suite would both
+# balloon logs to 10s of GB AND likely SUPPRESS the race (Heisenberg) -- so
+# AMD_LOG_LEVEL defaults to 3 here and is overridable from the workflow env.
+#   - TF_CPP_VMODULE: XLA autotuner decision + hipBLASLt candidate/winner.
+#   - TENSILE_DB=0x6: hipBLASLt/Tensile solution selection incl. the GSU
+#     "no matching solution" fallback (sol-tag).
+#   - AMD_LOG_LEVEL: HIP error/fault context for crash-type flakes.
+# ==============================================================================
+export AMD_LOG_LEVEL="${AMD_LOG_LEVEL:-3}"
+export TF_CPP_MIN_LOG_LEVEL=0
+export TF_CPP_VMODULE="autotuner=2,config_assigner=2,config_runner=2,config_selector=2,gpu_profiler=1,hipblaslt=2"
+export TENSILE_DB=0x6
+
+# ==============================================================================
 # Run tests
 # ==============================================================================
 
@@ -132,7 +153,7 @@ mkdir -p test-artifacts
 set +e
 
 # Run single-accelerator tests in parallel
-"$JAXCI_PYTHON" -m pytest -n $num_processes --tb=short \
+"$JAXCI_PYTHON" -m pytest -n $num_processes -v -rA --tb=long \
 --json-report --json-report-file=${LOGS_DIR}/pytest_results_single.json \
 --junitxml=test-artifacts/junit-single.xml \
 -m "not multiaccelerator" \
@@ -147,7 +168,7 @@ if [[ $gpu_count -gt 1 ]]; then
   # Run multi-accelerator tests across all GPUs without xdist.
   unset JAX_ENABLE_ROCM_XDIST
 
-  "$JAXCI_PYTHON" -m pytest --tb=short \
+  "$JAXCI_PYTHON" -m pytest -v -rA --tb=long \
     --json-report --json-report-file=${LOGS_DIR}/pytest_results_multi.json \
     --junitxml=test-artifacts/junit-multi.xml \
     -m "multiaccelerator" \
