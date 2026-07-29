@@ -104,7 +104,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: ["amd-do-linux.jax.gpu.gfx950.1"]
+        runner: ["amd-do-linux.jax.gpu.gfx950.1-test-exclusion"]
         artifact: ["jax-rocm-plugin", "jax-rocm-pjrt"]
         python: ["3.11", "3.12", "3.13", "3.14"]
         rocm: ${{ fromJSON(needs.therock-config.outputs.build-matrix) }}
@@ -140,7 +140,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: ["amd-do-linux.jax.gpu.gfx950.1", "amd-do-linux.jax.gpu.gfx950.4", "amd-do-linux.jax.gpu.gfx950.8"]
+        runner: ["amd-do-linux.jax.gpu.gfx950.1-test-exclusion", "amd-do-linux.jax.gpu.gfx950.4", "amd-do-linux.jax.gpu.gfx950.8"]
         python: ["3.11", "3.12", "3.13", "3.14"]
         rocm: ${{ fromJSON(needs.therock-config.outputs.test-matrix) }}
     name: "Pytest ROCm (${{ matrix.rocm.label }})"
@@ -165,7 +165,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: ["amd-do-linux.jax.gpu.gfx950.1", "amd-do-linux.jax.gpu.gfx950.8"]
+        runner: ["amd-do-linux.jax.gpu.gfx950.1-test-exclusion", "amd-do-linux.jax.gpu.gfx950.8"]
         python: ["3.11", "3.12", "3.13", "3.14"]
         rocm: ${{ fromJSON(needs.therock-config.outputs.test-matrix) }}
         enable-x64: [0]
