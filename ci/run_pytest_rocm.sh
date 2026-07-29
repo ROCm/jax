@@ -23,6 +23,10 @@
 # -o allexport: export all functions and variables to be available to subscripts
 set -exu -o history -o allexport
 
+# Wall clock for the whole step, used to bound the flake-hunt stress phase below
+# against the workflow's 120 min step timeout.
+script_start=$(date +%s)
+
 # Source default JAXCI environment variables.
 source ci/envs/default.env
 
@@ -259,9 +263,74 @@ if [[ ${#failed_nodes[@]} -gt 0 ]]; then
   done
 fi
 
+# ==============================================================================
+# FLAKE-HUNT: targeted stress of the data-movement family.
+#
+# The full suite is a poor sampler: ~3 h per dispatch for roughly one flake, and
+# each flake lands on a different test. But jobs finish in 15-53 min against a
+# 120 min timeout, so an hour of GPU time per job is going unused.
+#
+# So after the main suite, spend that headroom re-running only the suspect
+# family (sparse BCOO reshape/transpose, gather/scatter indexing, batching,
+# vmap) under the same xdist contention, with the same forensics attached. That
+# raises suspect-op executions per job by ~4 orders of magnitude and, unlike a
+# scattered full-suite flake, a hit here is immediately interpretable as H6.
+#
+# Like the rerun phase, this never changes the exit code.
+# ==============================================================================
+STRESS_MINUTES="${STRESS_MINUTES:-40}"
+stress_iters=0
+stress_failed_iters=0
+stress_files=(
+  tests/sparse_bcoo_bcsr_test.py
+  tests/lax_numpy_indexing_test.py
+  tests/batching_test.py
+  tests/lax_vmap_test.py
+)
+
+# xdist GPU pinning is unset by the multi-accelerator branch above; the stress
+# loop wants it back so workers are spread over the GPUs exactly as the main
+# single-accelerator suite had them.
+export JAX_ENABLE_ROCM_XDIST="$gpu_count"
+
+# Never start an iteration that could run past 95 min into the 120 min step.
+stress_deadline=$(( script_start + 95 * 60 ))
+own_deadline=$(( $(date +%s) + STRESS_MINUTES * 60 ))
+if [[ $own_deadline -lt $stress_deadline ]]; then
+  stress_deadline=$own_deadline
+fi
+
+while [[ $(date +%s) -lt $stress_deadline ]]; do
+  stress_iters=$((stress_iters + 1))
+  stress_log="${LOGS_DIR}/stress_${stress_iters}.log"
+  JAX_FLAKE_FORENSICS_TAG="stress${stress_iters}" \
+  timeout 900 "$JAXCI_PYTHON" -m pytest -n $num_processes -q --tb=long \
+    -p no:cacheprovider -m "not multiaccelerator" \
+    "${stress_files[@]}" > "$stress_log" 2>&1
+  stress_rc=$?
+  echo "FLAKE-HUNT stress iteration ${stress_iters}: rc=${stress_rc} ($(tail -n 1 "$stress_log"))"
+  if [[ $stress_rc -ne 0 ]]; then
+    stress_failed_iters=$((stress_failed_iters + 1))
+    # Only the first couple of failures are echoed in full; a persistent
+    # failure would otherwise flood a job log that is already ~20 MB.
+    if [[ $stress_failed_iters -le 2 ]]; then
+      echo "--- stress iteration ${stress_iters} failure detail ---"
+      grep -a "short test summary info" -A 20 "$stress_log" || true
+      grep -a ">>>FLAKE-FORENSICS<<<" -A 45 "$stress_log" || true
+    fi
+    # Three failing iterations means this is reproducible, not a flake: stop
+    # burning the budget and leave the machine to the next job.
+    if [[ $stress_failed_iters -ge 3 ]]; then
+      echo "FLAKE-HUNT stress: 3 failing iterations, stopping stress loop"
+      break
+    fi
+  fi
+done
+
 echo ">>>FLAKE-FORENSICS<<< SUMMARY failed=${#failed_nodes[@]}" \
      "transient=${rerun_transient} deterministic=${rerun_deterministic}" \
      "not_rerun=${rerun_skipped}" \
+     "stress_iters=${stress_iters} stress_failed_iters=${stress_failed_iters}" \
      "single_rc=${first_cmd_retval} multi_rc=${second_cmd_retval}"
 
 # Exit with failure if either command fails.
