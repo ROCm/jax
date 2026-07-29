@@ -133,6 +133,15 @@ export AMD_LOG_LEVEL="${AMD_LOG_LEVEL:-1}"
 export HIPBLASLT_LOG_MASK="${HIPBLASLT_LOG_MASK:-1}"
 export TF_CPP_MIN_LOG_LEVEL=0
 
+# v3 additions, all failure-triggered so passing tests are untouched:
+#   - conftest flake forensics: index structure of the mismatching elements
+#     (tile/wavefront alignment, constant shift) + which tests were co-resident
+#     on the GPU during the failure. Grep the job log for >>>FLAKE-FORENSICS<<<.
+#   - post-suite rerun of whatever failed, to separate a transient race from a
+#     deterministic bug (see below).
+export JAX_FLAKE_FORENSICS=1
+export JAX_FLAKE_FORENSICS_DIR="logs/forensics"
+
 # ==============================================================================
 # Run tests
 # ==============================================================================
@@ -151,6 +160,7 @@ mkdir -p test-artifacts
 set +e
 
 # Run single-accelerator tests in parallel
+JAX_FLAKE_FORENSICS_TAG=single \
 "$JAXCI_PYTHON" -m pytest -n $num_processes -v --tb=long \
 --json-report --json-report-file=${LOGS_DIR}/pytest_results_single.json \
 --junitxml=test-artifacts/junit-single.xml \
@@ -166,6 +176,7 @@ if [[ $gpu_count -gt 1 ]]; then
   # Run multi-accelerator tests across all GPUs without xdist.
   unset JAX_ENABLE_ROCM_XDIST
 
+  JAX_FLAKE_FORENSICS_TAG=multi \
   "$JAXCI_PYTHON" -m pytest -v --tb=long \
     --json-report --json-report-file=${LOGS_DIR}/pytest_results_multi.json \
     --junitxml=test-artifacts/junit-multi.xml \
@@ -180,6 +191,78 @@ else
   echo "Skipping multi-accelerator tests (only $gpu_count GPU detected)"
   second_cmd_retval=0
 fi
+
+# ==============================================================================
+# FLAKE-HUNT: reproduce whatever failed, on the now-idle GPU.
+#
+# The whole SPX wrong-value family has never reproduced on an idle machine, but
+# that has only ever been checked by hand, after the fact. Re-running the exact
+# failed node ids here, sequentially (no xdist, no contention), three times,
+# classifies every failure automatically as TRANSIENT (race, needs contention)
+# or DETERMINISTIC (a real bug) while we still have the machine.
+#
+# Deliberately does NOT affect the exit code: the main suite stays the clean
+# data point, and the classification is read from the summary banner instead.
+# ==============================================================================
+rerun_transient=0
+rerun_deterministic=0
+rerun_skipped=0
+# Hard caps so a job full of genuine failures can never approach the 120 min
+# workflow timeout: at most 12 node ids, 3 attempts each, 10 min per attempt,
+# and a 20 min wall-clock budget for the whole rerun phase.
+rerun_deadline=$(( $(date +%s) + 20 * 60 ))
+
+mapfile -t failed_nodes < <("$JAXCI_PYTHON" - <<'PYEOF'
+import glob, json, sys
+seen = []
+for path in glob.glob("logs/pytest_results_*.json"):
+  try:
+    with open(path) as f:
+      data = json.load(f)
+  except Exception:
+    continue
+  for test in data.get("tests", []):
+    if test.get("outcome") == "failed":
+      seen.append(test["nodeid"])
+sys.stdout.write("".join(f"{nodeid}\n" for nodeid in dict.fromkeys(seen)))
+PYEOF
+)
+
+if [[ ${#failed_nodes[@]} -gt 0 ]]; then
+  echo "=== FLAKE-HUNT: reproducing ${#failed_nodes[@]} failed test(s) on idle GPU ==="
+  node_index=0
+  for node in "${failed_nodes[@]}"; do
+    node_index=$((node_index + 1))
+    if [[ $node_index -gt 12 || $(date +%s) -ge $rerun_deadline ]]; then
+      rerun_skipped=$((rerun_skipped + 1))
+      continue
+    fi
+    reproduced=0
+    for attempt in 1 2 3; do
+      if timeout 600 "$JAXCI_PYTHON" -m pytest -v --tb=line -p no:cacheprovider \
+          "$node" > "${LOGS_DIR}/rerun_attempt.log" 2>&1; then
+        echo "FLAKE-HUNT rerun ${attempt}/3 PASSED: $node"
+      else
+        reproduced=$((reproduced + 1))
+        echo "FLAKE-HUNT rerun ${attempt}/3 FAILED: $node"
+        tail -n 20 "${LOGS_DIR}/rerun_attempt.log"
+      fi
+      cat "${LOGS_DIR}/rerun_attempt.log" >> "${LOGS_DIR}/rerun_failed_nodes.log"
+    done
+    if [[ $reproduced -eq 0 ]]; then
+      rerun_transient=$((rerun_transient + 1))
+      echo ">>>FLAKE-FORENSICS<<< TRANSIENT (0/3 reproduced idle+sequential): $node"
+    else
+      rerun_deterministic=$((rerun_deterministic + 1))
+      echo ">>>FLAKE-FORENSICS<<< DETERMINISTIC (${reproduced}/3 reproduced idle+sequential): $node"
+    fi
+  done
+fi
+
+echo ">>>FLAKE-FORENSICS<<< SUMMARY failed=${#failed_nodes[@]}" \
+     "transient=${rerun_transient} deterministic=${rerun_deterministic}" \
+     "not_rerun=${rerun_skipped}" \
+     "single_rc=${first_cmd_retval} multi_rc=${second_cmd_retval}"
 
 # Exit with failure if either command fails.
 if [[ $first_cmd_retval -ne 0 ]]; then
