@@ -27,7 +27,15 @@ logger = logging.getLogger(__name__)
 
 # rocm_plugin_extension locates inside jaxlib. `jaxlib` is for testing without
 # preinstalled jax rocm plugin packages.
-for pkg_name in ['jax_rocm7_plugin', 'jax_rocm60_plugin', 'jaxlib.rocm']:
+_pkg_names = [
+    'jax_rocm10_plugin', 'jax_rocm7_plugin', 'jax_rocm60_plugin', 'jaxlib.rocm'
+]
+# jax_plugins.xla_rocm<major> always ships paired with jax_rocm<major>_plugin.
+_rocm_major = (__package__ or '').rpartition('xla_rocm')[2]
+if _rocm_major.isdigit() and f'jax_rocm{_rocm_major}_plugin' not in _pkg_names:
+  _pkg_names.insert(0, f'jax_rocm{_rocm_major}_plugin')
+
+for pkg_name in _pkg_names:
   try:
     rocm_plugin_extension = importlib.import_module(
         f'{pkg_name}.rocm_plugin_extension'
