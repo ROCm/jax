@@ -86,7 +86,7 @@ test:rocm_rbe_dynamic --dynamic_local_strategy=worker,standalone,local
 test:rocm_rbe_dynamic --dynamic_remote_strategy=remote
 # Delay before starting local test execution (ms) - adjust to prefer remote or local
 # Lower values = more local execution, higher values = more remote execution
-test:rocm_rbe_dynamic --experimental_local_execution_delay=1000
+test:rocm_rbe_dynamic --experimental_local_execution_delay=1
 # Maximum number of test jobs to run locally in parallel (50% of available CPUs)
 test:rocm_rbe_dynamic --local_resources=cpu=HOST_CPUS*0.5
 
