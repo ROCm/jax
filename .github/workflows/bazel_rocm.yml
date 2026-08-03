@@ -207,6 +207,7 @@ jobs:
           JAXCI_GATE_TARGETS_FILE: ${{ inputs.gate-targets-file }}
           GPU_CONFIG: ${{ inputs.gpu-config }}
         run: |
+          sudo chmod -R a+rw /var
           ./ci/run_bazel_test_rocm_rbe.sh  \
             --config="${GPU_CONFIG}" \
             --local_test_jobs=4 \
