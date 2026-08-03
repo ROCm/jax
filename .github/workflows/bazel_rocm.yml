@@ -114,17 +114,17 @@ jobs:
         # Explicitly set the shell to bash
         shell: bash
     runs-on: ${{ inputs.runner }}
-    # container:
-    #   image: ghcr.io/rocm/jax-dev-ubu24.${{ inputs.rocm-tag }}:latest  # zizmor: ignore[unpinned-images]
-    #   volumes:
-    #     - /data:/data
-    #   options: >-
-    #     --device=/dev/kfd
-    #     --device=/dev/dri
-    #     --security-opt seccomp=unconfined
-    #     --group-add video
-    #     --shm-size 64G
-    #     --env-file /etc/podinfo/gha-gpu-isolation-settings
+    container:
+      image: ghcr.io/rocm/jax-dev-ubu24.${{ inputs.rocm-tag }}:latest  # zizmor: ignore[unpinned-images]
+      volumes:
+        - /data:/data
+      options: >-
+        --device=/dev/kfd
+        --device=/dev/dri
+        --security-opt seccomp=unconfined
+        --group-add video
+        --shm-size 64G
+        --env-file /etc/podinfo/gha-gpu-isolation-settings
 
     env:
       JAXCI_CLONE_MAIN_XLA: ${{ inputs.clone_main_xla }}
@@ -207,8 +207,6 @@ jobs:
           JAXCI_GATE_TARGETS_FILE: ${{ inputs.gate-targets-file }}
           GPU_CONFIG: ${{ inputs.gpu-config }}
         run: |
-          sudo chmod -R a+rw /var
-          sudo rm -rf /var/lock
           ./ci/run_bazel_test_rocm_rbe.sh  \
             --config="${GPU_CONFIG}" \
             --local_test_jobs=4 \
