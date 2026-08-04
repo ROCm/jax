@@ -221,9 +221,49 @@ jobs:
       s3_upload_uri: 's3://jax-ci-amd/rocm-wheels/${{ github.repository }}/${{ github.ref_name }}/${{ matrix.rocm.release-version }}/wheel-tests-nightly/${{ github.run_number }}/${{ github.run_attempt }}'
       git_commit: ${{ inputs.git_commit }}
 
+  # Upstream CI frequently stops publishing jax/jaxlib nightly wheels to GCS.
+  # On the ROCm fork, build the base jax and jaxlib wheels ourselves on the same
+  # runners as the ROCm plugin/pjrt wheels and upload them to the same S3 prefix,
+  # so the ROCm test legs can consume them instead of the (stale) GCS bucket.
+  build-rocm-jax-jaxlib:
+    if: github.repository_owner == 'ROCm'
+    uses: ./.github/workflows/build_rocm_artifacts.yml
+    permissions:
+      id-token: write
+      contents: read
+      actions: read
+    strategy:
+        fail-fast: false
+        matrix:
+          runner: ["amd-do-linux.jax.cpu"]
+          artifact: ["jax", "jaxlib"]
+          python: ["3.12", "3.13", "3.14"]
+          rocm: [
+            {label: "TheRock 7.14.0", wheel-version: "7", release-version: "7.14.0", manylinux-image: "ghcr.io/rocm/jax-manylinux_2_28-therock-7.14:latest" },
+            {label: "TheRock latest", wheel-version: "10", release-version: "therock-latest", manylinux-image: "ghcr.io/rocm/jax-manylinux_2_28-therock-latest:latest"},
+          ]
+          exclude:
+            # jax is a pure-python (py3-none-any) wheel; build it once per ROCm
+            # variant rather than once per Python version.
+            - artifact: "jax"
+              python: "3.13"
+            - artifact: "jax"
+              python: "3.14"
+    name: "Build ROCm jax/jaxlib (${{ matrix.rocm.label }})"
+    with:
+      runner: ${{ matrix.runner }}
+      artifact: ${{ matrix.artifact }}
+      python: ${{ matrix.python }}
+      rocm-version: ${{ matrix.rocm.wheel-version }}
+      rocm-release-version: ${{ matrix.rocm.release-version }}
+      manylinux-image: ${{ matrix.rocm.manylinux-image }}
+      clone_main_xla: 0
+      upload_artifacts_to_s3: true
+      s3_upload_uri: 's3://jax-ci-amd/rocm-wheels/${{ github.repository }}/${{ github.ref_name }}/${{ matrix.rocm.release-version }}/wheel-tests-nightly/${{ github.run_number }}/${{ github.run_attempt }}'
+
   run-pytest-rocm:
     if: ${{ !cancelled() && (github.repository_owner == 'jax-ml' || github.repository_owner == 'ROCm') }}
-    needs: [build-rocm-artifacts]
+    needs: [build-rocm-artifacts, build-rocm-jax-jaxlib]
     permissions:
       id-token: write
       contents: read
@@ -250,10 +290,13 @@ jobs:
       gcs_download_uri: ${{inputs.gcs_download_uri}}
       s3_download_uri: 's3://jax-ci-amd/rocm-wheels/${{ github.repository }}/${{ github.ref_name }}/${{ matrix.rocm.release-version }}/wheel-tests-nightly/${{ github.run_number }}/${{ github.run_attempt }}'
       git_commit: ${{ inputs.git_commit }}
+      # On the ROCm fork, use the jax/jaxlib wheels built above (S3) instead of
+      # the upstream GCS nightly bucket, which is frequently stale/broken.
+      jax-jaxlib-source: ${{ github.repository_owner == 'ROCm' && 's3' || 'gcs' }}
 
   run-bazel-test-rocm:
     if: ${{ !cancelled() && (github.repository_owner == 'jax-ml' || github.repository_owner == 'ROCm') }}
-    needs: [build-rocm-artifacts]
+    needs: [build-rocm-artifacts, build-rocm-jax-jaxlib]
     permissions:
       id-token: write
       contents: read
@@ -279,6 +322,9 @@ jobs:
       gcs_download_uri: ${{inputs.gcs_download_uri}}
       halt-for-connection: ${{inputs.halt-for-connection}}
       s3_download_uri: 's3://jax-ci-amd/rocm-wheels/${{ github.repository }}/${{ github.ref_name }}/${{ matrix.rocm.release-version }}/wheel-tests-nightly/${{ github.run_number }}/${{ github.run_attempt }}'
+      # On the ROCm fork, use the jax/jaxlib wheels built above (S3) instead of
+      # the upstream GCS nightly bucket, which is frequently stale/broken.
+      jax-jaxlib-source: ${{ github.repository_owner == 'ROCm' && 's3' || 'gcs' }}
       build_jaxlib: ${{ 'false' }}
       build_jax: ${{ 'false' }}
       jaxlib-version: "head"
