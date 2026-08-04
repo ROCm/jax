@@ -66,6 +66,10 @@ on:
         description: "S3 URI for ROCm plugin/PJRT wheels (use 'latest' to resolve via LATEST pointer)"
         type: string
         default: 'latest'
+      jax-jaxlib-source:
+        description: "Where to fetch base jax/jaxlib wheels from: 'gcs' or 's3'"
+        type: string
+        default: 'gcs'
       halt-for-connection:
         description: 'Should this workflow run wait for a remote connection?'
         type: string
@@ -107,6 +111,10 @@ on:
       s3_download_uri:
         description: "S3 URI for ROCm plugin/PJRT wheels (use 'latest' to resolve via LATEST pointer)"
         default: 'latest'
+        type: string
+      jax-jaxlib-source:
+        description: "Where to fetch base jax/jaxlib wheels from: 'gcs' or 's3'"
+        default: 'gcs'
         type: string
       halt-for-connection:
         description: 'Should this workflow run wait for a remote connection?'
@@ -162,6 +170,7 @@ jobs:
           skip-download-jaxlib-and-plugins-from-gcs: ${{ inputs.skip-download-jaxlib-and-plugins-from-gcs }}
           gcs_download_uri: ${{ inputs.gcs_download_uri }}
           s3_download_uri: ${{ inputs.s3_download_uri }}
+          jax-jaxlib-source: ${{ inputs.jax-jaxlib-source }}
       - name: Install Python dependencies
         run: |
           $JAXCI_PYTHON -m pip install uv~=0.12.3

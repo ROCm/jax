@@ -27,6 +27,9 @@ inputs:
   s3_download_uri:
     description: "S3 URI for ROCm plugin/PJRT wheels (use 'latest' to resolve via LATEST pointer)"
     default: 'latest'
+  jax-jaxlib-source:
+    description: "Where to fetch the base jax/jaxlib wheels from: 'gcs' (upstream nightly bucket) or 's3' (built alongside the ROCm wheels on the fork's runners)"
+    default: 'gcs'
 permissions: {}
 runs:
   using: "composite"
@@ -74,7 +77,11 @@ runs:
         mkdir -p $(pwd)/dist
         # Disable Authentication on the ROCm runners.
         gcloud config set auth/disable_credentials True
-        if [[ "${INPUTS_DOWNLOAD_JAX_FROM_GCS}" == "1" ]]; then
+        if [[ "${INPUTS_JAX_JAXLIB_SOURCE}" == "s3" ]]; then
+          # jax is fetched from S3/CloudFront in the jaxlib "head" block below,
+          # alongside jaxlib and the ROCm plugin/pjrt wheels.
+          echo "jax wheel will be downloaded from S3/CloudFront alongside the ROCm wheels."
+        elif [[ "${INPUTS_DOWNLOAD_JAX_FROM_GCS}" == "1" ]]; then
           gcloud storage cp -r "${INPUTS_GCS_DOWNLOAD_URI}"/jax*py3*none*any.whl $(pwd)/dist/
         else
           echo "JAX wheel won't be downloaded, only jaxlib pre-built wheel is tested."
@@ -86,7 +93,9 @@ runs:
           echo "JAX only release. Only downloading the jax wheel from the release bucket."
         else
           if [[ ${INPUTS_JAXLIB_VERSION} == "head" ]]; then
-            gcloud storage cp -r "${INPUTS_GCS_DOWNLOAD_URI}/jaxlib*${PYTHON_MAJOR_MINOR}*${OS}*${ARCH}*.whl" $(pwd)/dist/
+            if [[ "${INPUTS_JAX_JAXLIB_SOURCE}" != "s3" ]]; then
+              gcloud storage cp -r "${INPUTS_GCS_DOWNLOAD_URI}/jaxlib*${PYTHON_MAJOR_MINOR}*${OS}*${ARCH}*.whl" $(pwd)/dist/
+            fi
 
             # Resolve ROCm plugin/PJRT wheels path via CloudFront.
             ROCM_WHEELS_BASE_URL="https://d22q5eopkfeftw.cloudfront.net"
@@ -112,8 +121,31 @@ runs:
               exit 1
             fi
 
+            DOWNLOAD_URLS=("${WHEELS_URL}/${PJRT_FILE}" "${WHEELS_URL}/${PLUGIN_FILE}")
+
+            # On the fork, the base jax/jaxlib wheels are built alongside the
+            # ROCm wheels and uploaded to the same S3 prefix, so fetch them from
+            # the same CloudFront listing instead of the (broken) GCS bucket.
+            if [[ "${INPUTS_JAX_JAXLIB_SOURCE}" == "s3" ]]; then
+              JAXLIB_FILE=$(echo "$FILES" | grep "jaxlib-" | grep "${PYTHON_MAJOR_MINOR}" | head -n1 || true)
+              if [[ -z "${JAXLIB_FILE}" ]]; then
+                echo "Could not find jaxlib wheel in ${WHEELS_URL}"
+                exit 1
+              fi
+              DOWNLOAD_URLS+=("${WHEELS_URL}/${JAXLIB_FILE}")
+
+              if [[ "${INPUTS_DOWNLOAD_JAX_FROM_GCS}" == "1" ]]; then
+                JAX_FILE=$(echo "$FILES" | grep -E "jax-[0-9].*-py3-none-any\.whl" | head -n1 || true)
+                if [[ -z "${JAX_FILE}" ]]; then
+                  echo "Could not find jax wheel in ${WHEELS_URL}"
+                  exit 1
+                fi
+                DOWNLOAD_URLS+=("${WHEELS_URL}/${JAX_FILE}")
+              fi
+            fi
+
             PYTHON_BIN="python${INPUTS_PYTHON}"
-            "${PYTHON_BIN}" -m pip download --no-deps --dest "$(pwd)/dist" "${WHEELS_URL}/${PJRT_FILE}" "${WHEELS_URL}/${PLUGIN_FILE}"
+            "${PYTHON_BIN}" -m pip download --no-deps --dest "$(pwd)/dist" "${DOWNLOAD_URLS[@]}"
           elif [[ ${INPUTS_JAXLIB_VERSION} == "pypi_latest" ]]; then
             PYTHON=python${INPUTS_PYTHON}
             $PYTHON -m pip download jaxlib jax-rocm${JAXCI_ROCM_VERSION}-pjrt jax-rocm${JAXCI_ROCM_VERSION}-plugin --dest $(pwd)/dist/ --no-deps
@@ -134,6 +166,7 @@ runs:
         INPUTS_PYTHON: ${{ inputs.python }}
         INPUTS_S3_DOWNLOAD_URI: ${{ inputs.s3_download_uri }}
         INPUTS_ROCM_FULL_VERSION: ${{ inputs.rocm-release-version || inputs.rocm-version }}
+        INPUTS_JAX_JAXLIB_SOURCE: ${{ inputs.jax-jaxlib-source }}
     - name: Skip the test run if the wheel artifacts were not downloaded successfully
       shell: bash
       if: steps.download-wheel-artifacts.outcome == 'failure'
