@@ -37,7 +37,13 @@ fi
 # Set up the build environment.
 source "ci/utilities/setup_build_environment.sh"
 
-allowed_artifacts=("jax-rocm-plugin" "jax-rocm-pjrt")
+# The base "jax" and "jaxlib" wheels are also built here on the ROCm fork's
+# runners so the ROCm test legs no longer depend on the (frequently broken)
+# upstream nightly wheels published to GCS. jax is a pure-python wheel and
+# jaxlib is the backend-neutral CPU base (ROCm support lives in the separate
+# plugin/pjrt wheels), so both build correctly with the ROCm bazel config used
+# below.
+allowed_artifacts=("jax-rocm-plugin" "jax-rocm-pjrt" "jax" "jaxlib")
 
 if [[ ! " ${allowed_artifacts[*]} " =~ " ${artifact} " ]]; then
   echo "Error: Invalid artifact: $artifact. Allowed values are: ${allowed_artifacts[*]}"
@@ -101,5 +107,8 @@ python build/build.py build --wheels="$artifact" \
   $wheel_version_suffix_flag \
   "${rocm_path_flags[@]}"
 
-# Verify manylinux compliance.
-./ci/utilities/run_auditwheel.sh
+# Verify manylinux compliance. The pure-python "jax" wheel has no platform
+# wheels to inspect (run_auditwheel.sh errors when it finds none), so skip it.
+if [[ "$artifact" != "jax" ]]; then
+  ./ci/utilities/run_auditwheel.sh
+fi
