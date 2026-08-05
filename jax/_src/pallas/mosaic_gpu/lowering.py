@@ -1147,20 +1147,12 @@ def lower_jaxpr_to_module(
       uses_pdl=uses_pdl,
   )
 
-  if lowering_semantics == mgpu.LoweringSemantics.Warpgroup:
-    # We need to run a pass that removes dead-code for which layout inference
-    # does not work.
-    pm = mlir.passmanager.PassManager.parse("builtin.module(canonicalize,cse)", module.context)
-    pm.run(module.operation)
-
-    # Run Python lowering passes. The remaining passes will be run in C++ in
-    # jax/jaxlib/mosaic/gpu/custom_call.cc
-    mgpu.infer_layout(module, arch=mgpu_core._infer_arch())
-    mgpu.lower_mgpu_dialect(
-        module, launch_ctx, auto_barriers=not params.unsafe_no_auto_barriers
-    )
-
-  launch_ctx.scratch.finalize_size()
+  mgpu_core.lower_mgpu_module(
+      module,
+      launch_ctx,
+      lowering_semantics,
+      auto_barriers=not params.unsafe_no_auto_barriers,
+  )
 
   return LoweringResult(
       module, cuda_grid, block, new_out_shapes, prof_spec,
