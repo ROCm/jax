@@ -865,11 +865,6 @@ class Trace:
   def __repr__(self):
     return f'{self.__class__.__name__}'
 
-  def process_call(self, call_primitive, f, tracers, params, /):
-    msg = (f"{type(self)} must override process_call to handle call-like "
-           "primitives")
-    raise NotImplementedError(msg)
-
   def process_custom_jvp_call(self, primitive, fun, jvp, tracers, /, *,
                               symbolic_zeros):
     msg = (f"{type(self)} must override process_custom_jvp_call "
@@ -1305,14 +1300,6 @@ class EvalTrace(Trace):
         args = map(full_lower, args)
         check_eval_args(args)
         return primitive.impl(*args, **params)
-
-  def process_call(self, primitive, f, tracers, params, /):
-    with set_current_trace(self):
-      if config.debug_key_reuse.value:
-        from jax.experimental.key_reuse._core import call_impl_with_key_reuse_checks  # pyrefly: ignore[missing-import]
-        return call_impl_with_key_reuse_checks(primitive, primitive.impl, f, *tracers, **params)
-      else:
-        return primitive.impl(f, *tracers, **params)
 
   def process_custom_jvp_call(self, primitive, fun, jvp, tracers, /, **_):
     del primitive, jvp, _  # Unused.
@@ -2165,14 +2152,12 @@ def _make_lengths_same(sharding, ndim):
   pspec = sharding.spec
   if ndim > len(pspec):
     return sharding.update(spec=pspec._normalized_spec_for_aval(ndim))
-  if ndim < len(pspec):
-    if not all(s is None for s in pspec.partitions[ndim:]):
-      raise ValueError(
-          "Input's ndim is less than the length of PartitionSpec which is not"
-          f" allowed. Got input ndim={ndim} and pspec={pspec}")
+  if ((sharding.mesh.empty or sharding.mesh._are_all_axes_auto_or_manual) and
+      ndim < len(pspec)):
+    assert all(s is None for s in pspec.partitions[ndim:])
     return sharding.update(spec=sharding.spec.update(
         partitions=pspec.partitions[:ndim]))
-  assert False, "unreachable"
+  return sharding
 
 def modify_spec_for_auto_manual(spec, mesh) -> P:
   new_spec: list[Any] = []
@@ -2240,8 +2225,9 @@ def get_sharding(sharding, shape):
   out_s = _maybe_modify_sharding(sharding, ndim)
   if len(out_s.spec) != ndim:
     raise ValueError(
-        "Length of sharding.spec must be equal to aval's ndim. Got"
-        f" sharding.spec {out_s.spec}, aval.ndim {ndim} and sharding {out_s}")
+        f"Length of sharding.spec ({len(out_s.spec)}) must be equal to aval's"
+        f" ndim ({ndim}). Got sharding.spec {out_s.spec}, aval.ndim {ndim} and"
+        f" sharding {out_s}")
   if not isinstance(out_s.mesh, mesh_lib.AbstractMesh):
     raise ValueError("Mesh of an aval must be an AbstractMesh. "
                      f"Got {out_s.mesh} of type {type(out_s.mesh)}")
@@ -3327,48 +3313,20 @@ def dim_value_aval() -> AbstractValue:
 
 # ------------------- Call -------------------
 
-class CallPrimitive(Primitive):
-  multiple_results = True
-  call_primitive = True
-  skip_canonicalization = True
+# eval_jaxpr_p is a call-like primitive parameterized by a jaxpr rather than a
+# Python callable: applying it evaluates the jaxpr, and staging it out is O(1),
+# emitting a single eqn that keeps its identity under retracing. Its
+# transformation rules live in partial_eval.py and lax/eval_jaxpr.py.
+eval_jaxpr_p = Primitive('eval_jaxpr')
+eval_jaxpr_p.multiple_results = True
+eval_jaxpr_p.def_impl(lambda *args, call_jaxpr, **_: jaxpr_as_fun(call_jaxpr)(*args))
+eval_jaxpr_p.def_effectful_abstract_eval(
+    lambda *_, call_jaxpr, **__: (call_jaxpr.out_avals, positional_effects(call_jaxpr)))
 
-  def bind_with_trace(self, trace, args, avals, params, /):
-    params = dict(params)
-    fun, = params.pop('subfuns')
-    return trace.process_call(self, fun, args, params)
+# Aliases for the deleted final-style call primitives, for downstream code that
+# matches on these names when interpreting jaxprs.
+call_p = closed_call_p = eval_jaxpr_p
 
-  def get_bind_params(self, params):
-    new_params = dict(params)
-    jaxpr = new_params.pop('call_jaxpr')
-    subfun = lu.hashable_partial(
-        lu.wrap_init(eval_jaxpr, debug_info=jaxpr.debug_info), jaxpr, ())
-    new_params['subfuns'] = (subfun,)
-    return new_params
-
-def call_impl(f: lu.WrappedFun, *args, **params):
-  del params  # params parameterize the call primitive, not the function
-  with set_current_trace(eval_trace):
-    return f.call_wrapped(*args)
-
-call_p: CallPrimitive = CallPrimitive('call')
-call = call_p.bind
-call_p.def_impl(call_impl)
-
-
-class ClosedCallPrimitive(CallPrimitive):
-  def get_bind_params(self, params):
-    new_params = dict(params)
-    jaxpr: Jaxpr = new_params.pop('call_jaxpr')
-    subfun = lu.wrap_init(partial(eval_jaxpr, jaxpr, jaxpr.consts),
-                          debug_info=jaxpr.debug_info)
-    new_params['subfuns'] = (subfun,)
-    return new_params
-
-closed_call_p: ClosedCallPrimitive = ClosedCallPrimitive('closed_call')
-closed_call_p.def_impl(call_impl)
-closed_call_p.def_effectful_abstract_eval(
-    lambda *_, call_jaxpr: (call_jaxpr.out_avals,
-                            positional_effects(call_jaxpr)))
 
 # ------------------- Map -------------------
 
@@ -3563,12 +3521,12 @@ class JaxprTypeError(TypeError):
 
 custom_typechecks: dict[Primitive, Callable] = {}
 
-def _check_closed_call(_, *in_atoms, call_jaxpr):
+def _check_closed_call(_, *in_atoms, call_jaxpr, **__):
   in_avals = [x.aval for x in in_atoms]
   if not all(map(typecompat, call_jaxpr.in_avals, in_avals)):
     raise JaxprTypeError("Closed call in_avals mismatch")
   return call_jaxpr.out_avals, positional_effects(call_jaxpr)
-custom_typechecks[closed_call_p] = _check_closed_call
+custom_typechecks[eval_jaxpr_p] = _check_closed_call
 
 def check_jaxpr(jaxpr: Jaxpr):
   """Checks well-formedness of a jaxpr.
@@ -3692,9 +3650,6 @@ def _check_jaxpr(
         if prim in custom_typechecks:
           out_type, eqn_effects = custom_typechecks[prim](
             ctx_factory, *in_atoms, **eqn.params)
-        elif prim.call_primitive:
-          out_type, eqn_effects = _check_call(ctx_factory, prim, in_atoms,
-                                              eqn.params)
         else:
           out_type, eqn_effects = check_eqn(prim, in_avals, eqn.params)
 

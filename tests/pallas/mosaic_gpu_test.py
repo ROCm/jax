@@ -1411,6 +1411,36 @@ class PallasCallTest(PallasTest, jtu.CudaArchSpecificTest):
     ):
       jax.jit(kernel).lower()
 
+  def test_copy_gmem_to_smem_predicate(self):
+    @self.kernel(
+      out_type=jax.ShapeDtypeStruct([256], jnp.float32),
+      scratch_types=[
+          plgpu.SMEM([256], jnp.float32),
+          plgpu.Barrier(),
+      ],
+      grid=(2,),
+      grid_names=("block",),
+    )
+    def kernel(x_ref, o_ref, scratch_ref, barrier_ref):
+      scratch_ref[...] = jnp.zeros([256], dtype=jnp.float32)
+      block_id = jax.lax.axis_index('block')
+      idx = pl.ds(block_id * 128, 128)
+      plgpu.copy_gmem_to_smem(
+          x_ref.at[idx],
+          scratch_ref.at[idx],
+          barrier_ref,
+          predicate=block_id == 0,
+      )
+      plgpu.barrier_wait(barrier_ref)
+      plgpu.commit_smem()
+      plgpu.copy_smem_to_gmem(scratch_ref.at[idx], o_ref.at[idx])
+      plgpu.wait_smem_to_gmem(0)
+
+    x = jnp.arange(256).astype(jnp.float32)
+    output = kernel(x)
+    np.testing.assert_array_equal(output[:128], x[:128])
+    np.testing.assert_array_equal(output[128:], jnp.zeros((128,)))
+
   def test_collective_copy_gmem_to_smem(self):
 
     @self.kernel(
@@ -1495,7 +1525,8 @@ class PallasCallTest(PallasTest, jtu.CudaArchSpecificTest):
 
     np.testing.assert_array_equal(kernel(), np.ones((128,), dtype=jnp.float32))
 
-  def test_barrier_test(self):
+  @parameterized.parameters(True, False)
+  def test_barrier_test(self, use_single_warp):
 
     @self.kernel(
         out_type=jax.ShapeDtypeStruct((5,), jnp.int32),
@@ -1510,26 +1541,13 @@ class PallasCallTest(PallasTest, jtu.CudaArchSpecificTest):
         o_ref[3] = plgpu.barrier_test(barrier_ref.at[1]).astype(jnp.int32)
         plgpu.barrier_arrive(barrier_ref.at[1])
         o_ref[4] = plgpu.barrier_test(barrier_ref.at[1]).astype(jnp.int32)
-      plgpu.warp_map(lambda warp_id: pl.when(warp_id == 0)(test_barrier))
+
+      if use_single_warp:
+        plgpu.warp_map(lambda warp_id: pl.when(warp_id == 0)(test_barrier))
+      else:
+        test_barrier()
 
     np.testing.assert_array_equal(kernel(), np.array([0, 0, 1, 0, 1]))
-
-  def test_barrier_test_is_rejected_in_non_warp_context(self):
-
-    @self.kernel(
-        out_type=jax.ShapeDtypeStruct((), jnp.int32),
-        scratch_types=[plgpu.Barrier()],
-    )
-    def kernel(o_ref, barrier_ref):
-      o_ref[...] = plgpu.barrier_test(barrier_ref).astype(jnp.int32)
-
-    # This is a `NotImplementedError`, but adding a test in order to not add it
-    # back without thinking deeply about it.
-    with self.assertRaisesRegex(
-        NotImplementedError,
-        "Unimplemented primitive in Pallas Mosaic GPU lowering",
-    ):
-      kernel()
 
   @parameterized.named_parameters(
       {
@@ -4890,6 +4908,7 @@ class PallasCallWGTest(
     if not hasattr(mgpu.dialect, "get_or_set_dump_options"):
       self.skipTest("Test requires jaxlib >= 0.11.1")
     x = jnp.ones((64, 64), dtype=jnp.float32)
+
     @self.kernel(out_type=jax.ShapeDtypeStruct(x.shape, x.dtype))
     def kernel(x_gmem, o_gmem):
       o_gmem[...] = plgpu.load(x_gmem, optimized=False)
@@ -4898,8 +4917,12 @@ class PallasCallWGTest(
       with jtu.set_env(MOSAIC_GPU_DUMP_TO=dump_dir):
         jax.jit(kernel).lower(x)
       files = os.listdir(dump_dir)
-      self.assertTrue(any(f.endswith(".before_layout_inference.txt") for f in files))
-      self.assertTrue(any(f.endswith(".after_layout_inference.txt") for f in files))
+      self.assertTrue(
+          any(f.endswith(".before_layout_inference.txt") for f in files)
+      )
+      self.assertTrue(
+          any(f.endswith(".after_layout_inference.txt") for f in files)
+      )
 
 
 class PallasCallSm90ATest(PallasSm90ATest):
@@ -7873,6 +7896,47 @@ class PipelineTest(PallasTest):
     kernel_fn = self.kernel(
         kernel,
         out_type=jax.ShapeDtypeStruct((1, n), dtype),
+    )
+
+    np.testing.assert_allclose(kernel_fn(x), x.sum(0, keepdims=True), rtol=1e-6)
+
+  @parameterized.parameters(2, 3, 4)
+  @run_on_sm80
+  def test_emit_in_specs_only(self, max_concurrent_steps):
+    # TODO(slebedev): Remove the skip once cp.async is supported under WG
+    # semantics.
+    self.skip_if_wg_semantics()
+
+    m, n = 16, 128
+
+    def kernel(x_gmem, o_gmem, acc_ref):
+      acc_ref[...] = jnp.zeros_like(acc_ref)
+
+      def body(_, x_smem):
+        acc_ref[...] += x_smem[...]
+
+      plgpu.emit_pipeline(
+          body,
+          in_specs=[
+              plgpu.BlockSpec(
+                  (1, n),
+                  lambda i: (i, 0),
+                  oob_fill_mode=plgpu.OOBFillMode.PROMISE_IN_BOUNDS,
+              )
+          ],
+          grid=(m,),
+          max_concurrent_steps=max_concurrent_steps,
+      )(x_gmem)
+
+      o_gmem[...] = acc_ref[...]
+
+    dtype = jnp.float32
+    x = jax.random.uniform(jax.random.key(0), (m, n)).astype(dtype)
+
+    kernel_fn = self.kernel(
+        kernel,
+        out_type=jax.ShapeDtypeStruct((1, n), dtype),
+        scratch_types=[plgpu.SMEM((1, n), dtype=jnp.float32)],
     )
 
     np.testing.assert_allclose(kernel_fn(x), x.sum(0, keepdims=True), rtol=1e-6)

@@ -2057,7 +2057,8 @@ class ShardMapTest(jtu.JaxTestCase):
       sub = lu.wrap_init(
         lambda x: [2. * x],
         debug_info=api_util.debug_info("test", lambda x: [2. * x], (x,), {}))
-      return core.call_p.bind(x, subfuns=(sub,))[0] * x
+      jaxpr, _, consts = pe.trace_to_jaxpr_dynamic(sub, [core.typeof(x)])
+      return core.call_p.bind(*consts, x, call_jaxpr=jaxpr)[0] * x
 
     mesh = jtu.create_mesh((4,), ('x',))
     g = shard_map(f, mesh=mesh, in_specs=(P('x'),), out_specs=P('x'))
@@ -2076,7 +2077,8 @@ class ShardMapTest(jtu.JaxTestCase):
       sub = lu.wrap_init(
         lambda: [2. * x],
         debug_info=api_util.debug_info("test", lambda: [2. * x], (), {}))
-      return core.call_p.bind(subfuns=(sub,))[0] * x
+      jaxpr, _, consts = pe.trace_to_jaxpr_dynamic(sub, [])
+      return core.call_p.bind(*consts, call_jaxpr=jaxpr)[0] * x
 
     x = jnp.arange(4.)
     y = f(x)
@@ -2574,12 +2576,14 @@ class ShardMapTest(jtu.JaxTestCase):
     if config.custom_vjp3.value:
       with self.assertRaisesRegex(
           ValueError,
-          "the bwd rule produced an output.*which doesn't match expected type"):
+          r"the bwd rule attached to f.*produced an output.*which doesn't match"
+          r' expected type'):
         jax.value_and_grad(lambda x: g(x).sum())(jnp.ones(4))
     else:
       with self.assertRaisesRegex(
           ValueError,
-          "Custom VJP bwd rule must produce an output with the same type"):
+          r'Custom VJP bwd rule attached to f.*must produce an output with the'
+          ' same type'):
         jax.value_and_grad(lambda x: g(x).sum())(jnp.ones(4))
 
   def test_repeated_psum_allowed(self):
@@ -4492,6 +4496,19 @@ class ShardMapTest(jtu.JaxTestCase):
     out_g = jax.grad(lambda x: f(x).sum())(arr)
     self.assertEqual(out_g.sharding, NamedSharding(mesh, P(None, reduced={'x'})))
     self.assertArraysEqual(out_g, jnp.ones((8,)))
+
+  @jtu.with_explicit_mesh((2,), 'x')
+  def test_ppermute_zip_error(self, mesh):
+    arr = jax.device_put(np.arange(8), P('x'))
+    perm = unsafe_zip([0, 1], [1, 0])
+
+    @jax.shard_map(out_specs=P('x'))
+    def f(x):
+      return jax.lax.ppermute(x, 'x', perm)
+
+    with self.assertRaisesRegex(
+        TypeError, "`perm` passed to `jax.lax.ppermute` must be a list"):
+      f(arr)
 
   @parameterized.parameters([False, True])
   @jtu.with_explicit_mesh((2, 2), ('x', 'y'),

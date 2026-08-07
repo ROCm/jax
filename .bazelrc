@@ -283,6 +283,7 @@ common:tsan_shared --linkopt=-shared-libsan
 common:oneapi --@rules_ml_toolchain//common:enable_sycl=True
 common:oneapi --repo_env=TF_NEED_SYCL=1
 common:oneapi --define=tensorflow_mkldnn_contraction_kernel=0
+common:oneapi --repo_env=ENABLE_INTEL_XPU_TRITON=1
 
 # oneAPI Hermetic setup
 common:oneapi --repo_env=SYCL_BUILD_HERMETIC=1
@@ -343,6 +344,8 @@ common:ci_linux_x86_64_cuda13 --config=cuda13 --config=ci_linux_x86_64_cuda_comm
 # Linux Aarch64 CI configs
 common:ci_linux_aarch64_base --config=clang --verbose_failures=true
 common:ci_linux_aarch64_base --color=yes
+# b/543046203
+common:ci_linux_aarch64_base --define ynn_enable_arm64_neonfp8=false
 
 # This appears to help avoid a timeout in CI for linalg_test.
 common:ci_linux_aarch64_base --test_env=OMP_NUM_THREADS=8

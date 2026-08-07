@@ -151,6 +151,15 @@ def _mpmd_map_abstract_eval(
       in_avals[outin_aliases[out_idx]] if out_idx in outin_aliases else a
       for out_idx, a in enumerate(out_avals)
   ]
+  # Avoid returning avals with Pallas memory spaces to the outside world.
+  out_avals = tuple(
+      a.update(memory_space=jax_core.MemorySpace.Device)
+      if isinstance(a, jax_core.ShapedArray)
+      and a.memory_space is not None
+      and not isinstance(a.memory_space, jax_core.MemorySpace)
+      else a
+      for a in out_avals
+  )
   return out_avals, effs
 
 
@@ -164,6 +173,16 @@ def _mpmd_map_typecheck_rule(
 
 
 jax_core.custom_typechecks[mpmd_map_p] = _mpmd_map_typecheck_rule
+
+
+def _default_memory_space(meshes: Sequence[pallas_core.Mesh]):
+  defaults = {mesh.default_memory_space for mesh in meshes}
+  if len(defaults) != 1:
+    raise ValueError(
+        "Multiple meshes with different default memory spaces are not"
+        " supported."
+    )
+  return defaults.pop()
 
 
 def _mpmd_map_discharge_rule(
@@ -193,6 +212,22 @@ def _mpmd_map_discharge_rule(
             isinstance(ctx.in_avals[write_index], state.AbstractRef)
         ):
           write_indices.add(write_index)
+
+  default_memory_space = _default_memory_space(meshes)
+  in_memory_spaces = [
+      pallas_core.get_memory_space_aval(aval) for aval in ctx.in_avals
+  ]
+  in_memory_spaces = [
+      default_memory_space if m is None else m for m in in_memory_spaces
+  ]
+  args = tuple(
+      pallas_core.with_memory_space_constraint_p.bind(
+          arg, memory_space=memory_space
+      )
+      if memory_space is not default_memory_space
+      else arg
+      for arg, memory_space in zip(args, in_memory_spaces)
+  )
 
   write_indices = sorted(write_indices)
   num_in = len(ctx.in_avals)
@@ -608,6 +643,16 @@ def _mpmd_map_fallback_lowering(
   )
 
 
+def _mpmd_map_mgpu_lowering(ctx: mlir.LoweringRuleContext, *in_nodes, **params):
+  try:
+    from jax._src.pallas.mosaic_gpu import pallas_call_registration  # pyrefly: ignore[missing-import]
+  except ImportError:
+    raise pallas_call._unsupported_lowering_error("cuda")
+  return pallas_call_registration.mpmd_map_mgpu_lowering_rule(
+      ctx, *in_nodes, **params
+  )
+
+
 @functools.partial(mlir.register_lowering, mpmd_map_p)
 def _mpmd_map_lowering(ctx: mlir.LoweringRuleContext, *in_nodes, **params):
   platforms = ctx.module_context.platforms
@@ -617,6 +662,8 @@ def _mpmd_map_lowering(ctx: mlir.LoweringRuleContext, *in_nodes, **params):
     )
   [platform] = platforms
   match platform:
+    case "cuda" if config.jax_pallas_use_mosaic_gpu.value:
+      return _mpmd_map_mgpu_lowering(ctx, *in_nodes, **params)
     case "cpu" | "cuda" | "rocm":
       return _mpmd_map_fallback_lowering(ctx, *in_nodes, **params)
     case "tpu":
@@ -666,13 +713,7 @@ def _aval_to_ref_aval(
       return aval
     case jax_core.ShapedArray(memory_space=memory_space):
       if memory_space == jax_core.MemorySpace.Device:
-        defaults = {mesh.default_memory_space for mesh in meshes}
-        if len(defaults) != 1:
-          raise ValueError(
-              "Multiple meshes with different default memory spaces are not"
-              " supported."
-          )
-        memory_space = list(defaults)[0]
+        memory_space = _default_memory_space(meshes)
       return state.AbstractRef(aval, memory_space=memory_space)
     case jax_core.AbstractValue():
       return state.AbstractRef(aval, memory_space=None)
