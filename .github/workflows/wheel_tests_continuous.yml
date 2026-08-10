@@ -70,9 +70,9 @@ on:
     branches:
       - main
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
-  cancel-in-progress: ${{ !contains(github.ref, 'release/') && github.ref != 'main' }}
+# concurrency:
+#   group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+#   cancel-in-progress: ${{ !contains(github.ref, 'release/') && github.ref != 'main' }}
 
 jobs:
   check-trigger:
