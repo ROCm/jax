@@ -27,6 +27,7 @@ import itertools as it
 import math
 import operator
 import re
+import sys
 import threading
 import types
 from typing import (Any, ClassVar, NamedTuple, final, overload,
@@ -865,11 +866,6 @@ class Trace:
   def __repr__(self):
     return f'{self.__class__.__name__}'
 
-  def process_call(self, call_primitive, f, tracers, params, /):
-    msg = (f"{type(self)} must override process_call to handle call-like "
-           "primitives")
-    raise NotImplementedError(msg)
-
   def process_custom_jvp_call(self, primitive, fun, jvp, tracers, /, *,
                               symbolic_zeros):
     msg = (f"{type(self)} must override process_custom_jvp_call "
@@ -1306,14 +1302,6 @@ class EvalTrace(Trace):
         check_eval_args(args)
         return primitive.impl(*args, **params)
 
-  def process_call(self, primitive, f, tracers, params, /):
-    with set_current_trace(self):
-      if config.debug_key_reuse.value:
-        from jax.experimental.key_reuse._core import call_impl_with_key_reuse_checks  # pyrefly: ignore[missing-import]
-        return call_impl_with_key_reuse_checks(primitive, primitive.impl, f, *tracers, **params)
-      else:
-        return primitive.impl(f, *tracers, **params)
-
   def process_custom_jvp_call(self, primitive, fun, jvp, tracers, /, **_):
     del primitive, jvp, _  # Unused.
     with set_current_trace(self):
@@ -1621,9 +1609,55 @@ def maybe_find_leaked_tracers(trace: Trace) -> list[Tracer]:
 def leaked_tracer_error(name: str, t, tracers: list[Tracer]) -> Exception:
   assert tracers
   why = partial(_why_alive, {id(tracers)})
-  msgs = '\n\n'.join(f'{tracers[i]}{tracers[i]._origin_msg()}{why(tracers[i])}'
-                     for i in range(len(tracers)))
-  return Exception(f'Leaked {name} {t}. Leaked tracer(s):\n\n{msgs}\n')
+  msgs = []
+  for tracer in tracers:  # not a genexpr: it'd be gc-visible and self-report
+    chain = why(tracer)
+    label = f'<{type(tracer).__name__} {id(tracer)}>'
+    chain += ''.join(f'\n{label} is referred to by {h}' for h in
+                     _held_in_frame_locals(tracer, {id(tracers)}))
+    if not chain:
+      chain = (f'\n{label} has no referrers visible to the gc module; it may '
+               'be held by an object that does not cooperate with the garbage '
+               'collector, such as one implemented in a C extension')
+    msgs.append(f'{tracer}{tracer._origin_msg()}{chain}')
+  return Exception(f'Leaked {name} {t}. Leaked tracer(s):\n\n'
+                   + '\n\n'.join(msgs) + '\n')
+
+def _held_in_frame_locals(x, ignore_ids: set[int]) -> list[str]:
+  """Find live stack frames whose locals refer to (or contain) x.
+
+  On CPython 3.11+, executing functions' frames are usually not gc-tracked
+  objects, so references held by their locals are invisible to gc.get_referrers
+  and hence to _why_alive. Walk the current stack directly instead.
+  """
+  skip_codes = (leaked_tracer_error.__code__, _held_in_frame_locals.__code__)
+  holders = []
+  frame = sys._getframe(1)
+  while frame is not None:
+    if frame.f_code not in skip_codes:
+      for name, val in frame.f_locals.items():
+        if id(val) in ignore_ids:
+          continue
+        if val is x:
+          via = ''
+        elif _contains_ref(val, x):
+          via = f', a {type(val).__name__} containing it,'
+        else:
+          continue
+        code = frame.f_code
+        holders.append(f"the local variable {name!r}{via} of the frame "
+                       f"{code.co_qualname} ({code.co_filename}:{frame.f_lineno})")
+    frame = frame.f_back
+  return holders
+
+def _contains_ref(val, x, depth: int = 0) -> bool:
+  if depth >= 3:
+    return False
+  if isinstance(val, (list, tuple, set, frozenset)):
+    return any(v is x or _contains_ref(v, x, depth + 1) for v in val)
+  if isinstance(val, dict):
+    return any(v is x or _contains_ref(v, x, depth + 1) for v in val.values())
+  return False
 
 def _why_alive(ignore_ids: set[int], x: Any) -> str:
   parents = lambda x: [r for r in gc.get_referrers(x) if id(r) not in ignore_ids]
@@ -1642,11 +1676,15 @@ def _why_alive(ignore_ids: set[int], x: Any) -> str:
     # in _why_alive_container_info. See example:
     #  https://github.com/jax-ml/jax/pull/13022#discussion_r1008456599
     # To prevent this collapsing behavior, just comment out this code block.
-    if (isinstance(parent, dict) and
-        getattr(parents(parent)[0], '__dict__', None) is parents(child)[0]):
-      parent = parents(parent)[0]
-    elif type(parent) is types.CellType:
-      parent = parents(parents(parent)[0])[0]
+    try:
+      if (isinstance(parent, dict) and
+          getattr(parents(parent)[0], '__dict__', None) is parents(child)[0]):
+        parent = parents(parent)[0]
+      elif type(parent) is types.CellType:
+        parent = parents(parents(parent)[0])[0]
+    except IndexError:
+      pass  # a referrer list can be empty, e.g. a container held only by a
+            # live frame's local, since gc.get_referrers can't see live frames
 
     line = f'<{type(child).__name__} {id(child)}> is referred to by '
     lines.append(line + _why_alive_container_info(parent, id(child)))
@@ -2165,14 +2203,12 @@ def _make_lengths_same(sharding, ndim):
   pspec = sharding.spec
   if ndim > len(pspec):
     return sharding.update(spec=pspec._normalized_spec_for_aval(ndim))
-  if ndim < len(pspec):
-    if not all(s is None for s in pspec.partitions[ndim:]):
-      raise ValueError(
-          "Input's ndim is less than the length of PartitionSpec which is not"
-          f" allowed. Got input ndim={ndim} and pspec={pspec}")
+  if ((sharding.mesh.empty or sharding.mesh._are_all_axes_auto_or_manual) and
+      ndim < len(pspec)):
+    assert all(s is None for s in pspec.partitions[ndim:])
     return sharding.update(spec=sharding.spec.update(
         partitions=pspec.partitions[:ndim]))
-  assert False, "unreachable"
+  return sharding
 
 def modify_spec_for_auto_manual(spec, mesh) -> P:
   new_spec: list[Any] = []
@@ -2240,8 +2276,9 @@ def get_sharding(sharding, shape):
   out_s = _maybe_modify_sharding(sharding, ndim)
   if len(out_s.spec) != ndim:
     raise ValueError(
-        "Length of sharding.spec must be equal to aval's ndim. Got"
-        f" sharding.spec {out_s.spec}, aval.ndim {ndim} and sharding {out_s}")
+        f"Length of sharding.spec ({len(out_s.spec)}) must be equal to aval's"
+        f" ndim ({ndim}). Got sharding.spec {out_s.spec}, aval.ndim {ndim} and"
+        f" sharding {out_s}")
   if not isinstance(out_s.mesh, mesh_lib.AbstractMesh):
     raise ValueError("Mesh of an aval must be an AbstractMesh. "
                      f"Got {out_s.mesh} of type {type(out_s.mesh)}")
@@ -2839,7 +2876,8 @@ effects.control_flow_allowed_effects.add_type(InternalMutableArrayEffect)
 effects.remat_allowed_effects.add_type(InternalMutableArrayEffect)
 
 
-def new_ref(init_val: Any, *, memory_space: Any = None, kind: Any = None):
+def new_ref(init_val: Any, *, memory_space: Any = None, kind: Any = None,
+            pin: bool = False):
   """Create a mutable array reference with initial value ``init_val``.
 
   For more discussion, see the `Ref guide`_.
@@ -2850,20 +2888,21 @@ def new_ref(init_val: Any, *, memory_space: Any = None, kind: Any = None):
     memory_space: An optional memory space attribute for the Ref.
     kind: An optional string indicating the mutation semantics under
       rematerialization.
+    pin: Whether to lower the ref to a pinned buffer in HLO.
 
   Returns:
     A :class:`jax.ref.Ref` containing a reference to a mutable buffer.
 
   .. _Ref guide: https://docs.jax.dev/en/latest/array_refs.html
   """
-  return ref_p.bind(init_val, memory_space=memory_space, kind=kind)
+  return ref_p.bind(init_val, memory_space=memory_space, kind=kind, pin=pin)
 ref_p = Primitive('new_ref')
 ref_p.is_effectful = lambda params: True
 ref_p.ref_primitive = True
 ref_p.ref_allocating = True
 
-ref_p.is_high = lambda aval, *, memory_space, kind: aval.is_high
-def _ref_to_lojax(init_val, *, memory_space, kind):
+ref_p.is_high = lambda aval, *, memory_space, kind, pin: aval.is_high
+def _ref_to_lojax(init_val, *, memory_space, kind, pin):
   from jax._src.state.types import AbstractRef  # pyrefly: ignore[missing-import]
   val_ty = typeof(init_val)
   hival_of_refs = val_ty.raise_val(*map(new_ref, val_ty.lower_val(init_val)))
@@ -2871,7 +2910,7 @@ def _ref_to_lojax(init_val, *, memory_space, kind):
 ref_p.to_lojax = _ref_to_lojax
 
 @ref_p.def_effectful_abstract_eval
-def _ref_abstract_eval(init_aval, *, memory_space: Any, kind: Any):
+def _ref_abstract_eval(init_aval, *, memory_space: Any, kind: Any, pin: bool):
   from jax._src.state.types import AbstractRef  # pyrefly: ignore[missing-import]
   # If no memory space is specified, use the memory space of the initial value
   # but we make sure to reset it to Device because the Ref owns the memory space
@@ -2884,35 +2923,39 @@ def _ref_abstract_eval(init_aval, *, memory_space: Any, kind: Any):
           {internal_mutable_array_effect})
 
 @ref_p.def_impl
-def _ref_impl(init_val, *, memory_space: Any, kind: Any):
+def _ref_impl(init_val, *, memory_space: Any, kind: Any, pin: bool):
   if memory_space is not None:
     raise NotImplementedError(
         "array ref with memory space only works inside of a `jit`.")
+  if pin:
+    raise NotImplementedError(
+        "pinned array ref only works inside of a `jit`.")
   from jax._src.state.types import AbstractRef  # pyrefly: ignore[missing-import]
   from jax._src.lax.lax import _array_copy  # pyrefly: ignore[missing-import]
   aval = AbstractRef(typeof(init_val), kind=kind)
   return Ref(aval, ArrayRefImpl(aval, _array_copy(init_val)))
 
 # TODO(mattjj,dougalm): merge with ref_p
-def empty_ref(ty, memory_space=None):
+def empty_ref(ty, memory_space=None, pin=False):
   aval = shaped_abstractify(ty)
-  return empty_ref_p.bind(ty=aval, memory_space=memory_space)
+  return empty_ref_p.bind(ty=aval, memory_space=memory_space, pin=pin)
 empty_ref_p = Primitive('empty_ref')
 empty_ref_p.ref_primitive = True
 empty_ref_p.is_effectful = lambda _: True
 empty_ref_p.ref_allocating = True
-empty_ref_p.is_high = lambda *, ty, memory_space: ty.is_high
+empty_ref_p.is_high = lambda *, ty, memory_space, pin: ty.is_high
 
-def _empty_ref_to_lojax(*, ty, memory_space):
+def _empty_ref_to_lojax(*, ty, memory_space, pin):
   from jax._src.state.types import AbstractRef  # pyrefly: ignore[missing-import]
+  n = len(ty.lo_ty())
   hival_of_refs = ty.raise_val(
-      *map(empty_ref, ty.lo_ty(), [memory_space] * len(ty.lo_ty())))
+      *map(empty_ref, ty.lo_ty(), [memory_space] * n, [pin] * n))
   return Ref(AbstractRef(ty), hival_of_refs)
 empty_ref_p.to_lojax = _empty_ref_to_lojax
 
 
 @empty_ref_p.def_effectful_abstract_eval
-def _empty_ref_abstract_eval(*, ty, memory_space):
+def _empty_ref_abstract_eval(*, ty, memory_space, pin):
   from jax._src.state.types import AbstractRef  # pyrefly: ignore[missing-import]
   return (AbstractRef(ty, memory_space=memory_space),
           {internal_mutable_array_effect})
@@ -3327,48 +3370,20 @@ def dim_value_aval() -> AbstractValue:
 
 # ------------------- Call -------------------
 
-class CallPrimitive(Primitive):
-  multiple_results = True
-  call_primitive = True
-  skip_canonicalization = True
+# eval_jaxpr_p is a call-like primitive parameterized by a jaxpr rather than a
+# Python callable: applying it evaluates the jaxpr, and staging it out is O(1),
+# emitting a single eqn that keeps its identity under retracing. Its
+# transformation rules live in partial_eval.py and lax/eval_jaxpr.py.
+eval_jaxpr_p = Primitive('eval_jaxpr')
+eval_jaxpr_p.multiple_results = True
+eval_jaxpr_p.def_impl(lambda *args, call_jaxpr, **_: jaxpr_as_fun(call_jaxpr)(*args))
+eval_jaxpr_p.def_effectful_abstract_eval(
+    lambda *_, call_jaxpr, **__: (call_jaxpr.out_avals, positional_effects(call_jaxpr)))
 
-  def bind_with_trace(self, trace, args, avals, params, /):
-    params = dict(params)
-    fun, = params.pop('subfuns')
-    return trace.process_call(self, fun, args, params)
+# Aliases for the deleted final-style call primitives, for downstream code that
+# matches on these names when interpreting jaxprs.
+call_p = closed_call_p = eval_jaxpr_p
 
-  def get_bind_params(self, params):
-    new_params = dict(params)
-    jaxpr = new_params.pop('call_jaxpr')
-    subfun = lu.hashable_partial(
-        lu.wrap_init(eval_jaxpr, debug_info=jaxpr.debug_info), jaxpr, ())
-    new_params['subfuns'] = (subfun,)
-    return new_params
-
-def call_impl(f: lu.WrappedFun, *args, **params):
-  del params  # params parameterize the call primitive, not the function
-  with set_current_trace(eval_trace):
-    return f.call_wrapped(*args)
-
-call_p: CallPrimitive = CallPrimitive('call')
-call = call_p.bind
-call_p.def_impl(call_impl)
-
-
-class ClosedCallPrimitive(CallPrimitive):
-  def get_bind_params(self, params):
-    new_params = dict(params)
-    jaxpr: Jaxpr = new_params.pop('call_jaxpr')
-    subfun = lu.wrap_init(partial(eval_jaxpr, jaxpr, jaxpr.consts),
-                          debug_info=jaxpr.debug_info)
-    new_params['subfuns'] = (subfun,)
-    return new_params
-
-closed_call_p: ClosedCallPrimitive = ClosedCallPrimitive('closed_call')
-closed_call_p.def_impl(call_impl)
-closed_call_p.def_effectful_abstract_eval(
-    lambda *_, call_jaxpr: (call_jaxpr.out_avals,
-                            positional_effects(call_jaxpr)))
 
 # ------------------- Map -------------------
 
@@ -3563,12 +3578,12 @@ class JaxprTypeError(TypeError):
 
 custom_typechecks: dict[Primitive, Callable] = {}
 
-def _check_closed_call(_, *in_atoms, call_jaxpr):
+def _check_closed_call(_, *in_atoms, call_jaxpr, **__):
   in_avals = [x.aval for x in in_atoms]
   if not all(map(typecompat, call_jaxpr.in_avals, in_avals)):
     raise JaxprTypeError("Closed call in_avals mismatch")
   return call_jaxpr.out_avals, positional_effects(call_jaxpr)
-custom_typechecks[closed_call_p] = _check_closed_call
+custom_typechecks[eval_jaxpr_p] = _check_closed_call
 
 def check_jaxpr(jaxpr: Jaxpr):
   """Checks well-formedness of a jaxpr.
@@ -3692,9 +3707,6 @@ def _check_jaxpr(
         if prim in custom_typechecks:
           out_type, eqn_effects = custom_typechecks[prim](
             ctx_factory, *in_atoms, **eqn.params)
-        elif prim.call_primitive:
-          out_type, eqn_effects = _check_call(ctx_factory, prim, in_atoms,
-                                              eqn.params)
         else:
           out_type, eqn_effects = check_eqn(prim, in_avals, eqn.params)
 

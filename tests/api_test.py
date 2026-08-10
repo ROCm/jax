@@ -4133,6 +4133,39 @@ class APITest(jtu.JaxTestCase):
       f = jax.jit(jax.remat(lambda x: x + 1))
       f(jnp.arange(3))  # doesn't crash
 
+  def test_leak_checker_avoids_false_positives_remat3_scan_transpose(self):
+    policy = jax.checkpoint_policies.save_only_these_names('block')
+
+    def body(c, w):
+      c = jax.remat(lambda h, w: h * jnp.sin(w), policy=policy)(c, w)
+      return ad_checkpoint.checkpoint_name(c, 'block'), None
+
+    def f(x, w):
+      y, _ = lax.scan(body, x, w)
+      return jnp.sum(y)
+
+    with config.remat3(True), jax.checking_leaks():
+      jax.grad(f)(jnp.ones(3), jnp.ones((2, 3)))  # doesn't crash
+
+  def test_leak_checker_remat3_zero_tangent_output_stays_concrete(self):
+    def f(x):
+      y, aux = jax.remat(lambda x: (jnp.sin(x), lax.stop_gradient(x) * 2.0))(x)
+      self.assertNotIsInstance(aux, core.Tracer)
+      return y
+
+    with config.remat3(True), jax.checking_leaks():
+      jax.value_and_grad(f)(3.0)  # doesn't crash
+
+  def test_leak_checker_remat3_linearize_zero_tangent_output(self):
+    def f(x):
+      y, aux = jax.remat(lambda x: (jnp.sin(x), lax.stop_gradient(x) * 2.0))(x)
+      self.assertNotIsInstance(aux, core.Tracer)
+      return y
+
+    with config.remat3(True), jax.checking_leaks():
+      _, f_jvp = jax.linearize(f, 3.0)
+    self.assertAllClose(f_jvp(1.0), jnp.cos(3.0))
+
   def test_leak_checker_catches_a_sublevel_leak(self):
     with jax.checking_leaks():
       @jit
@@ -4209,6 +4242,47 @@ class APITest(jtu.JaxTestCase):
     with jax.check_tracer_leaks():
       with self.assertRaisesRegex(Exception, msg):
         jax.vmap(sketch)(x)
+
+  def test_leak_checker_reports_frame_locals(self):
+    from jax._src import source_info_util
+    from jax._src.interpreters import partial_eval as pe
+
+    def scope():
+      trace = pe.DynamicJaxprTrace(None)
+      with core.ensure_no_leaks(trace):
+        sneaky = trace.new_arg(core.ShapedArray((), np.dtype('float32')),
+                               source_info_util.current())
+        assert sneaky is not None
+        del trace
+
+    with jax.checking_leaks():
+      with self.assertRaisesRegex(
+          Exception, r"local variable 'sneaky' of the frame .*scope"):
+        scope()
+
+  def test_leak_checker_catches_linearize_tracer_escape(self):
+    sneaky = None
+    def f(x):
+      nonlocal sneaky
+      sneaky = jnp.sin(x)
+      return sneaky * 2.0
+
+    with jax.checking_leaks():
+      with self.assertRaisesRegex(Exception, r"Leaked trace LinearizeTrace"):
+        jax.value_and_grad(f)(1.0)
+
+  def test_why_alive_ref_chain_ending_in_frame_local(self):
+    class Sentinel:
+      pass
+
+    def scope():
+      s = Sentinel()
+      lst = [s]
+      dct = {'k': lst}
+      assert dct
+      return core._why_alive(set(), s)
+
+    self.assertIn('is referred to by', scope())  # doesn't crash
 
   def test_default_backend(self):
     first_local_device = jax.local_devices()[0]
@@ -6389,9 +6463,10 @@ class RematTest(jtu.JaxTestCase):
     def named_call(f):
       def named_f(*args):
         my_f = lambda: (f(*args),)
-        f_ = lu.wrap_init(
-            my_f, debug_info=api_util.debug_info("test_remat", my_f, (), {}))
-        out, = core.call_p.bind(subfuns=(f_,))
+        dbg = api_util.debug_info("test_remat", my_f, (), {})
+        jaxpr, _, consts = pe.trace_to_jaxpr_dynamic(
+            lu.wrap_init(my_f, debug_info=dbg), [])
+        out, = core.eval_jaxpr_p.bind(*consts, call_jaxpr=jaxpr)
         return out
       return named_f
 
@@ -6444,9 +6519,10 @@ class RematTest(jtu.JaxTestCase):
     @jax_util.curry
     def call(f, *args):
       my_f = lambda *args: [f(*args)]
-      sub = lu.wrap_init(
-        my_f, debug_info=api_util.debug_info("test_remat", my_f, args, {}))
-      return core.call(*args, name='foo', subfuns=(sub,))[0]
+      dbg = api_util.debug_info("test_remat", my_f, args, {})
+      jaxpr, _, consts = pe.trace_to_jaxpr_dynamic(
+          lu.wrap_init(my_f, debug_info=dbg), [core.typeof(x) for x in args])
+      return core.eval_jaxpr_p.bind(*consts, *args, call_jaxpr=jaxpr)[0]
 
     f = call(add_one)
     g = jax.remat(lambda x: add_one(f(x)))

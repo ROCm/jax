@@ -5117,7 +5117,7 @@ class ShardingInTypesTest(jtu.JaxTestCase):
 
   @jtu.with_explicit_mesh((2,), 'x')
   def test_ndim_less_than_pspec_length_error(self, mesh):
-    with self.assertRaisesRegex(ValueError, "Input's ndim is less than"):
+    with self.assertRaisesRegex(ValueError, "Length of sharding.spec"):
       jax.reshard(np.zeros((8, 4, 2)), P(None, None, None, 'x'))
 
   @jtu.with_explicit_mesh((2, 2, 1), ('x', 'y', 'z'))
@@ -9528,10 +9528,11 @@ class ShardingInTypesTest(jtu.JaxTestCase):
     step(ws, xs)  # doesn't crash
 
     compiled_text = step.lower(ws, xs).compile().as_text()
-    # Remove the all-reduce-start( checks once jaxlib catches up with XLA.
-    self.assertEqual(
-      compiled_text.count('all-reduce(') +
-        compiled_text.count('all-reduce-start('), 1)
+    if jtu.test_device_matches(['gpu']):
+      self.assertEqual(compiled_text.count('all-reduce-start('), 1)
+      self.assertEqual(compiled_text.count('all-reduce-done('), 1)
+    else:
+      self.assertEqual(compiled_text.count('all-reduce('), 1)
 
   @jtu.with_explicit_mesh((2,), 'x')
   def test_vmap_mapped_input_sharding_error(self, mesh):
@@ -9615,10 +9616,11 @@ class ShardingInTypesTest(jtu.JaxTestCase):
     step(stacked_ws, xs)  # doesn't crash
 
     compiled_text = step.lower(stacked_ws, xs).compile().as_text()
-    # Remove the all-reduce-start( checks once jaxlib catches up with XLA.
-    self.assertEqual(
-      compiled_text.count('all-reduce(') +
-        compiled_text.count('all-reduce-start('), 1)
+    if jtu.test_device_matches(['gpu']):
+      self.assertEqual(compiled_text.count('all-reduce-start('), 1)
+      self.assertEqual(compiled_text.count('all-reduce-done('), 1)
+    else:
+      self.assertEqual(compiled_text.count('all-reduce('), 1)
 
   @jtu.with_explicit_mesh((2, 2), ('x', 'y'))
   def test_jacrev_sharded_broadcast(self, mesh):

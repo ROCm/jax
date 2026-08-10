@@ -33,7 +33,7 @@ from jax._src.lax import linalg as lax_linalg
 from jax._src.numpy import linalg as jnp_linalg
 from jax._src.numpy import vectorize as jnp_vectorize
 from jax._src.numpy.util import (
-    check_arraylike, promote_dtypes, promote_dtypes_inexact,
+    check_arraylike, ensure_arraylike, promote_dtypes, promote_dtypes_inexact,
     promote_dtypes_complex, promote_args_inexact)
 from jax._src.scipy.special import comb
 from jax._src.tpu.linalg import qdwh
@@ -574,7 +574,7 @@ def schur(a: ArrayLike, output: str = 'real') -> tuple[Array, Array]:
   if output not in ('real', 'complex'):
     raise ValueError(
       f"Expected 'output' to be either 'real' or 'complex', got {output=}.")
-  return _schur(a, output)
+  return _schur(ensure_arraylike("scipy.schur", a), output)
 
 
 def inv(a: ArrayLike, overwrite_a: bool = False, check_finite: bool = True) -> Array:
@@ -2169,7 +2169,7 @@ def _sqrtm_triu(T: Array) -> Array:
   return U
 
 @jit
-def _sqrtm(A: ArrayLike) -> Array:
+def _sqrtm(A: Array) -> Array:
   T, Z = schur(A, output='complex')
   sqrt_T = _sqrtm_triu(T)
   return jnp.matmul(jnp.matmul(Z, sqrt_T, precision=lax.Precision.HIGHEST),
@@ -2222,7 +2222,7 @@ def sqrtm(A: ArrayLike, blocksize: int = 1) -> Array:
   """
   if blocksize > 1:
       raise NotImplementedError("Blocked version is not implemented yet.")
-  return _sqrtm(A)
+  return _sqrtm(ensure_arraylike("scipy.sqrtm", A))
 
 
 @jit

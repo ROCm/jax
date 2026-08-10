@@ -32,7 +32,7 @@ from jax._src.ad_util import (
 from jax._src.api_util import (
   argnums_partial, resolve_kwargs,
   prepend_static_args, debug_info, fun_signature,
-  infer_argnums_and_argnames)
+  infer_argnums_and_argnames, fun_sourceinfo)
 from jax._src.errors import UnexpectedTracerError
 from jax._src.state.types import AbstractRef
 from jax._src.interpreters import ad
@@ -395,7 +395,7 @@ class CustomJVPCallPrimitive(core.Primitive):
     return call_jaxpr.is_high
 
   def to_lojax(self, *hi_args, call_jaxpr: core.Jaxpr, **params):
-    return pe._lower_and_eval("custom_jvp_call", call_jaxpr, hi_args)
+    return pe._lower_and_eval(pe.eval_jaxpr_p, call_jaxpr, hi_args)
 
   def get_bind_params(self, params):
     new_params = dict(params)
@@ -764,7 +764,8 @@ class custom_vjp(Generic[ReturnValue]):
     flat_fwd, out_trees = _flatten_fwd(
         fwd_, self.nondiff_argnums, self.symbolic_zeros, debug_fun,
         debug_fwd, in_tree, out_type)
-    flat_bwd = _flatten_bwd(bwd, in_tree, in_avals, out_trees, self.with_logs)
+    flat_bwd = _flatten_bwd(bwd, in_tree, in_avals, out_trees, self.fun,
+                            self.with_logs)
     out_flat = custom_vjp_call_p.bind(*args_flat, subfuns=(flat_fun, flat_fwd, flat_bwd),
                                       out_trees=out_trees,
                                       symbolic_zeros=self.symbolic_zeros)
@@ -930,8 +931,7 @@ def _flatten_bwd(f: Callable,
                  in_tree: PyTreeDef,
                  in_avals: Sequence[core.AbstractValue],  # primal avals
                  out_trees: Callable[[], tuple[PyTreeDef, PyTreeDef, list[int | None]]],
-                 with_logs: bool,
-                 *args):
+                 primal_fun, with_logs: bool, *args):
   out_tree, res_tree, _ = out_trees()
   assert len(args) == res_tree.num_leaves + out_tree.num_leaves
   res, cts_out = split_list(args, [res_tree.num_leaves])
@@ -1000,7 +1000,9 @@ def _flatten_bwd(f: Callable,
           not core.typecompat(a.to_ct_aval(), a_ := core.typeof(ct))
           and not _ref_typecompat(a.to_ct_aval(), a_)
           and not _temporary_dtype_exception(a.to_ct_aval(), a_)):
-        msg = ("Custom VJP bwd rule must produce an output with the same "
+        primal_info = fun_sourceinfo(primal_fun)
+        msg = (f"Custom VJP bwd rule attached to {primal_info} must produce an "
+               "output with the same "
                "type as the args tuple of the primal function, but at "
                f"output{keystr(kp)} the bwd rule produced an output of "
                f"type {a_.str_short()} corresponding "
@@ -1040,7 +1042,7 @@ class CustomVJPCallPrimitive(core.Primitive):
     return call_jaxpr.is_high
 
   def to_lojax(self, *hi_args, call_jaxpr: core.Jaxpr, **params):
-    return pe._lower_and_eval("custom_vjp_call", call_jaxpr, hi_args)
+    return pe._lower_and_eval(pe.eval_jaxpr_p, call_jaxpr, hi_args)
 
   def get_bind_params(self, params):
     new_params = dict(params)
@@ -1253,10 +1255,13 @@ def custom_gradient(fun=None, *, with_logs: bool = False):
   if fun is None:
     return lambda f: custom_gradient(f, with_logs=with_logs)
 
-  @custom_vjp
   def wrapped_fun(*args, **kwargs):
     ans, _ = fun(*args, **kwargs)
     return ans
+
+  wrapped_fun.__name__ = getattr(fun, '__name__', '<unnamed>')
+  wrapped_fun.__qualname__ = getattr(fun, '__qualname__', '<unnamed>')
+  wrapped_fun = custom_vjp(wrapped_fun)
 
   def fwd(*args, **kwargs):
     ans, rule = fun(*args, **kwargs)
@@ -1917,13 +1922,13 @@ def _remat_opt_dce(used_outs: list[bool], eqn: core.JaxprEqn):
     _, invars = split_list(eqn.invars, [eqn.params["num_consts"]])
     invars = [v for used, v in zip(used_ins, invars) if used]
     new_eqn = pe.new_jaxpr_eqn(
-        invars, outvars, core.closed_call_p, dict(call_jaxpr=closed_jaxpr),
+        invars, outvars, core.eval_jaxpr_p, dict(call_jaxpr=closed_jaxpr),
         core.eqn_effects(closed_jaxpr, invars), eqn.source_info, eqn.ctx)
     used_ins = [False] * eqn.params["num_consts"] + used_ins
     return used_ins, new_eqn
 
 def _remat_opt_to_lojax(*hi_args, fwd_jaxpr: core.Jaxpr, num_consts, **params):
-  return pe._lower_and_eval("remat_opt", fwd_jaxpr, hi_args)
+  return pe._lower_and_eval(pe.eval_jaxpr_p, fwd_jaxpr, hi_args)
 
 remat_opt_p = core.Primitive("remat_opt")
 remat_opt_p.multiple_results = True

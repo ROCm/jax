@@ -24,7 +24,7 @@ import itertools
 import logging
 import math
 import os
-from typing import Any, Literal, overload
+from typing import Any, Literal, cast, overload
 
 import jax
 from jax import numpy as jnp
@@ -582,8 +582,13 @@ def bitwidth_impl(ty: ir.Type):
     return ir.IntegerType(ty).width
   if isinstance(ty, ir.FloatType):
     return ir.FloatType(ty).width
-  if dialect is not None and isinstance(ty, dialect.BarrierType):
+  if isinstance(ty, dialect.BarrierType):
     return MBARRIER_BYTES * 8
+  # TODO(bchetioui): remove once minimum jaxlib version is 0.11.1.
+  if hasattr(dialect, "B6x16P32Type") and isinstance(ty, dialect.B6x16P32Type):
+    return 128
+  if hasattr(dialect, "P2B6Type") and isinstance(ty, dialect.P2B6Type):
+    return 8
   if isinstance(ty, ir.VectorType):
     vty = ir.VectorType(ty)
     return math.prod(vty.shape) * bitwidth(vty.element_type)
@@ -1013,13 +1018,17 @@ def commit_shared():
   warpgroup_barrier()
 
 
-def warpgroup_barrier():
+def warpgroup_barrier_idx(sync: bool = True) -> ir.Value[ir.IntegerType]:
   # gpu.barrier() uses barrier number 0, and it would be unsafe to reuse it,
   # so we shift the warpgroup index by 1.
   i32 = ir.IntegerType.get_signless(32)
+  return arith.addi(warpgroup_idx(sync=sync), c(1, i32))
+
+
+def warpgroup_barrier():
   llvm.inline_asm(
       ir.Type.parse("!llvm.void"),
-      [arith.addi(warpgroup_idx(sync=False), c(1, i32))],
+      [warpgroup_barrier_idx(sync=False)],
       f"bar.sync $0, {WARPGROUP_SIZE};",
       "r",
       has_side_effects=True,
@@ -1095,24 +1104,49 @@ class BarrierRef:
       return nvvm.MemScopeKind.CLUSTER
     return nvvm.MemScopeKind.CTA
 
-  def test_parity(self, parity, orders_tensor_core=False) -> ir.Value:
+  def test_parity(
+      self,
+      parity,
+      orders_tensor_core: bool = False,
+      scope: ThreadSubset = ThreadSubset.WARPGROUP,
+    ) -> ir.Value:
+    i1 = ir.IntegerType.get_signless(1)
     i32 = ir.IntegerType.get_signless(32)
     parity = arith.extui(i32, parity)
     wait_complete = nvvm.mbarrier_test_wait(self.get_ptr(), parity)
+
+    if scope == ThreadSubset.WARPGROUP:
+      wait_complete = llvm.inline_asm(
+          i1,
+          [warpgroup_barrier_idx(sync=False), wait_complete],
+          f"bar.red.or.pred $0, $1, {WARPGROUP_SIZE}, $2;",
+          "=b,r,b",
+          has_side_effects=True,
+      )
+      wait_complete = cast(ir.OpResult[ir.IntegerType], wait_complete)
+    elif scope == ThreadSubset.WARP:
+      wait_complete = nvvm.vote_sync(c(0xFFFFFFFF, i32), wait_complete, "any")
+    else:
+      raise ValueError(f"Unsupported scope: {scope}")
+
     if orders_tensor_core:
       with when(wait_complete):
         nvvm.tcgen05_fence(nvvm.Tcgen05FenceKind.AFTER_THREAD_SYNC)
     return wait_complete
 
-  def test(self, orders_tensor_core: bool = False) -> ir.Value:
+  def test(
+      self,
+      orders_tensor_core: bool = False,
+      scope: ThreadSubset = ThreadSubset.WARPGROUP,
+  ) -> ir.Value:
     parities = memref.load(self.phases, [])
     parity, new_parities = self.update_parities(parities)
-    wait_complete = self.test_parity(parity, orders_tensor_core)
+    wait_complete = self.test_parity(parity, orders_tensor_core, scope)
     with when(wait_complete):
       memref.store(new_parities, self.phases, [])
     return wait_complete
 
-  def wait_parity(self, parity, orders_tensor_core=False):
+  def wait_parity(self, parity, orders_tensor_core: bool = False):
     if self._ptx_scope != "cta":
       raise ValueError("Can only await on CTA-local barriers")
     i32 = ir.IntegerType.get_signless(32)
@@ -1296,16 +1330,25 @@ class DialectBarrierRef:
   def __getitem__(self, offset: ir.Value | int) -> "DialectBarrierRef":
     return DialectBarrierRef(self.barrier_ref[offset], self.orders_tensor_core)
 
-  def test_parity(self, parity, orders_tensor_core=False) -> ir.Value:
+  def test_parity(
+      self,
+      parity,
+      orders_tensor_core: bool = False,
+      scope: ThreadSubset = ThreadSubset.WARPGROUP,
+  ) -> ir.Value:
     assert self.orders_tensor_core == orders_tensor_core
-    return self.barrier_ref.test_parity(parity, orders_tensor_core)
+    return self.barrier_ref.test_parity(parity, orders_tensor_core, scope=scope)
 
-  def test(self, orders_tensor_core: bool = False) -> ir.Value:
+  def test(
+      self,
+      orders_tensor_core: bool = False,
+      scope: ThreadSubset = ThreadSubset.WARPGROUP,
+  ) -> ir.Value:
     assert self.orders_tensor_core == orders_tensor_core
     assert self.barrier_ref.phases is not None
-    return self.barrier_ref.test(orders_tensor_core)
+    return self.barrier_ref.test(orders_tensor_core, scope=scope)
 
-  def wait_parity(self, parity, orders_tensor_core=False):
+  def wait_parity(self, parity, orders_tensor_core: bool = False):
     assert self.orders_tensor_core == orders_tensor_core
     self.barrier_ref.wait_parity(parity, orders_tensor_core)
 
@@ -1322,6 +1365,9 @@ class DialectBarrierRef:
     dialect.ArriveOp(self.as_barrier_memref(), orders_tensor_core)
 
   def arrive_expect_tx(self, bytes: int | ir.Value):
+    # TODO: Remove when the minimum jaxlib version is 0.11.1
+    if hasattr(dialect, "arrive_dyn_expect_tx_supported") and isinstance(bytes, int):
+      bytes = c(bytes, ir.IntegerType.get_signless(32))
     # pyrefly: ignore[bad-argument-type]
     dialect.ArriveExpectTxOp(barrier=self.as_barrier_memref(), expect_tx=bytes)
 
