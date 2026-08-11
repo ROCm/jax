@@ -44,7 +44,6 @@ source ./ci/utilities/rocm_test_env.sh
 # Disable core dumps just in case
 ulimit -c 0
 
-export NPROC=32
 LOGS_DIR="logs"
 mkdir -p "${LOGS_DIR}"
 mkdir -p test-artifacts
