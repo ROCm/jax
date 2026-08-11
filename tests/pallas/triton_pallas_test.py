@@ -370,10 +370,6 @@ class TritonPallasTest(PallasBaseTest):
           "elementwise_inline_asm is not supported in interpret mode"
       )
 
-    if jtu.is_device_rocm():
-      self.skipTest("elementwise_inline_asm is not currently "
-                    "supported on ROCm")
-
     @functools.partial(
         self.pallas_call,
         out_shape=jax.ShapeDtypeStruct((256,), jnp.float16),
