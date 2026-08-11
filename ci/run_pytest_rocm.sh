@@ -64,7 +64,7 @@ export gpu_count=$(rocminfo | egrep -c "Device Type:\s+GPU")
 echo "Number of GPUs detected: $gpu_count"
 
 # export num_processes=$((gpu_count * 4))
-export num_processes=4
+export num_processes=3
 echo "Number of processes to run: $num_processes"
 
 export JAX_ENABLE_ROCM_XDIST="$gpu_count"
