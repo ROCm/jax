@@ -11,22 +11,6 @@
 # Multi-accelerator test (not single-GPU; excluded from single_gpu runs anyway).
 -//tests/pallas:ops_test_mgpu_gpu
 
-# Flaky: test cases pass but the process hangs during GPU teardown (tracked separately).
--//tests/pallas:pallas_vmap_test_gpu
--//tests:cholesky_update_test_gpu
--//tests/pallas:gpu_paged_attention_test_gpu
-
-# Excluded for reasons unrelated to complex GEMM; not yet re-validated on ROCm CI.
--//tests:export_harnesses_multi_platform_test_gpu
--//tests:lax_numpy_test_gpu
--//tests:lax_test_gpu
--//tests:random_lax_test_gpu
--//tests:lax_scipy_sparse_test_gpu
--//tests:lax_scipy_spectral_dac_test_gpu
--//tests:api_test_gpu
--//tests:qdwh_test_gpu
--//tests:shape_poly_test_gpu
-
 # buffer_callback_test_gpu uses py_import deps that are incompatible with
 # pre-built plugin wheels (build_jaxlib=false); exclude it unconditionally.
 -//tests:buffer_callback_test_gpu
