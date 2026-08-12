@@ -122,6 +122,7 @@ jobs:
       image: ghcr.io/rocm/jax-base-ubu24.${{ inputs.rocm-tag }}:latest  # zizmor: ignore[unpinned-images]
       volumes:
         - /data:/data
+        - /home/runner/_work:/home/runner/_work
       options: >-
         --device=/dev/kfd
         --device=/dev/dri
