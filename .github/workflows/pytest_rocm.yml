@@ -159,9 +159,11 @@ jobs:
       HSA_NO_SCRATCH_RECLAIM: "1"
 
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
+      - name: Checkout
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git fetch --depth=1 origin ${{ github.sha }}
+          git checkout ${{ github.sha }}
       - name: Download JAX ROCm wheels
         uses: ./.github/actions/download-jax-rocm-wheels
         with:
@@ -180,9 +182,10 @@ jobs:
           $JAXCI_PYTHON -m pip install pytest-json-report
       # Halt for testing
       - name: Wait For Connection
-        uses: google-ml-infra/actions/ci_connection@7f5ca0c263a81ed09ea276524c1b9192f1304e3c
-        with:
-          halt-dispatch-input: ${{ inputs.halt-for-connection }}
+        run: |
+          if [[ "${{ inputs.halt-for-connection }}" == "yes" ]]; then
+            echo "halt-for-connection not supported without dind" && exit 1
+          fi
       - name: Run Pytest ROCm tests
         timeout-minutes: 120
         run: ./ci/run_pytest_rocm.sh
@@ -201,10 +204,17 @@ jobs:
           tar -czf logs.tar.gz logs
       - name: Configure AWS Credentials
         if: ${{ !cancelled() }}
-        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
-        with:
-          role-to-assume: arn:aws:iam::661452401056:role/jax-ci-amd-s3-oidc
-          aws-region: us-east-1
+        run: |
+          OIDC_TOKEN=$(curl -sH "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=sts.amazonaws.com" | jq -r .value)
+          CREDS=$(aws sts assume-role-with-web-identity \
+            --role-arn arn:aws:iam::661452401056:role/jax-ci-amd-s3-oidc \
+            --role-session-name gha \
+            --web-identity-token "$OIDC_TOKEN" \
+            --region us-east-1)
+          echo "AWS_ACCESS_KEY_ID=$(echo $CREDS | jq -r .Credentials.AccessKeyId)" >> $GITHUB_ENV
+          echo "AWS_SECRET_ACCESS_KEY=$(echo $CREDS | jq -r .Credentials.SecretAccessKey)" >> $GITHUB_ENV
+          echo "AWS_SESSION_TOKEN=$(echo $CREDS | jq -r .Credentials.SessionToken)" >> $GITHUB_ENV
       - name: Upload test-artifacts to AMD S3
         if: ${{ !cancelled() }}
         env:
