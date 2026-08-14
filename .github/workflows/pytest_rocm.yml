@@ -28,6 +28,7 @@ on:
           - "amd-do-linux.jax.gpu.gfx950.8"
           - "amd-do-linux.jax.gpu.gfx950.8-nodind"
           - "amd-do-linux.jax.gpu.gfx950.1-dpx"
+          - "amd-do-linux.jax.gpu.gfx950.1-nodind-dpx"
       python:
         description: "Which Python version to use?"
         type: choice
@@ -140,14 +141,7 @@ jobs:
     runs-on: ${{ inputs.runner }}
     continue-on-error: true
     # Run in ROCm team's GHCR container with GPU access
-    container:
-      image: ghcr.io/rocm/jax-base-ubu24.${{ inputs.rocm-tag }}:latest  # zizmor: ignore[unpinned-images]
-      credentials:
-        username: ${{ github.actor }}
-        password: ${{ secrets.GITHUB_TOKEN }}
-      volumes:
-        - /home/runner/_work:/home/runner/_work
-      options: --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --shm-size 64G --env-file /etc/podinfo/gha-gpu-isolation-settings
+    # No container: block — runner image (JAX base or ghascale) provides the environment directly
     name: "${{ (contains(inputs.runner, 'gfx950.1-nodind') && 'gfx950.1-nodind') ||
         (contains(inputs.runner, 'gfx950.1') && 'gfx950.1') ||
         (contains(inputs.runner, 'gfx950.4-nodind') && 'gfx950.4-nodind') ||
