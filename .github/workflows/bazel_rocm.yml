@@ -145,9 +145,15 @@ jobs:
     name: "linux x86, py${{ inputs.python }}, ROCM=${{ inputs.rocm-version }}, jaxlib=${{ inputs.jaxlib-version }}, x64=${{ inputs.enable-x64 }}, build_jax=${{ inputs.build_jax }}, build_jaxlib=${{ inputs.build_jaxlib }}"
 # End Presubmit Naming Check github-rocm-presubmits
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          persist-credentials: false
+      # Shell checkout: true no-dind runners lack /__e for JS actions.
+      - name: Checkout
+        run: |
+          git config --global --add safe.directory '*'
+          git init "$GITHUB_WORKSPACE"
+          cd "$GITHUB_WORKSPACE"
+          git remote add origin https://github.com/${{ github.repository }}.git
+          git fetch --depth=1 --no-tags --prune --no-recurse-submodules origin ${{ github.sha }}
+          git checkout ${{ github.sha }}
       - name: ROCm Info
         run: |
           # TheRock (pip) ROCm images are /opt/rocm-less; rocminfo lives in the
@@ -162,10 +168,17 @@ jobs:
           rocminfo
       - name: Configure AWS Credentials
         if: inputs.build_jaxlib == 'false' && inputs.jaxlib-version == 'head'
-        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
-        with:
-          role-to-assume: arn:aws:iam::661452401056:role/jax-ci-amd-s3-oidc
-          aws-region: us-east-1
+        run: |
+          OIDC_TOKEN=$(curl -sH "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=sts.amazonaws.com" | jq -r .value)
+          CREDS=$(aws sts assume-role-with-web-identity \
+            --role-arn arn:aws:iam::661452401056:role/jax-ci-amd-s3-oidc \
+            --role-session-name gha \
+            --web-identity-token "$OIDC_TOKEN" \
+            --region us-east-1)
+          echo "AWS_ACCESS_KEY_ID=$(echo $CREDS | jq -r .Credentials.AccessKeyId)" >> $GITHUB_ENV
+          echo "AWS_SECRET_ACCESS_KEY=$(echo $CREDS | jq -r .Credentials.SecretAccessKey)" >> $GITHUB_ENV
+          echo "AWS_SESSION_TOKEN=$(echo $CREDS | jq -r .Credentials.SessionToken)" >> $GITHUB_ENV
       # Get the JAX/Jaxlib/Plugin/PJRT wheels from their respective
       # sources when not building.
       - name: Download JAX/Jaxlib/Plugin/PJRT wheels
@@ -183,9 +196,10 @@ jobs:
           jax-jaxlib-source: ${{ inputs.jax-jaxlib-source }}
       # Halt for testing
       - name: Wait For Connection
-        uses: google-ml-infra/actions/ci_connection@7f5ca0c263a81ed09ea276524c1b9192f1304e3c
-        with:
-          halt-dispatch-input: ${{ inputs.halt-for-connection }}
+        run: |
+          if [[ "${{ inputs.halt-for-connection }}" == "yes" ]]; then
+            echo "halt-for-connection not supported without dind" && exit 1
+          fi
       - name: Resolve RBE container image digest
         id: rbe-image
         env:

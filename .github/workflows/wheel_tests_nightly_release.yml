@@ -177,7 +177,7 @@ jobs:
     strategy:
         fail-fast: false
         matrix:
-          runner: ["amd-do-linux.jax.cpu"]
+          runner: ["amd-do-linux.jax.cpu-nodind"]
           artifact: ["jax-rocm-plugin", "jax-rocm-pjrt"]
           python: ["3.12", "3.13", "3.14"]
           rocm: [
@@ -215,7 +215,7 @@ jobs:
     strategy:
         fail-fast: false
         matrix:
-          runner: ["amd-do-linux.jax.cpu"]
+          runner: ["amd-do-linux.jax.cpu-nodind"]
           artifact: ["jax", "jaxlib"]
           python: ["3.12", "3.13", "3.14"]
           rocm: [
@@ -252,7 +252,7 @@ jobs:
     strategy:
         fail-fast: false # don't cancel all jobs on failure
         matrix:
-          runner: ["amd-do-linux.jax.gpu.gfx950.1", "amd-do-linux.jax.gpu.gfx950.4", "amd-do-linux.jax.gpu.gfx950.8"]
+          runner: ["amd-do-linux.jax.gpu.gfx950.1-nodind", "amd-do-linux.jax.gpu.gfx950.4-nodind", "amd-do-linux.jax.gpu.gfx950.8-nodind"]
           python: ["3.12", "3.13", "3.14"]
           rocm: [
             {label: "TheRock 7.14.0", wheel-version: "7", release-version: "7.14.0", tag: "therock-7.14"},
@@ -283,7 +283,7 @@ jobs:
     strategy:
         fail-fast: false # don't cancel all jobs on failure
         matrix:
-          runner: ["amd-do-linux.jax.gpu.gfx950.1"]
+          runner: ["amd-do-linux.jax.gpu.gfx950.1-nodind"]
           python: ["3.12", "3.13", "3.14"]
           rocm: [
             {label: "TheRock 7.14.0", wheel-version: "7", release-version: "7.14.0", tag: "therock-7.14"},

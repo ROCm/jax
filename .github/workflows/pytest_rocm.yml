@@ -24,6 +24,7 @@ on:
           - "amd-do-linux.jax.gpu.gfx950.1"
           - "amd-do-linux.jax.gpu.gfx950.1-nodind"
           - "amd-do-linux.jax.gpu.gfx950.4"
+          - "amd-do-linux.jax.gpu.gfx950.4-nodind"
           - "amd-do-linux.jax.gpu.gfx950.8"
           - "amd-do-linux.jax.gpu.gfx950.8-nodind"
       python:
@@ -148,6 +149,7 @@ jobs:
       options: --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --shm-size 64G --env-file /etc/podinfo/gha-gpu-isolation-settings
     name: "${{ (contains(inputs.runner, 'gfx950.1-nodind') && 'gfx950.1-nodind') ||
         (contains(inputs.runner, 'gfx950.1') && 'gfx950.1') ||
+        (contains(inputs.runner, 'gfx950.4-nodind') && 'gfx950.4-nodind') ||
         (contains(inputs.runner, 'gfx950.4') && 'gfx950.4') ||
         (contains(inputs.runner, 'gfx950.8-nodind') && 'gfx950.8-nodind') ||
         (contains(inputs.runner, 'gfx950.8') && 'gfx950.8') }}, ROCm ${{ inputs.rocm-version }}, py${{ inputs.python }}"
