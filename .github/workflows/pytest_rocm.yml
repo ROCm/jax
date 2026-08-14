@@ -141,6 +141,8 @@ jobs:
       credentials:
         username: ${{ github.actor }}
         password: ${{ secrets.GITHUB_TOKEN }}
+      volumes:
+        - /home/runner/_work:/home/runner/_work
       options: --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --shm-size 64G --env-file /etc/podinfo/gha-gpu-isolation-settings
     name: "${{ (contains(inputs.runner, 'gfx950.1') && 'gfx950 1-GPU') ||
         (contains(inputs.runner, 'gfx950.4') && 'gfx950 4-GPU') ||
