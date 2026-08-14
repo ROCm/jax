@@ -24,6 +24,25 @@
 #   <org>/<repo>/<branch>/<nightly|continuous>/<version>/<DATE>_<run_id>_<attempt>/<combo>/
 set -euo pipefail
 
+# Direct-runner / true no-dind (#882/#902) pods may not ship aws CLI.
+if ! command -v aws >/dev/null 2>&1; then
+  echo "Installing AWS CLI v2..."
+  if ! command -v unzip >/dev/null 2>&1; then
+    sudo apt-get update -y
+    sudo apt-get install -y --no-install-recommends unzip
+  fi
+  arch="$(uname -m)"
+  case "${arch}" in
+    x86_64|amd64) aws_arch=x86_64 ;;
+    aarch64|arm64) aws_arch=aarch64 ;;
+    *) echo "Unsupported arch for AWS CLI: ${arch}" >&2; exit 1 ;;
+  esac
+  curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-${aws_arch}.zip" -o /tmp/awscliv2.zip
+  unzip -q /tmp/awscliv2.zip -d /tmp
+  sudo /tmp/aws/install
+  rm -rf /tmp/awscliv2.zip /tmp/aws
+fi
+
 : "${S3_BUCKET_NAME:?}"
 : "${INPUT_PYTHON:?}"
 : "${INPUT_ROCM_VERSION:?}"

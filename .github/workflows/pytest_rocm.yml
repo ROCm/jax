@@ -176,39 +176,6 @@ jobs:
           command -v rocminfo >/dev/null 2>&1 && rocminfo || true
           command -v rocm-smi >/dev/null 2>&1 && rocm-smi || true
           ls -la /dev/kfd /dev/dri 2>/dev/null || true
-      # True no-dind (#882/#902) runs steps on the runner pod, not in jax-base.
-      # ghascale-rocm-dev does not ship gcloud/aws; install them when missing.
-      - name: Install cloud CLIs for direct-runner
-        run: |
-          set -euo pipefail
-          if ! command -v gcloud >/dev/null 2>&1; then
-            echo "Installing Google Cloud CLI..."
-            curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg \
-              | sudo gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg
-            echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" \
-              | sudo tee /etc/apt/sources.list.d/google-cloud-sdk.list >/dev/null
-            sudo apt-get update -y
-            sudo apt-get install -y --no-install-recommends google-cloud-cli
-          fi
-          if ! command -v aws >/dev/null 2>&1; then
-            echo "Installing AWS CLI v2..."
-            if ! command -v unzip >/dev/null 2>&1; then
-              sudo apt-get update -y
-              sudo apt-get install -y --no-install-recommends unzip
-            fi
-            arch="$(uname -m)"
-            case "${arch}" in
-              x86_64|amd64) aws_arch=x86_64 ;;
-              aarch64|arm64) aws_arch=aarch64 ;;
-              *) echo "Unsupported arch for AWS CLI: ${arch}" >&2; exit 1 ;;
-            esac
-            curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-${aws_arch}.zip" -o /tmp/awscliv2.zip
-            unzip -q /tmp/awscliv2.zip -d /tmp
-            sudo /tmp/aws/install
-            rm -rf /tmp/awscliv2.zip /tmp/aws
-          fi
-          gcloud --version
-          aws --version
       - name: Download JAX ROCm wheels
         uses: ./.github/actions/download-jax-rocm-wheels
         with:
