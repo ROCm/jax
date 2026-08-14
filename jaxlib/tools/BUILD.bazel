@@ -239,6 +239,7 @@ wheel_sources(
     ]) + if_rocm([
         "//jax_plugins/rocm:plugin_pyproject.toml",
         "//jax_plugins/rocm:plugin_setup.py",
+        "//jax_plugins/rocm:rocm_version.py",
     ]),
 )
 
@@ -350,6 +351,7 @@ wheel_sources(
     ]) + if_rocm([
         "//jax_plugins/rocm:pyproject.toml",
         "//jax_plugins/rocm:setup.py",
+        "//jax_plugins/rocm:rocm_version.py",
         "//jax_plugins/rocm:__init__.py",
     ]) + if_sycl([
         "//jax_plugins/oneapi:pyproject.toml",
