@@ -118,18 +118,8 @@ jobs:
         # Explicitly set the shell to bash
         shell: bash
     runs-on: ${{ inputs.runner }}
-    container:
-      image: ghcr.io/rocm/jax-base-ubu24.${{ inputs.rocm-tag }}:latest  # zizmor: ignore[unpinned-images]
-      volumes:
-        - /data:/data
-        - /home/runner/_work:/home/runner/_work
-      options: >-
-        --device=/dev/kfd
-        --device=/dev/dri
-        --security-opt seccomp=unconfined
-        --group-add video
-        --shm-size 64G
-        --env-file /etc/podinfo/gha-gpu-isolation-settings
+    # Direct-runner (no container:): amd.com/gpu device plugin injects GPUs into
+    # the ARC runner pod. Required for true no-dind host-socket runners.
 
     env:
       JAXCI_CLONE_MAIN_XLA: ${{ inputs.clone_main_xla }}
