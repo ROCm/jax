@@ -27,6 +27,10 @@ on:
           - "amd-do-linux.jax.gpu.gfx950.4"
           - "amd-do-linux.jax.gpu.gfx950.8"
           - "amd-do-linux.jax.gpu.gfx950.8-nodind"
+      runner-override:
+        description: "Runner label to use instead of 'runner'. For pools not in the list yet, e.g. DPX DOKS."
+        type: string
+        default: ""
       python:
         description: "Which Python version to use?"
         type: choice
@@ -83,6 +87,10 @@ on:
         description: "Which runner should the workflow run on?"
         type: string
         default: "amd-do-linux.jax.gpu.gfx950.4"
+      runner-override:
+        description: "Runner label to use instead of 'runner'. For pools not in the list yet, e.g. DPX DOKS."
+        type: string
+        default: ""
       python:
         description: "Which Python version to use?"
         type: string
@@ -136,15 +144,12 @@ jobs:
       run:
         # Set the shell to bash as GitHub actions run with /bin/sh by default
         shell: bash
-    runs-on: ${{ inputs.runner }}
+    runs-on: ${{ inputs.runner-override || inputs.runner }}
     continue-on-error: true
-    # Direct-runner (no container:): amd.com/gpu device plugin injects GPUs into
-    # the ARC runner pod. Required for true no-dind host-socket runners.
-    name: "${{ (contains(inputs.runner, 'gfx950.1-nodind') && 'gfx950.1-nodind') ||
-        (contains(inputs.runner, 'gfx950.1') && 'gfx950.1') ||
-        (contains(inputs.runner, 'gfx950.4') && 'gfx950.4') ||
-        (contains(inputs.runner, 'gfx950.8-nodind') && 'gfx950.8-nodind') ||
-        (contains(inputs.runner, 'gfx950.8') && 'gfx950.8') }}, ROCm ${{ inputs.rocm-release-version || inputs.rocm-version }}, py${{ inputs.python }}"
+    # Direct-runner (no container:): GPUs are provided by the runner pod itself,
+    # via the amd.com/gpu device plugin or a DRA claim. Required for true no-dind
+    # host-socket runners, where container: jobs cannot see /__e.
+    name: "${{ inputs.runner-override || inputs.runner }}, ROCm ${{ inputs.rocm-release-version || inputs.rocm-version }}, py${{ inputs.python }}"
 
     env:
       JAXCI_HERMETIC_PYTHON_VERSION: "${{ inputs.python }}"
@@ -200,7 +205,7 @@ jobs:
         continue-on-error: true
         uses: ./.github/actions/upload-test-artifacts
         with:
-          artifact-name: pytest-test-artifacts-${{ inputs.runner }}-py${{ inputs.python }}-rocm${{ inputs.rocm-version }}
+          artifact-name: pytest-test-artifacts-${{ inputs.runner-override || inputs.runner }}-py${{ inputs.python }}-rocm${{ inputs.rocm-version }}
           inputs_json: ${{ toJSON(inputs) }}
           matrix_json: ${{ toJSON(matrix) }}
       - name: Archive test logs
@@ -220,7 +225,7 @@ jobs:
           S3_BUCKET_NAME: jax-ci-amd
           INPUT_PYTHON: ${{ inputs.python }}
           INPUT_ROCM_VERSION: ${{ inputs.rocm-version }}
-          INPUT_RUNNER: ${{ inputs.runner }}
+          INPUT_RUNNER: ${{ inputs.runner-override || inputs.runner }}
           INPUT_ROCM_TAG: ${{ inputs.rocm-tag }}
           IS_NIGHTLY: ${{ contains(github.workflow, 'Nightly/Release') && 'nightly' || 'continuous' }}
         run: |
