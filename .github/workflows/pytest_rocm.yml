@@ -165,10 +165,10 @@ jobs:
     steps:
       - name: Checkout
         run: |
+          git config --global --add safe.directory '*'
           git init "$GITHUB_WORKSPACE"
           cd "$GITHUB_WORKSPACE"
           git remote add origin https://github.com/${{ github.repository }}.git
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
           git fetch --depth=1 --no-tags --prune --no-recurse-submodules origin ${{ github.sha }}
           git checkout ${{ github.sha }}
       - name: Download JAX ROCm wheels
