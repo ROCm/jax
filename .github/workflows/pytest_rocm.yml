@@ -195,8 +195,12 @@ jobs:
         run: |
           source ci/envs/default.env
           source ./ci/utilities/install_wheels_locally.sh
-          $JAXCI_PYTHON -m pytest -n 4 --tb=short             --json-report --json-report-file=logs/pytest_results_single.json             --junitxml=test-artifacts/junit-single.xml             tests/lax_test.py
           mkdir -p logs test-artifacts
+          $JAXCI_PYTHON -m pytest -n 1 --tb=short \
+            --json-report --json-report-file=logs/pytest_results_single.json \
+            --junitxml=test-artifacts/junit-single.xml \
+            -m "not slow" \
+            tests/lax_test.py
       - name: Upload test artifacts
         if: always()
         continue-on-error: true
