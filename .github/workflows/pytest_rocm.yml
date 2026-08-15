@@ -190,17 +190,20 @@ jobs:
           if [[ "${{ inputs.halt-for-connection }}" == "yes" ]]; then
             echo "halt-for-connection not supported without dind" && exit 1
           fi
-      - name: Run Pytest ROCm tests (smoke — lax_test.py only)
-        timeout-minutes: 30
+      - name: Run Pytest ROCm tests
+        timeout-minutes: 240
         run: |
           source ci/envs/default.env
           source ./ci/utilities/install_wheels_locally.sh
+          export XLA_PYTHON_CLIENT_MEM_FRACTION=0.22
+          export XLA_PYTHON_CLIENT_PREALLOCATE=false
+          export XLA_PYTHON_CLIENT_ALLOCATOR=address
+          gpu_count=$(rocminfo | grep -c "Device Type:.*GPU" || echo 1)
+          num_processes=$((gpu_count * 4))
+          echo "GPUs: ${gpu_count}, Workers: ${num_processes}"
           mkdir -p logs test-artifacts
-          $JAXCI_PYTHON -m pytest -n 1 --tb=short \
-            --json-report --json-report-file=logs/pytest_results_single.json \
-            --junitxml=test-artifacts/junit-single.xml \
-            -m "not slow" \
-            tests/lax_test.py
+          $JAXCI_PYTHON -m pytest -n ${num_processes} --tb=short             --json-report --json-report-file=logs/pytest_results_single.json             --junitxml=test-artifacts/junit-single.xml             -m "not multiaccelerator"             --deselect=tests/multi_device_test.py::MultiDeviceTest::test_computation_follows_data             --deselect=tests/multiprocess_gpu_test.py::MultiProcessGpuTest::test_distributed_jax_visible_devices             --deselect=tests/compilation_cache_test.py::CompilationCacheTest::test_task_using_cache_metric             tests
+
       - name: Upload test artifacts
         if: always()
         continue-on-error: true
