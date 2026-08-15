@@ -182,7 +182,10 @@ jobs:
           fi
           git fetch --depth=1 --no-tags --prune --no-recurse-submodules origin "${{ github.sha }}"
           git checkout --force "${{ github.sha }}"
-      - name: Download JAX ROCm wheels
+          # Shared hostPath workdirs retain artifacts across jobs; clear so uv/pip
+          # do not see conflicting wheels from a previous Python/ROCm matrix cell.
+          rm -rf "$GITHUB_WORKSPACE/dist" "$GITHUB_WORKSPACE/logs"
+          mkdir -p "$GITHUB_WORKSPACE/dist"
         uses: ./.github/actions/download-jax-rocm-wheels
         with:
           python: ${{ inputs.python }}

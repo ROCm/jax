@@ -162,6 +162,10 @@ jobs:
           fi
           git fetch --depth=1 --no-tags --prune --no-recurse-submodules origin "${{ github.sha }}"
           git checkout --force "${{ github.sha }}"
+          # Shared hostPath workdirs retain artifacts across jobs; clear so later
+          # wheel downloads/installs do not mix leftovers from prior matrix cells.
+          rm -rf "$GITHUB_WORKSPACE/dist" "$GITHUB_WORKSPACE/logs"
+          mkdir -p "$GITHUB_WORKSPACE/dist"
       - name: ROCm Info
         run: |
           # TheRock (pip) ROCm images are /opt/rocm-less; rocminfo lives in the
