@@ -186,6 +186,7 @@ jobs:
           # do not see conflicting wheels from a previous Python/ROCm matrix cell.
           rm -rf "$GITHUB_WORKSPACE/dist" "$GITHUB_WORKSPACE/logs"
           mkdir -p "$GITHUB_WORKSPACE/dist"
+      - name: Download JAX ROCm wheels
         uses: ./.github/actions/download-jax-rocm-wheels
         with:
           python: ${{ inputs.python }}
