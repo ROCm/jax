@@ -218,15 +218,15 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           OIDC_TOKEN=$(curl -sH "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=sts.amazonaws.com" | jq -r .value)
+            "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=sts.amazonaws.com" | python3 -c "import sys,json; print(json.load(sys.stdin)['value'])")
           CREDS=$(aws sts assume-role-with-web-identity \
             --role-arn arn:aws:iam::661452401056:role/jax-ci-amd-s3-oidc \
             --role-session-name gha \
             --web-identity-token "$OIDC_TOKEN" \
             --region us-east-1)
-          echo "AWS_ACCESS_KEY_ID=$(echo $CREDS | jq -r .Credentials.AccessKeyId)" >> $GITHUB_ENV
-          echo "AWS_SECRET_ACCESS_KEY=$(echo $CREDS | jq -r .Credentials.SecretAccessKey)" >> $GITHUB_ENV
-          echo "AWS_SESSION_TOKEN=$(echo $CREDS | jq -r .Credentials.SessionToken)" >> $GITHUB_ENV
+          echo "AWS_ACCESS_KEY_ID=$(echo $CREDS | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['Credentials']['AccessKeyId'])")" >> $GITHUB_ENV
+          echo "AWS_SECRET_ACCESS_KEY=$(echo $CREDS | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['Credentials']['SecretAccessKey'])")" >> $GITHUB_ENV
+          echo "AWS_SESSION_TOKEN=$(echo $CREDS | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['Credentials']['SessionToken'])")" >> $GITHUB_ENV
       - name: Upload test-artifacts to AMD S3
         if: ${{ !cancelled() }}
         env:
