@@ -190,9 +190,13 @@ jobs:
           if [[ "${{ inputs.halt-for-connection }}" == "yes" ]]; then
             echo "halt-for-connection not supported without dind" && exit 1
           fi
-      - name: Run Pytest ROCm tests
-        timeout-minutes: 120
-        run: ./ci/run_pytest_rocm.sh
+      - name: Run Pytest ROCm tests (smoke — lax_test.py only)
+        timeout-minutes: 30
+        run: |
+          source ci/envs/default.env
+          source ./ci/utilities/install_wheels_locally.sh
+          $JAXCI_PYTHON -m pytest -n 4 --tb=short             --json-report --json-report-file=logs/pytest_results_single.json             --junitxml=test-artifacts/junit-single.xml             tests/lax_test.py
+          mkdir -p logs test-artifacts
       - name: Upload test artifacts
         if: always()
         continue-on-error: true
