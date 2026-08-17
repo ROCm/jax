@@ -47,8 +47,16 @@ on:
         options:
         - "1"
         - "0"
+      artifact-type:
+        description: "Which wheel version scheme to build: default (X.Y.Z.dev<date>+<hash>), nightly (X.Y.Z.dev<date>) or release (X.Y.Z, plus wheel-version-suffix)."
+        type: choice
+        default: "default"
+        options:
+        - "default"
+        - "nightly"
+        - "release"
       wheel-version-suffix:
-        description: "Version suffix for post-releases (e.g., .post3). Leave empty for normal builds."
+        description: "Version suffix for post-releases (e.g., .post3) or release candidates (e.g., rc0, requires artifact-type: release). Leave empty for normal builds."
         type: string
         default: ""
       halt-for-connection:
@@ -96,8 +104,12 @@ on:
         description: "S3 location prefix to where the artifacts should be uploaded"
         default: 's3://jax-ci-amd/jax-rocm-plugin-wheels'
         type: string
+      artifact-type:
+        description: "Which wheel version scheme to build: default (X.Y.Z.dev<date>+<hash>), nightly (X.Y.Z.dev<date>) or release (X.Y.Z, plus wheel-version-suffix)."
+        type: string
+        default: "default"
       wheel-version-suffix:
-        description: "Version suffix for post-releases (e.g., .post3). Leave empty for normal builds."
+        description: "Version suffix for post-releases (e.g., .post3) or release candidates (e.g., rc0, requires artifact-type: release). Leave empty for normal builds."
         type: string
         default: ""
       halt-for-connection:
@@ -155,6 +167,7 @@ jobs:
         run: ./ci/build_rocm_artifacts.sh "$INPUTS_ARTIFACT"
         env:
           INPUTS_ARTIFACT: ${{ inputs.artifact }}
+          JAXCI_ARTIFACT_TYPE: ${{ inputs.artifact-type }}
           JAXCI_WHEEL_VERSION_SUFFIX: ${{ inputs.wheel-version-suffix }}
       - name: Configure AWS Credentials
         if: ${{ inputs.upload_artifacts_to_s3 }}
