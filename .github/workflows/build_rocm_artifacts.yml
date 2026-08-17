@@ -156,7 +156,6 @@ jobs:
           persist-credentials: false
       - name: Install Bazelisk
         run: |
-          sleep 1000
           curl -fSsL -o /usr/local/bin/bazel https://github.com/bazelbuild/bazelisk/releases/latest/download/bazelisk-linux-amd64
           chmod +x /usr/local/bin/bazel
       # Halt for testing
