@@ -51,8 +51,8 @@ build:multi_gpu --repo_env=TF_ROCM_RBE_POOL="linux_x64_multigpu"
 build:multi_gpu --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL="linux_x64_multigpu"
 build:multi_gpu --repo_env=TF_ROCM_RBE_MULTI_GPU_POOL="linux_x64_multigpu"
 
-build:rocm_rbe --tls_client_certificate="/data/ci-cert.crt"
-build:rocm_rbe --tls_client_key="/data/ci-cert.key"
+build:rocm_rbe --tls_client_certificate="/home/runner/_work/data/ci-cert.crt"
+build:rocm_rbe --tls_client_key="/home/runner/_work/data/ci-cert.key"
 
 build:rocm_rbe --test_sharding_strategy=disabled
 build:rocm_rbe --bes_backend="grpcs://wardite.cluster.engflow.com"
