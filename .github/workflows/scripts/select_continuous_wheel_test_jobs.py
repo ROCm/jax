@@ -39,6 +39,10 @@ BUILD_JOBS = (
     'build_jaxlib_artifact',
     'build_cuda_artifacts',
     'build_rocm_artifacts',
+    # Fork-only. Upstream builds jax/jaxlib in build_jax_artifact and
+    # build_jaxlib_artifact, which are gated on the jax-ml owner; on the ROCm
+    # fork this job builds them instead. See wheel_tests_continuous.yml.
+    'build_rocm_jax_jaxlib',
 )
 
 # requires_builds lists artifact jobs whose uploaded wheels are consumed by
@@ -118,6 +122,7 @@ JOB_SPECS = (
             'build_jax_artifact',
             'build_jaxlib_artifact',
             'build_rocm_artifacts',
+            'build_rocm_jax_jaxlib',
         ),
     ),
     # LINT.ThenChange(.github/workflows/wheel_tests_continuous.yml:run_pytest_rocm)
@@ -130,6 +135,7 @@ JOB_SPECS = (
             'build_jax_artifact',
             'build_jaxlib_artifact',
             'build_rocm_artifacts',
+            'build_rocm_jax_jaxlib',
         ),
     ),
     # LINT.ThenChange(.github/workflows/wheel_tests_continuous.yml:run_bazel_test_rocm)
@@ -145,6 +151,7 @@ ALL_JOB_IDS = BUILD_JOBS + tuple(job.job_id for job in JOB_SPECS)
 # callers keep halt-for-connection pinned to 'no'.
 ROCM_JOB_IDS = frozenset((
     'build_rocm_artifacts',
+    'build_rocm_jax_jaxlib',
     'run_pytest_rocm',
     'run_bazel_test_rocm',
 ))
