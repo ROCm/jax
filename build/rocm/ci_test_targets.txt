@@ -8,9 +8,7 @@
 //tests/pallas:backend_independent_tests
 //jaxlib/tools:check_gpu_wheel_sources_test
 
-# Multi-accelerator test (not single-GPU; excluded from single_gpu runs anyway).
+# Mosaic GPU (mgpu) ops test. Mosaic GPU is an NVIDIA-only codegen path, so
+# this never passes on ROCm. Note it carries no multiaccelerator tag, so this
+# exclusion is what keeps it out of single_gpu runs -- not the tag filter.
 -//tests/pallas:ops_test_mgpu_gpu
-
-# buffer_callback_test_gpu uses py_import deps that are incompatible with
-# pre-built plugin wheels (build_jaxlib=false); exclude it unconditionally.
--//tests:buffer_callback_test_gpu
