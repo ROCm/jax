@@ -41,6 +41,15 @@ on:
         description: "Commit SHA to check out for running tests"
         required: false
         default: ""
+      rocm-artifact-type:
+        description: "ROCm fork only: wheel version scheme for the ROCm build jobs (default/nightly/release). Empty uses the branch default (release on the fork)."
+        required: false
+        default: ''
+        type: string
+      rocm-wheel-version-suffix:
+        description: "ROCm fork only: version suffix for the ROCm build jobs, e.g. rc1 (needs rocm-artifact-type release). Empty uses the branch default (rc0 on the fork); pass 'none' to build with no suffix."
+        required: false
+        default: ''
         type: string
 
 concurrency:
@@ -222,6 +231,19 @@ jobs:
       upload_artifacts_to_s3: true
       s3_upload_uri: 's3://jax-ci-amd/rocm-wheels/${{ github.repository }}/${{ github.ref_name }}/${{ matrix.rocm.release-version }}/wheel-tests-nightly/${{ github.run_number }}/${{ github.run_attempt }}'
       git_commit: ${{ inputs.git_commit }}
+      # On a release branch, jax's own metadata pins jaxlib to the exact release
+      # version (setup.py: `jaxlib >=_minimum_jaxlib_version, <=_jax_version`,
+      # both 0.11.1 once the release-prep commit lands), so dev-versioned wheels
+      # such as 0.11.1.dev20260811+a94e1bb94 can never satisfy it and the test
+      # legs fail to install what this run just built. Build release candidate
+      # wheels instead: setup.py relaxes the pin to >=<version>rc0 when
+      # WHEEL_VERSION_SUFFIX starts with "rc", so the wheels resolve against
+      # each other while staying clearly distinct from the final release.
+      # The plugin/pjrt wheels are tagged the same way because the plugin pins
+      # `jax-rocm<N>-pjrt==<its own version>`. Upstream (jax-ml) is unchanged.
+      # Both are overridable per run via the workflow_dispatch inputs.
+      artifact-type: ${{ inputs.rocm-artifact-type || (github.repository_owner == 'ROCm' && 'release' || 'default') }}
+      wheel-version-suffix: ${{ inputs.rocm-wheel-version-suffix == 'none' && '' || inputs.rocm-wheel-version-suffix || (github.repository_owner == 'ROCm' && 'rc0' || '') }}
 
   # Upstream CI frequently stops publishing jax/jaxlib nightly wheels to GCS.
   # On the ROCm fork, build the base jax and jaxlib wheels ourselves on the same
@@ -262,6 +284,11 @@ jobs:
       clone_main_xla: 0
       upload_artifacts_to_s3: true
       s3_upload_uri: 's3://jax-ci-amd/rocm-wheels/${{ github.repository }}/${{ github.ref_name }}/${{ matrix.rocm.release-version }}/wheel-tests-nightly/${{ github.run_number }}/${{ github.run_attempt }}'
+      # Must match the rc tagging of the plugin/pjrt build above: jax pins
+      # jaxlib to the release version, so both have to carry the same rc suffix
+      # for the test legs to be able to install them together.
+      artifact-type: ${{ inputs.rocm-artifact-type || 'release' }}
+      wheel-version-suffix: ${{ inputs.rocm-wheel-version-suffix == 'none' && '' || inputs.rocm-wheel-version-suffix || 'rc0' }}
 
   run-pytest-rocm:
     if: ${{ !cancelled() && (github.repository_owner == 'jax-ml' || github.repository_owner == 'ROCm') }}
