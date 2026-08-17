@@ -43,7 +43,10 @@ fi
 # Run Bazel GPU tests with RBE (single accelerator tests with one GPU apiece).
 echo "Running RBE GPU tests..."
 
-TAG_FILTERS="jax_test_gpu,-config-cuda-only,-manual"
+# Exclusions that apply to every config. Note that Bazel ORs *positive* tag
+# filters and requires a target to match at least one of them, so adding a
+# positive tag here narrows the run rather than widening it.
+TAG_FILTERS="-config-cuda-only,-manual"
 
 # JAXCI_GATE_TARGETS_FILE selects which Bazel target pattern file to use.
 # Defaults to the full CI suite; set to build/rocm/ci_blocking_test_targets.txt
@@ -52,10 +55,14 @@ TARGETS_FILE="${JAXCI_GATE_TARGETS_FILE:-build/rocm/ci_test_targets.txt}"
 
 for arg in "$@"; do
     if [[ "$arg" == "--config=multi_gpu" ]]; then
-        TAG_FILTERS="${TAG_FILTERS},multiaccelerator"
+        TAG_FILTERS="jax_test_gpu,${TAG_FILTERS},multiaccelerator"
     fi
     if [[ "$arg" == "--config=single_gpu" ]]; then
-        TAG_FILTERS="${TAG_FILTERS},gpu,-multiaccelerator"
+        # Deliberately no positive tag filter. The backend-independent suites
+        # in TARGETS_FILE are defined in jaxlib/jax.bzl as exactly the targets
+        # that carry no jax_test_<backend> tag, so a positive jax_test_gpu or
+        # gpu filter drops all of them. TARGETS_FILE is what scopes the run.
+        TAG_FILTERS="${TAG_FILTERS},-multiaccelerator"
     fi
 done
 
