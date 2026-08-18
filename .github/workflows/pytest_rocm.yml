@@ -27,6 +27,8 @@ on:
           - "amd-do-linux.jax.gpu.gfx950.8"
           - "amd-do-linux.jax.gpu.gfx950.8-nodind"
           - "amd-do-linux.jax.gpu.gfx950.1-dpx"
+          - "amd-do-linux.jax.gpu.gfx950.4-dpx"
+          - "amd-do-linux.jax.gpu.gfx950.8-dpx"
       python:
         description: "Which Python version to use?"
         type: choice
