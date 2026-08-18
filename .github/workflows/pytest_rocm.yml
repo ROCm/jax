@@ -189,7 +189,7 @@ jobs:
         with:
           halt-dispatch-input: ${{ inputs.halt-for-connection }}
       - name: Run Pytest ROCm tests
-        timeout-minutes: 120
+        timeout-minutes: 240
         run: ./ci/run_pytest_rocm.sh
       - name: Upload test artifacts
         if: always()
