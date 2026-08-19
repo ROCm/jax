@@ -37,6 +37,14 @@ on:
         required: false
         default: 'no'
         type: string
+      skip-bazel-rocm-tests:
+        description: "Skip the run-bazel-test-rocm job (pytest-only dispatch)"
+        required: false
+        default: '0'
+        type: choice
+        options:
+          - '0'
+          - '1'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
@@ -283,7 +291,7 @@ jobs:
       jax-jaxlib-source: ${{ github.repository_owner == 'ROCm' && 's3' || 'gcs' }}
 
   run-bazel-test-rocm:
-    if: ${{ !cancelled() && (github.repository_owner == 'jax-ml' || github.repository_owner == 'ROCm') }}
+    if: ${{ !cancelled() && inputs.skip-bazel-rocm-tests != '1' && (github.repository_owner == 'jax-ml' || github.repository_owner == 'ROCm') }}
     needs: [build-rocm-artifacts, build-rocm-jax-jaxlib]
     permissions:
       id-token: write
