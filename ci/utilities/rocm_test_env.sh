@@ -28,6 +28,14 @@ export NCCL_DEBUG=WARN
 export TF_CPP_MIN_LOG_LEVEL=0
 export JAX_ENABLE_X64="$JAXCI_ENABLE_X64"
 
+# Overrides the HSA_NO_SCRATCH_RECLAIM=1 that .github/workflows/pytest_rocm.yml
+# puts in the job environment. Set here rather than in a run script so it holds
+# for the single- and multi-accelerator passes alike, including when a caller
+# starts ci/run_pytest_rocm_multi.sh on its own. Takes effect only if the
+# environment is in place before HIP initializes, which happens when the pytest
+# workers import JAX.
+export HSA_NO_SCRATCH_RECLAIM=0
+
 # ==============================================================================
 # Number of parallel processes for pytest: 4 test workers per GPU.
 # ==============================================================================
