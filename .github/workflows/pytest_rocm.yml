@@ -153,7 +153,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Download JAX ROCm wheels
-        uses: ./.github/actions/download-jax-rocm-wheels
+        uses: $/.github/actions/download-jax-rocm-wheels
         with:
           python: ${{ inputs.python }}
           rocm-version: ${{ inputs.rocm-version }}
@@ -178,7 +178,7 @@ jobs:
       - name: Upload test artifacts
         if: always()
         continue-on-error: true
-        uses: ./.github/actions/upload-test-artifacts
+        uses: $/.github/actions/upload-test-artifacts
         with:
           artifact-name: pytest-test-artifacts-${{ inputs.runner }}-py${{ inputs.python }}-rocm${{ inputs.rocm-version }}
           inputs_json: ${{ toJSON(inputs) }}
