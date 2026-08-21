@@ -39,7 +39,7 @@ echo "Running ROCm tests..."
 set +e
 
 # Run single-accelerator tests in parallel
-"$JAXCI_PYTHON" -m pytest -n $num_processes --tb=short \
+"$JAXCI_PYTHON" -m pytest -n 8 --tb=short \
 --json-report --json-report-file=${LOGS_DIR}/pytest_results_single.json \
 --junitxml=test-artifacts/junit-single.xml \
 -m "not multiaccelerator" \

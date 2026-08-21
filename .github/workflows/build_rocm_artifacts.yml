@@ -124,8 +124,8 @@ jobs:
       s3_upload_uri: ${{ steps.store-s3-upload-uri.outputs.s3_upload_uri }}
     container:
       image: "${{ inputs.manylinux-image || format('ghcr.io/rocm/jax-manylinux_2_28-rocm-{0}:latest', inputs.rocm-release-version) }}"  # zizmor: ignore[unpinned-images]
-      volumes:
-        - /data:/data
+      # volumes:
+      #   - /data:/data
       options: >-
         --security-opt seccomp=unconfined
         --shm-size 64G

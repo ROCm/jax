@@ -503,7 +503,7 @@ jobs:
     strategy:
         fail-fast: false
         matrix:
-          runner: ["amd-do-linux.jax.cpu"]
+          runner: ["amd-do-linux.jax.cpu.k8"]
           artifact: ["jax-rocm-plugin", "jax-rocm-pjrt"]
           python: ["3.12", "3.13", "3.14"]
           rocm: [
@@ -548,7 +548,7 @@ jobs:
     strategy:
         fail-fast: false
         matrix:
-          runner: ["amd-do-linux.jax.cpu"]
+          runner: ["amd-do-linux.jax.cpu.k8"]
           artifact: ["jax", "jaxlib"]
           # Only the Python versions consumed by the ROCm test legs below are
           # built here; unlike the plugin/pjrt wheels these are not published.
@@ -587,8 +587,9 @@ jobs:
     strategy:
         fail-fast: false
         matrix:
-          runner: ["amd-do-linux.jax.gpu.gfx950.1", "amd-do-linux.jax.gpu.gfx950.4", "amd-do-linux.jax.gpu.gfx950.8"]
+          runner: ["amd-do-linux.jax.gpu.gfx950.1-process"]
           python: ["3.12"]
+          runcount: [1,2,3,4,5,6]
           rocm: [
             {label: "TheRock 7.14.0", wheel-version: "7", release-version: "7.14.0", tag: "therock-7.14"},
           ]
