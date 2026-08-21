@@ -25,6 +25,7 @@
 set -exu -o history -o allexport
 
 artifact="$1"
+sleep 1000
 
 # Source default JAXCI environment variables.
 source ci/envs/default.env
