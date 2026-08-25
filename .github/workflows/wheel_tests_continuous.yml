@@ -588,7 +588,7 @@ jobs:
         fail-fast: false
         matrix:
           runner:
-            - "amd-do-linux.jax.gpu.gfx950.1"
+            - "amd-do-linux.jax.gpu.gfx950.1-dpx"
             - "amd-do-linux.jax.gpu.gfx950.4-dpx"
             - "amd-sandbox-linux.jax.gpu.gfx950.8-dpx"
           python: ["3.12"]
