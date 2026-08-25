@@ -140,8 +140,8 @@ Please follow [ROCm installation guide](https://rocm.docs.amd.com/en/latest/depl
 Once installed, verify ROCm installation using:
 
 ```Bash
-> rocm-smi
-============================================ ROCm System Management Interface ============================================
+> amd-smi list
+============================================ AMD System Management Interface ============================================
 ====================================================== Concise Info ======================================================
 Device  Node  IDs              Temp        Power     Partitions          SCLK    MCLK    Fan  Perf  PwrCap  VRAM%  GPU%
               (DID,     GUID)  (Junction)  (Socket)  (Mem, Compute, ID)
@@ -155,7 +155,7 @@ Device  Node  IDs              Temp        Power     Partitions          SCLK   
 6       8     0x74a1,   53667  42.0°C      140.0W    NPS1, SPX, 0        134Mhz  900Mhz  0%   auto  750.0W  0%     0%
 7       9     0x74a1,   63738  38.0°C      135.0W    NPS1, SPX, 0        133Mhz  900Mhz  0%   auto  750.0W  0%     0%
 ==========================================================================================================================
-================================================== End of ROCm SMI Log ===================================================
+================================================== End of AMD SMI Log ===================================================
 ```
 
 ### Step 2: Install the Latest Version of JAX
