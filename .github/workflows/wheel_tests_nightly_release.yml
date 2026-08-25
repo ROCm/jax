@@ -268,9 +268,9 @@ jobs:
     strategy:
         fail-fast: false # don't cancel all jobs on failure
         matrix:
-          # 1-GPU on prod DOKS; 4-GPU on DPX; 8-GPU on sandbox DPX (do 8-dpx label is prod cluster).
+          # All DPX pytest legs on do-atl1-amd-gpu-dra-dpx-cluster (do-dpx-testing).
           runner:
-            - "amd-do-linux.jax.gpu.gfx950.1"
+            - "amd-do-linux.jax.gpu.gfx950.1-dpx"
             - "amd-do-linux.jax.gpu.gfx950.4-dpx"
             - "amd-sandbox-linux.jax.gpu.gfx950.8-dpx"
           python: ["3.12", "3.13", "3.14"]
