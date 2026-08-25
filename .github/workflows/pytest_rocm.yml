@@ -19,9 +19,11 @@ on:
       runner:
         description: "Which runner should the workflow run on?"
         type: choice
-        default: "amd-do-linux.jax.gpu.gfx950.1-dpx"
+        default: "amd-do-linux.jax.gpu.gfx950.1"
         options:
           - "amd-do-linux.jax.gpu.gfx950.1"
+          - "amd-do-linux.jax.gpu.gfx950.4-dpx"
+          - "amd-do-linux.jax.gpu.gfx950.8-dpx"
           - "amd-do-linux.jax.gpu.gfx950.4"
           - "amd-do-linux.jax.gpu.gfx950.8"
           - "amd-do-linux.jax.gpu.gfx950.1-dpx"
@@ -80,7 +82,7 @@ on:
       runner:
         description: "Which runner should the workflow run on?"
         type: string
-        default: "amd-do-linux.jax.gpu.gfx950.1-dpx"
+        default: "amd-do-linux.jax.gpu.gfx950.1"
       python:
         description: "Which Python version to use?"
         type: string
