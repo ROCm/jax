@@ -29,13 +29,48 @@ export TF_CPP_MIN_LOG_LEVEL=0
 export JAX_ENABLE_X64="$JAXCI_ENABLE_X64"
 
 # ==============================================================================
-# Number of parallel processes for pytest: 8 test workers per GPU.
+# Number of parallel processes for pytest: 4 test workers per GPU (matches SPX).
 # ==============================================================================
 
 export gpu_count=$(rocminfo | egrep -c "Device Type:\s+GPU")
 echo "Number of GPUs detected: $gpu_count"
 
-export num_processes=$((gpu_count * 8))
+# Fail fast when the runner label promises N GPUs but ROCr/JAX see fewer. This
+# catches duplicate ROCR_VISIBLE_DEVICES entries on DPX pods that otherwise skip
+# multi-accelerator tests and still report success.
+runner_label="${INPUT_RUNNER:-${RUNNER_LABEL:-${GITHUB_RUNNER:-}}}"
+expected_gpus=0
+case "$runner_label" in
+  *gfx950.8*|*8-dpx*) expected_gpus=8 ;;
+  *gfx950.4*|*4-dpx*) expected_gpus=4 ;;
+  *gfx950.1*|*1-dpx*) expected_gpus=1 ;;
+esac
+
+echo "Runner label context: ${runner_label:-unset}"
+echo "Expected GPUs from runner label: ${expected_gpus:-unknown}"
+echo "ROCR_VISIBLE_DEVICES=${ROCR_VISIBLE_DEVICES:-unset}"
+echo "HIP_VISIBLE_DEVICES=${HIP_VISIBLE_DEVICES:-unset}"
+
+jax_device_count=$("$JAXCI_PYTHON" -c "import jax; print(len(jax.devices()))")
+echo "jax.devices() count: $jax_device_count"
+
+if [[ "$gpu_count" -eq 0 ]]; then
+  echo "ERROR: rocminfo detected no GPUs" >&2
+  exit 1
+fi
+
+if [[ "$gpu_count" -ne "$jax_device_count" ]]; then
+  echo "ERROR: rocminfo ($gpu_count) != jax.devices() ($jax_device_count)" >&2
+  exit 1
+fi
+
+if [[ "$expected_gpus" -gt 0 && "$gpu_count" -ne "$expected_gpus" ]]; then
+  echo "ERROR: runner expects $expected_gpus GPU(s), found $gpu_count" >&2
+  echo "Check /etc/podinfo/gha-gpu-isolation-settings for duplicate ROCR indices." >&2
+  exit 1
+fi
+
+export num_processes=$((gpu_count * 4))
 echo "Number of processes to run: $num_processes"
 
 export JAX_ENABLE_ROCM_XDIST="$gpu_count"
