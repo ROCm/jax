@@ -77,6 +77,28 @@ on:
         description: 'Should this workflow run wait for a remote connection?'
         type: string
         default: 'no'
+      test-mode:
+        description: "full = entire suite; smoke = one test for fast DPX validation"
+        type: choice
+        default: full
+        options:
+          - full
+          - smoke
+      workers-per-gpu:
+        description: "Pytest xdist workers per GPU (smoke default 2; full default 4)"
+        type: string
+        default: ""
+      smoke-test:
+        description: "Pytest target when test-mode=smoke"
+        type: string
+        default: "tests/pmap_test.py::PythonPmapTest::testBasic"
+      smoke-use-xdist:
+        description: "Run smoke target with xdist (1=yes for single-accel targets only)"
+        type: choice
+        default: "0"
+        options:
+          - "0"
+          - "1"
   workflow_call:
     inputs:
       runner:
@@ -123,6 +145,22 @@ on:
         description: 'Should this workflow run wait for a remote connection?'
         type: string
         default: 'no'
+      test-mode:
+        description: "full = entire suite; smoke = one test for fast DPX validation"
+        type: string
+        default: full
+      workers-per-gpu:
+        description: "Pytest xdist workers per GPU (smoke default 2; full default 4)"
+        type: string
+        default: ""
+      smoke-test:
+        description: "Pytest target when test-mode=smoke"
+        type: string
+        default: "tests/pmap_test.py::PythonPmapTest::testBasic"
+      smoke-use-xdist:
+        description: "Run smoke target with xdist (1=yes for single-accel targets only)"
+        type: string
+        default: "0"
 permissions:
   id-token: write
   contents: read
@@ -147,7 +185,7 @@ jobs:
       options: --device=/dev/kfd --device=/dev/dri --security-opt seccomp=unconfined --group-add video --shm-size 64G --env-file /etc/podinfo/gha-gpu-isolation-settings
     name: "${{ (contains(inputs.runner, 'gfx950.1') && 'gfx950 1-GPU') ||
         (contains(inputs.runner, 'gfx950.4') && 'gfx950 4-GPU') ||
-        (contains(inputs.runner, 'gfx950.8') && 'gfx950 8-GPU') }}, ROCm ${{ inputs.rocm-release-version || inputs.rocm-version }}, py${{ inputs.python }}"
+        (contains(inputs.runner, 'gfx950.8') && 'gfx950 8-GPU') }}, ROCm ${{ inputs.rocm-release-version || inputs.rocm-version }}, py${{ inputs.python }}${{ inputs.test-mode == 'smoke' && ', smoke' || '' }}"
 
     env:
       INPUT_RUNNER: ${{ inputs.runner }}
@@ -159,6 +197,9 @@ jobs:
       # warning when this is unset; the env var must be in place before HIP
       # initialization, which happens at JAX import time.
       HSA_NO_SCRATCH_RECLAIM: "1"
+      ROCM_PYTEST_WORKERS_PER_GPU: ${{ inputs.workers-per-gpu != '' && inputs.workers-per-gpu || (inputs.test-mode == 'smoke' && '2') || '' }}
+      ROCM_PYTEST_SMOKE_TARGET: ${{ inputs.smoke-test }}
+      ROCM_PYTEST_SMOKE_USE_XDIST: ${{ inputs.smoke-use-xdist }}
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -186,8 +227,13 @@ jobs:
         with:
           halt-dispatch-input: ${{ inputs.halt-for-connection }}
       - name: Run Pytest ROCm tests
-        timeout-minutes: 120
-        run: ./ci/run_pytest_rocm.sh
+        timeout-minutes: ${{ inputs.test-mode == 'smoke' && 30 || 120 }}
+        run: |
+          if [[ "${{ inputs.test-mode }}" == "smoke" ]]; then
+            ./ci/run_pytest_rocm_smoke.sh
+          else
+            ./ci/run_pytest_rocm.sh
+          fi
       - name: Upload test artifacts
         if: always()
         continue-on-error: true

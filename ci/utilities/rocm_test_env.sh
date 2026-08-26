@@ -70,7 +70,9 @@ if [[ "$expected_gpus" -gt 0 && "$gpu_count" -ne "$expected_gpus" ]]; then
   exit 1
 fi
 
-export num_processes=$((gpu_count * 4))
+workers_per_gpu="${ROCM_PYTEST_WORKERS_PER_GPU:-4}"
+export num_processes=$((gpu_count * workers_per_gpu))
+echo "Workers per GPU: $workers_per_gpu"
 echo "Number of processes to run: $num_processes"
 
 export JAX_ENABLE_ROCM_XDIST="$gpu_count"
