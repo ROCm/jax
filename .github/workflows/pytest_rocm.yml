@@ -150,6 +150,7 @@ jobs:
         (contains(inputs.runner, 'gfx950.8') && 'gfx950 8-GPU') }}, ROCm ${{ inputs.rocm-release-version || inputs.rocm-version }}, py${{ inputs.python }}"
 
     env:
+      INPUT_RUNNER: ${{ inputs.runner }}
       JAXCI_HERMETIC_PYTHON_VERSION: "${{ inputs.python }}"
       JAXCI_PYTHON: "python${{ inputs.python }}"
       JAXCI_ENABLE_X64: "0"
