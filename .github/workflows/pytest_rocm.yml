@@ -27,6 +27,7 @@ on:
           - "amd-do-linux.jax.gpu.gfx950.4"
           - "amd-do-linux.jax.gpu.gfx950.8"
           - "amd-do-linux.jax.gpu.gfx950.1-dpx"
+          - "amd-sandbox-linux.jax.gpu.gfx950.dpx.1"
       python:
         description: "Which Python version to use?"
         type: choice
@@ -36,9 +37,10 @@ on:
       rocm-version:
         description: "Which ROCm version to test?"
         type: choice
-        default: "7.2.0"
+        default: "7.14.0"
         options:
           - "7.2.0"
+          - "7.14.0"
       rocm-tag:
         description: "ROCm tag for container image (e.g., rocm720)"
         type: string
