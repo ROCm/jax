@@ -258,7 +258,7 @@ jobs:
     strategy:
         fail-fast: false # don't cancel all jobs on failure
         matrix:
-          runner: ["amd-sandbox-linux.jax.gpu.gfx950.8-dpx"]
+          runner: ["amd-sandbox-linux.jax.gpu.gfx950.16-dpx"]
           python: ["3.12"]
           rocm: [
             {label: "TheRock 10.0.0", wheel-version: "10", release-version: "10.0.0", tag: "therock-10.0"},
