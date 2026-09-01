@@ -58,6 +58,13 @@ GPU_PART="${GPU_PART:-${INPUT_RUNNER}}"
 
 RUN_KEY="${DATE}_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}"
 COMBO="py$(norm "${INPUT_PYTHON}")-${GPU_PART}"
+
+# Several replicas of one combo can run concurrently (pool stress runs). Without
+# this suffix they all resolve to the same prefix and overwrite each other.
+if [[ -n "${INPUT_REPLICA:-}" ]]; then
+  COMBO="${COMBO}-r$(norm "${INPUT_REPLICA}")"
+fi
+
 PREFIX="${GITHUB_REPOSITORY}/${GITHUB_REF_NAME}/${IS_NIGHTLY}/${INPUT_ROCM_TAG}/${RUN_KEY}/${COMBO}"
 
 DEST="s3://${S3_BUCKET_NAME}/${TEST_LOGS_ROOT}/${PREFIX}"
@@ -129,6 +136,7 @@ aws s3 cp --only-show-errors - "${DEST}/run-manifest.json" <<EOF
   "rocm_version": "${INPUT_ROCM_VERSION}",
   "rocm_tag": "${INPUT_ROCM_TAG}",
   "gpu_count": ${GPU_COUNT:-null},
+  "replica": "${INPUT_REPLICA:-}",
   "runner": "${INPUT_RUNNER}",
   "base_image_name": "${IMAGE}",
   "base_image_digest": "${DIGEST}",
