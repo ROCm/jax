@@ -45,6 +45,8 @@ test:rocm --flaky_test_attempts=3
 test:rocm --test_verbose_timeout_warnings
 test:rocm --run_under=@xla//build_tools/rocm:parallel_gpu_execute
 
+# Add this to test PR execution
+
 # Configs for ROCm RBE tests
 build:single_gpu --repo_env=TF_ROCM_RBE_POOL="linux_x64_gpu_do_gfx950"
 build:single_gpu --repo_env=TF_ROCM_RBE_SINGLE_GPU_POOL="linux_x64_gpu_do_gfx950"
