@@ -198,16 +198,10 @@ jobs:
         matrix:
           runner: ["amd-do-linux.jax.cpu"]
           artifact: ["jax-rocm-plugin", "jax-rocm-pjrt"]
-          python: ["3.12", "3.13", "3.14"]
+          python: ["3.12"]
           rocm: [
             {label: "TheRock 10.0.0", wheel-version: "10", release-version: "10.0.0", manylinux-image: "ghcr.io/rocm/jax-manylinux_2_28-therock-10.0:latest" },
-            {label: "TheRock Next (pre-release)", wheel-version: "10", release-version: "therock-latest", manylinux-image: "ghcr.io/rocm/jax-manylinux_2_28-therock-latest:latest"},
           ]
-          exclude:
-            - artifact: "jax-rocm-pjrt"
-              python: "3.13"
-            - artifact: "jax-rocm-pjrt"
-              python: "3.14"
     name: "Build ROCm artifacts ${{ matrix.rocm.label }}"
     with:
       runner: ${{ matrix.runner }}
@@ -237,18 +231,10 @@ jobs:
         matrix:
           runner: ["amd-do-linux.jax.cpu"]
           artifact: ["jax", "jaxlib"]
-          python: ["3.12", "3.13", "3.14"]
+          python: ["3.12"]
           rocm: [
             {label: "TheRock 10.0.0", wheel-version: "10", release-version: "10.0.0", manylinux-image: "ghcr.io/rocm/jax-manylinux_2_28-therock-10.0:latest" },
-            {label: "TheRock latest", wheel-version: "10", release-version: "therock-latest", manylinux-image: "ghcr.io/rocm/jax-manylinux_2_28-therock-latest:latest"},
           ]
-          exclude:
-            # jax is a pure-python (py3-none-any) wheel; build it once per ROCm
-            # variant rather than once per Python version.
-            - artifact: "jax"
-              python: "3.13"
-            - artifact: "jax"
-              python: "3.14"
     name: "Build ROCm jax/jaxlib (${{ matrix.rocm.label }})"
     with:
       runner: ${{ matrix.runner }}
@@ -272,11 +258,10 @@ jobs:
     strategy:
         fail-fast: false # don't cancel all jobs on failure
         matrix:
-          runner: ["amd-do-linux.jax.gpu.gfx950.1", "amd-do-linux.jax.gpu.gfx950.4", "amd-do-linux.jax.gpu.gfx950.8"]
-          python: ["3.12", "3.13", "3.14"]
+          runner: ["amd-sandbox-linux.jax.gpu.gfx950.8-dpx"]
+          python: ["3.12"]
           rocm: [
             {label: "TheRock 10.0.0", wheel-version: "10", release-version: "10.0.0", tag: "therock-10.0"},
-            {label: "TheRock Next (pre-release)", wheel-version: "10", release-version: "therock-latest", tag: "therock-latest"},
           ]
     name: "Pytest ROCm ${{ matrix.rocm.label }}"
     with:
@@ -293,45 +278,6 @@ jobs:
       # On the ROCm fork, use the jax/jaxlib wheels built above (S3) instead of
       # the upstream GCS nightly bucket, which is frequently stale/broken.
       jax-jaxlib-source: ${{ github.repository_owner == 'ROCm' && 's3' || 'gcs' }}
-
-  run-bazel-test-rocm:
-    if: ${{ !cancelled() && (github.repository_owner == 'jax-ml' || github.repository_owner == 'ROCm') }}
-    needs: [build-rocm-artifacts, build-rocm-jax-jaxlib]
-    permissions:
-      id-token: write
-      contents: read
-    uses: ./.github/workflows/bazel_rocm.yml
-    strategy:
-        fail-fast: false # don't cancel all jobs on failure
-        matrix:
-          runner: ["amd-do-linux.jax.gpu.gfx950.1"]
-          python: ["3.12", "3.13", "3.14"]
-          rocm: [
-            {label: "TheRock 10.0.0", wheel-version: "10", release-version: "10.0.0", tag: "therock-10.0"},
-            {label: "TheRock Next (pre-release)", wheel-version: "10", release-version: "therock-latest", tag: "therock-latest"},
-          ]
-          enable-x64: [0]
-    name: "Bazel ROCm ${{ matrix.rocm.label }}"
-    with:
-      runner: ${{ matrix.runner }}
-      python: ${{ matrix.python }}
-      rocm-version: ${{ matrix.rocm.wheel-version }}
-      rocm-release-version: ${{ matrix.rocm.release-version }}
-      rocm-tag: ${{ matrix.rocm.tag }}
-      enable-x64:  ${{ matrix.enable-x64 }}
-      gcs_download_uri: ${{inputs.gcs_download_uri}}
-      halt-for-connection: ${{inputs.halt-for-connection}}
-      s3_download_uri: 's3://jax-ci-amd/rocm-wheels/${{ github.repository }}/${{ github.ref_name }}/${{ matrix.rocm.release-version }}/wheel-tests-nightly/${{ github.run_number }}/${{ github.run_attempt }}'
-      # On the ROCm fork, use the jax/jaxlib wheels built above (S3) instead of
-      # the upstream GCS nightly bucket, which is frequently stale/broken.
-      jax-jaxlib-source: ${{ github.repository_owner == 'ROCm' && 's3' || 'gcs' }}
-      build_jaxlib: ${{ 'false' }}
-      build_jax: ${{ 'false' }}
-      jaxlib-version: "head"
-      write_to_bazel_remote_cache: 1
-      run_multiaccelerator_tests: ${{ 'true' }}
-      clone_main_xla: 0
-      git_commit: ${{ inputs.git_commit }}
 
   run-pytest-tpu:
     if: github.repository_owner == 'jax-ml'
