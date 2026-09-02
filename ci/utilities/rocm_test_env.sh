@@ -29,13 +29,17 @@ export TF_CPP_MIN_LOG_LEVEL=0
 export JAX_ENABLE_X64="$JAXCI_ENABLE_X64"
 
 # ==============================================================================
-# Number of parallel processes for pytest: 4 test workers per GPU.
+# Number of parallel processes for pytest (default 4 workers per GPU).
+# Override with ROCM_PYTEST_WORKERS_PER_GPU from the workflow (e.g. 1 for
+# shared-node experiments).
 # ==============================================================================
 
 export gpu_count=$(rocminfo | egrep -c "Device Type:\s+GPU")
 echo "Number of GPUs detected: $gpu_count"
 
-export num_processes=$((gpu_count * 4))
+workers_per_gpu="${ROCM_PYTEST_WORKERS_PER_GPU:-4}"
+export num_processes=$((gpu_count * workers_per_gpu))
+echo "Workers per GPU: $workers_per_gpu"
 echo "Number of processes to run: $num_processes"
 
 export JAX_ENABLE_ROCM_XDIST="$gpu_count"
