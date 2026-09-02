@@ -105,6 +105,13 @@ on:
         description: "Replica id for distinct S3 log prefixes when running concurrent jobs"
         type: string
         default: ""
+      resource-diagnostics:
+        description: "Print runner/DinD/docker cgroup snapshot (0/1)"
+        type: choice
+        default: "0"
+        options:
+          - "0"
+          - "1"
   workflow_call:
     inputs:
       runner:
@@ -185,6 +192,18 @@ env:
   UV_DEFAULT_INDEX: "https://us-python.pkg.dev/ml-oss-artifacts-published/pypi-mirror/simple"
 
 jobs:
+  runner-host-diagnostics:
+    if: ${{ inputs.resource-diagnostics == '1' }}
+    runs-on: ${{ inputs.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Runner host resource snapshot (no job container)
+        run: |
+          chmod +x ci/utilities/rocm_runner_diagnostics.sh
+          ./ci/utilities/rocm_runner_diagnostics.sh
+
   run-tests:
     defaults:
       run:
@@ -240,6 +259,11 @@ jobs:
           $JAXCI_PYTHON -m pip install uv~=0.12.3
           $JAXCI_PYTHON -m uv pip install -r build/test-requirements.txt
           $JAXCI_PYTHON -m pip install pytest-json-report
+      - name: Resource diagnostics (job container)
+        if: ${{ inputs.resource-diagnostics == '1' }}
+        run: |
+          chmod +x ci/utilities/rocm_runner_diagnostics.sh
+          ./ci/utilities/rocm_runner_diagnostics.sh
       # Halt for testing
       - name: Wait For Connection
         uses: google-ml-infra/actions/ci_connection@7f5ca0c263a81ed09ea276524c1b9192f1304e3c
