@@ -258,19 +258,19 @@ jobs:
     strategy:
         fail-fast: false # don't cancel all jobs on failure
         matrix:
-          runner: ["amd-sandbox-linux.jax.gpu.gfx950.8-dpx"]
+          # DPX full validation: one job per GPU tier (1/4/8), py3.12, ROCm 10.0.0.
+          runner:
+            - "amd-do-linux.jax.gpu.gfx950.1-dpx"
+            - "amd-do-linux.jax.gpu.gfx950.4-dpx"
+            - "amd-sandbox-linux.jax.gpu.gfx950.8-dpx"
           python: ["3.12"]
-          # Pool stress test: 3 nodes, each holding two 8-partition jobs, so all
-          # six replicas should be resident at once rather than queueing.
-          replica: ["1", "2", "3", "4", "5", "6"]
           rocm: [
             {label: "TheRock 10.0.0", wheel-version: "10", release-version: "10.0.0", tag: "therock-10.0"},
           ]
-    name: "Pytest ROCm ${{ matrix.rocm.label }} (replica ${{ matrix.replica }})"
+    name: "Pytest ROCm ${{ matrix.rocm.label }} / ${{ matrix.runner }}"
     with:
       runner: ${{ matrix.runner }}
       python: ${{ matrix.python }}
-      replica: ${{ matrix.replica }}
       rocm-version: ${{ matrix.rocm.wheel-version }}
       rocm-release-version: ${{ matrix.rocm.release-version }}
       rocm-tag: ${{ matrix.rocm.tag }}
