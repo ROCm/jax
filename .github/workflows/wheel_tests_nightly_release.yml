@@ -273,16 +273,16 @@ jobs:
         fail-fast: false # don't cancel all jobs on failure
         matrix:
           # 1-GPU on prod DO; 4/8-GPU on DPX (frameworks-dpx cluster).
-          include:
-            - runner: "amd-do-linux.jax.gpu.gfx950.1"
-            - runner: "amd-do-linux.jax.gpu.gfx950.4-dpx"
-            - runner: "amd-sandbox-linux.jax.gpu.gfx950.8-dpx"
+          runner:
+            - "amd-do-linux.jax.gpu.gfx950.1"
+            - "amd-do-linux.jax.gpu.gfx950.4-dpx"
+            - "amd-sandbox-linux.jax.gpu.gfx950.8-dpx"
           python: ["3.12", "3.13", "3.14"]
           rocm: [
             {label: "TheRock 10.0.0", wheel-version: "10", release-version: "10.0.0", tag: "therock-10.0"},
             {label: "TheRock Next (pre-release)", wheel-version: "10", release-version: "therock-latest", tag: "therock-latest"},
           ]
-    name: "Pytest ROCm ${{ matrix.rocm.label }}"
+    name: "Pytest ROCm ${{ matrix.rocm.label }} / ${{ matrix.runner }}"
     with:
       runner: ${{ matrix.runner }}
       python: ${{ matrix.python }}
