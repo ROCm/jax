@@ -22,8 +22,11 @@ on:
         default: "amd-do-linux.jax.gpu.gfx950.4"
         options:
           - "amd-do-linux.jax.gpu.gfx950.1"
+          - "amd-do-linux.jax.gpu.gfx950.1-dpx"
           - "amd-do-linux.jax.gpu.gfx950.4"
+          - "amd-do-linux.jax.gpu.gfx950.4-dpx"
           - "amd-do-linux.jax.gpu.gfx950.8"
+          - "amd-sandbox-linux.jax.gpu.gfx950.8-dpx"
           - "amd-sandbox-linux.jax.gpu.gfx950.16-dpx"
       python:
         description: "Which Python version to use?"
@@ -37,6 +40,7 @@ on:
         default: "7.2.0"
         options:
           - "7.2.0"
+          - "10"
       rocm-tag:
         description: "ROCm tag for container image (e.g., rocm720)"
         type: string
@@ -75,6 +79,10 @@ on:
         description: 'Should this workflow run wait for a remote connection?'
         type: string
         default: 'no'
+      workers-per-gpu:
+        description: "Pytest xdist workers per GPU (default 4 for full suite)"
+        type: string
+        default: ""
   workflow_call:
     inputs:
       runner:
@@ -121,6 +129,10 @@ on:
         description: 'Should this workflow run wait for a remote connection?'
         type: string
         default: 'no'
+      workers-per-gpu:
+        description: "Pytest xdist workers per GPU (default 4 for full suite)"
+        type: string
+        default: ""
       git_commit:
         description: "Commit SHA to check out for running tests"
         required: false
@@ -168,6 +180,7 @@ jobs:
       # warning when this is unset; the env var must be in place before HIP
       # initialization, which happens at JAX import time.
       HSA_NO_SCRATCH_RECLAIM: "1"
+      ROCM_PYTEST_WORKERS_PER_GPU: ${{ inputs.workers-per-gpu }}
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
