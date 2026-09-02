@@ -125,6 +125,11 @@ on:
         required: false
         default: ""
         type: string
+      replica:
+        description: "Replica id, set when the same combo runs several times concurrently. Keeps their S3 log prefixes distinct."
+        required: false
+        default: ""
+        type: string
 permissions:
   id-token: write
   contents: read
@@ -209,6 +214,7 @@ jobs:
           INPUT_ROCM_VERSION: ${{ inputs.rocm-version }}
           INPUT_RUNNER: ${{ inputs.runner }}
           INPUT_ROCM_TAG: ${{ inputs.rocm-tag }}
+          INPUT_REPLICA: ${{ inputs.replica }}
           IS_NIGHTLY: ${{ contains(github.workflow, 'Nightly/Release') && 'nightly' || 'continuous' }}
         run: |
           ./ci/upload_rocm_logs.sh
