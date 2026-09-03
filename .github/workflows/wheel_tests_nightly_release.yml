@@ -283,6 +283,10 @@ jobs:
             {label: "TheRock 10.0.0", wheel-version: "10", release-version: "10.0.0", tag: "therock-10.0"},
             {label: "TheRock Next (pre-release)", wheel-version: "10", release-version: "therock-latest", tag: "therock-latest"},
           ]
+          exclude:
+            # Match build-rocm-artifacts: plugin is not built for py3.13; pjrt not for py3.14.
+            - python: "3.13"
+            - python: "3.14"
     name: "Pytest ROCm ${{ matrix.rocm.label }} / ${{ matrix.runner }}"
     with:
       runner: ${{ matrix.runner }}
@@ -317,6 +321,9 @@ jobs:
             {label: "TheRock Next (pre-release)", wheel-version: "10", release-version: "therock-latest", tag: "therock-latest"},
           ]
           enable-x64: [0]
+          exclude:
+            - python: "3.13"
+            - python: "3.14"
     name: "Bazel ROCm ${{ matrix.rocm.label }}"
     with:
       runner: ${{ matrix.runner }}
