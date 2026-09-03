@@ -5,6 +5,15 @@ set -uo pipefail
 
 section() { echo ""; echo "======== $* ========"; }
 
+if [ -r /etc/podinfo/gha-render-devices ]; then
+  DIAG_CONTEXT="runner host (podinfo mounted)"
+elif docker info >/dev/null 2>&1; then
+  DIAG_CONTEXT="runner host (docker.sock)"
+else
+  DIAG_CONTEXT="nested job container (podinfo not mounted; expected)"
+fi
+section "Context: ${DIAG_CONTEXT}"
+
 section "Host / pod (from this shell)"
 echo "hostname: $(hostname)"
 echo "nproc: $(nproc 2>/dev/null || echo '?')"
@@ -19,12 +28,12 @@ echo "/dev/shm: $(df -h /dev/shm 2>/dev/null | tail -1 || echo n/a)"
 free -h 2>/dev/null || true
 
 section "podinfo (runner host paths, if mounted)"
-for f in /etc/podinfo/gha-gpu-isolation-settings /etc/podinfo/gha-docker-cpu-flags /etc/podinfo/gha-render-devices; do
+for f in /etc/podinfo/gha-gpu-isolation-settings /etc/podinfo/gha-docker-cpu-flags /etc/podinfo/gha-render-devices /etc/podinfo/gha-cpuset; do
   if [ -r "$f" ]; then
     echo "--- $f ---"
     cat "$f"
   else
-    echo "missing: $f"
+    echo "missing: $f (normal in nested job container)"
   fi
 done
 
