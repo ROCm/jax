@@ -234,7 +234,7 @@ jobs:
       # warning when this is unset; the env var must be in place before HIP
       # initialization, which happens at JAX import time.
       HSA_NO_SCRATCH_RECLAIM: "1"
-      ROCM_PYTEST_WORKERS_PER_GPU: ${{ inputs.workers-per-gpu != '' && inputs.workers-per-gpu || (inputs.test-mode == 'smoke' && '2') || '' }}
+      ROCM_PYTEST_WORKERS_PER_GPU: ${{ inputs.workers-per-gpu != '' && inputs.workers-per-gpu || (inputs.test-mode == 'smoke' && '2') || (contains(inputs.runner, '-dpx') && inputs.test-mode == 'full' && '2') || '' }}
       ROCM_PYTEST_SMOKE_TARGET: ${{ inputs.smoke-test }}
       ROCM_PYTEST_SMOKE_USE_XDIST: ${{ inputs.smoke-use-xdist }}
 
