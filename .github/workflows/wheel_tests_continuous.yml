@@ -589,7 +589,7 @@ jobs:
     strategy:
         fail-fast: false
         matrix:
-          runner: ["amd-do-linux.jax.gpu.gfx950.1-dpx", "amd-do-linux.jax.gpu.gfx950.1-dpx"]
+          runner: ["amd-do-linux.jax.gpu.gfx950.1-dpx2", "amd-do-linux.jax.gpu.gfx950.1-dpx2"]
           python: ["3.12"]
           runcount: [1,2,3,4,5,6,7]
           rocm: [
