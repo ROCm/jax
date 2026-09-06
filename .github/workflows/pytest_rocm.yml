@@ -167,7 +167,7 @@ jobs:
           ref: ${{ inputs.git_commit }}
           persist-credentials: false
       - name: Download JAX ROCm wheels
-        uses: ./.github/actions/download-jax-rocm-wheels
+        uses: $/.github/actions/download-jax-rocm-wheels
         with:
           python: ${{ inputs.python }}
           rocm-version: ${{ inputs.rocm-version }}
