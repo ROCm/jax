@@ -29,6 +29,10 @@ on:
         description: "Which runner should the workflow run on?"
         type: string
         default: "amd-do-linux.jax.gpu.gfx950.1"
+      gpu-runner:
+        description: "Does the runner have AMD GPUs attached? Must match `runner`; tests themselves execute on RBE workers."
+        type: string
+        default: "true"
       python:
         description: "Which python version to test?"
         type: string
@@ -128,11 +132,8 @@ jobs:
       volumes:
         - /data:/data
       options: >-
-        --device=/dev/kfd
-        --device=/dev/dri
-        --group-add video
         --shm-size 64G
-        --env-file /etc/podinfo/gha-gpu-isolation-settings
+        ${{ inputs.gpu-runner == 'true' && '--device=/dev/kfd --device=/dev/dri --group-add video --env-file /etc/podinfo/gha-gpu-isolation-settings' || '' }}
 
     env:
       JAXCI_CLONE_MAIN_XLA: ${{ inputs.clone_main_xla }}
@@ -153,6 +154,7 @@ jobs:
           ref: ${{ inputs.git_commit }}
           persist-credentials: false
       - name: ROCm Info
+        if: inputs.gpu-runner == 'true'
         run: |
           # TheRock (pip) ROCm images are /opt/rocm-less; rocminfo lives in the
           # SDK bin dir, so put it on PATH via rocm-sdk. apt-ROCm images lack
@@ -219,7 +221,6 @@ jobs:
         run: |
           ./ci/run_bazel_test_rocm_rbe.sh  \
             --config="${GPU_CONFIG}" \
-            --local_test_jobs=4 \
             --//jax:build_jaxlib="${BUILD_JAXLIB}" \
             --//jax:build_jax="${BUILD_JAX}" \
             --repo_env=HERMETIC_PYTHON_VERSION="${PYTHON}" \

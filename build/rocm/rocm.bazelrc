@@ -73,11 +73,16 @@ build:rocm_rbe --remote_download_outputs=minimal
 
 test:rocm_rbe --remote_timeout=3600
 test:rocm_rbe --jobs=32
-test:rocm_rbe --strategy=TestRunner=remote,local
+# Tests run only on RBE workers. There is no local fallback: the CI runners for
+# this config have no GPU, so falling back locally would fail in a confusing way
+# instead of surfacing the RBE outage.
+test:rocm_rbe --strategy=TestRunner=remote
 test:rocm_rbe --worker_sandboxing=true
 test:rocm_rbe --repo_env=REMOTE_GPU_TESTING=1
 
-# Dynamic execution config for ROCm RBE - builds locally, tests use hybrid mode
+# Dynamic execution config for ROCm RBE - builds locally, tests use hybrid mode.
+# Opt-in only; CI uses plain --config=rocm_rbe. Requires a runner with GPUs,
+# since the dynamic scheduler races a local test action against the remote one.
 common:rocm_rbe_dynamic --config=rocm_rbe
 # Keep builds local (inherit from rocm_rbe)
 build:rocm_rbe_dynamic --spawn_strategy=local
