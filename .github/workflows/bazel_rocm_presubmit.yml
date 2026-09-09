@@ -68,7 +68,7 @@ jobs:
         python: ["3.12"]
         runner: ["amd-do-linux.jax.cpu"]
 # Begin Presubmit Naming Check - name modification requires internal check to be updated
-    name: "ROCm blocking gate"
+    name: "${{ matrix.runner && 'ROCm blocking gate' }}"
 # End Presubmit Naming Check github-rocm-blocking-presubmits
     with:
       runner: ${{ matrix.runner }}
