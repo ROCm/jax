@@ -72,7 +72,7 @@ build:rocm_rbe --repo_env=REMOTE_GPU_TESTING=1
 build:rocm_rbe --remote_download_outputs=minimal
 
 test:rocm_rbe --remote_timeout=3600
-test:rocm_rbe --jobs=32
+test:rocm_rbe --jobs=64
 # Tests run only on RBE workers. There is no local fallback: the CI runners for
 # this config have no GPU, so falling back locally would fail in a confusing way
 # instead of surfacing the RBE outage.
