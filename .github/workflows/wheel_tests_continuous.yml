@@ -589,9 +589,9 @@ jobs:
     strategy:
         fail-fast: false
         matrix:
-          runner: ["amd-do-linux.jax.gpu.gfx950.1-dpx2", "amd-do-linux.jax.gpu.gfx950.1-dpx2"]
+          runner: ["amd-do-linux.jax.gpu.gfx950.2b"]
           python: ["3.12"]
-          # runcount: [1,2,3,4]
+          runcount: [1,2,3,4]
           rocm: [
             {label: "TheRock 10.0.0", wheel-version: "10", release-version: "10.0.0", tag: "therock-10.0"},
           ]
