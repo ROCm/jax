@@ -1393,11 +1393,18 @@ def scaled_matmul(
     )
     return out
 
-def get_scaled_dot_general_config(mode: Literal['nvfp4', 'mxfp8'],
+def get_scaled_dot_general_config(mode: Literal['nvfp4', 'mxfp8', 'mxfp4'],
                                   global_scale: Array | None = None):
     r"""Get quantization configs for scaled_dot_general.
 
     Create quantization configs for the `jax.nn.scaled_dot_general`.
+
+    MXFP4 uses E2M1 values, E8M0 scales, and blocks of 32, without a global
+    scale. NVFP4 uses E2M1 values, E4M3 scales, and blocks of 16, with a
+    separate global scale. XLA selects the implementation for the device.
+    For NVFP4, inputs are divided by the supplied global scale during
+    quantization; the product of both operands' global scales is restored
+    after matmul. An omitted global scale defaults to one.
 
     See Also:
       - :func:`jax.nn.scaled_dot_general`: Scaled dot general function.
@@ -1418,6 +1425,17 @@ def get_scaled_dot_general_config(mode: Literal['nvfp4', 'mxfp8'],
             mode='mxfp8',
             block_size=32,
             data_type=dtypes.float8_e4m3fn,
+            scale_type=dtypes.float8_e8m0fnu,
+            global_scale=None,
+            infer_only=False
+        )
+    elif mode == 'mxfp4':
+        if global_scale is not None:
+            raise ValueError("MXFP4 does not use a global_scale")
+        return BlockScaleConfig(
+            mode='mxfp4',
+            block_size=32,
+            data_type=dtypes.float4_e2m1fn,
             scale_type=dtypes.float8_e8m0fnu,
             global_scale=None,
             infer_only=False
@@ -1455,7 +1473,7 @@ def scaled_dot_general(
       `jnp.bfloat16` and `jnp.float16`.
     configs (list of BlockScaleConfig, optional): Scaling configurations for
       lhs, rhs, and gradients. Users can obtain valid configurations via
-      `jax.nn.get_scaled_dot_general_config`. Currently, `nvfp4` and `mxfp8`
+      `jax.nn.get_scaled_dot_general_config`. Currently, `nvfp4`, `mxfp8`, and `mxfp4`
       are supported. If `None`, falls back to `lax.dot_general`.
     implementation: str
       (Deprecated) Backend selector, now ignored. The system chooses the backend

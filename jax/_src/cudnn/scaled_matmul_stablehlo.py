@@ -598,7 +598,7 @@ def quantize(x, config):
     # shape = (B, M, K / block_size, 1)
     return jnp.max(jnp.abs(values), axis=-1, keepdims=True) / MAX
 
-  if config.mode == "mxfp8":
+  if config.mode in ("mxfp8", "mxfp4"):
     assert config.global_scale is None
     assert config.scale_type == dtypes.float8_e8m0fnu
 
@@ -613,7 +613,12 @@ def quantize(x, config):
     x /= config.global_scale
     scales_q = jnp.clip(get_scales_per_block(x), 0, SCALE_MAX)
     scales_q = lax.optimization_barrier(scales_q.astype(config.scale_type))
-    scaled_x = x / scales_q.astype(np.float32)
+    scales = scales_q.astype(np.float32)
+    nonzero_scale = scales != 0
+    # Zero or underflowed E4M3 scales reconstruct a zero block. Avoid 0/0
+    # and the undefined NaN-to-FP4 conversion; keep the returned scale zero.
+    denominator = jnp.where(nonzero_scale, scales, np.float32(1))
+    scaled_x = jnp.where(nonzero_scale, x / denominator, np.float32(0))
   else:
     raise ValueError(f"Unrecognized mode: {config.mode}.")
 
@@ -624,7 +629,11 @@ def quantize(x, config):
   scales_q = jnp.reshape(scales_q, scales_q.shape[:-1]).view(
       config.scale_type
   )
-  return x_q, scales_q
+  # FP8/FP4 rounding is part of quantization. When scaled matmul is expanded,
+  # XLA's excess-precision optimization can otherwise collapse a chain such
+  # as f32 -> fp4 -> bf16 and discard the explicit rounding. Preserve the
+  # quantized data and its scales together across that optimization.
+  return lax.optimization_barrier((x_q, scales_q))
 
 def scaled_dot_impl(lhs, rhs, dimension_numbers, preferred_element_type,
                     configs):
