@@ -175,7 +175,7 @@ jobs:
           jax-jaxlib-source: ${{ inputs.jax-jaxlib-source }}
       - name: Install Python dependencies
         run: |
-          $JAXCI_PYTHON -m pip install uv~=0.12.3
+          $JAXCI_PYTHON -m pip install uv==0.12.3
           $JAXCI_PYTHON -m uv pip install -r build/test-requirements.txt
           $JAXCI_PYTHON -m pip install pytest-json-report
       # Halt for testing
