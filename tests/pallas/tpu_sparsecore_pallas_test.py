@@ -266,16 +266,15 @@ class DebugPrintTest(PallasSCTest):
 
   @parameterized.product(dtype=[jnp.int32, jnp.float32])
   def test_vector_subcore(self, dtype):
+    if not jtu.is_libtpu_at_least("0.0.48"):
+      self.skipTest("Requires libtpu >= 0.0.48")
     if jtu.is_device_tpu(8, "i"):
       self.skipTest("TODO(b/535267274): Fix logger.")
     x = jnp.arange(self.num_lanes, dtype=dtype)
     debug_int = 1234552
     debug_float = 12344.625
 
-    @self.vector_subcore_kernel(
-        out_shape=x,
-        compiler_params=pltpu.CompilerParams(needs_layout_passes=False),
-    )
+    @self.vector_subcore_kernel(out_shape=x)
     def kernel(x_hbm_ref, _):
       pl.debug_print("Memref", x_hbm_ref)
       pl.debug_print("Sliced memref", x_hbm_ref.at[:self.num_lanes // 2])
@@ -1340,16 +1339,26 @@ class VectorSubcoreTest(PallasSCTest):
       dtype=[jnp.int32], new_dtype=[jnp.int8, jnp.int16, jnp.float32]
   )
   def test_bitcast(self, dtype, new_dtype):
+    if not jtu.is_libtpu_at_least("0.0.48"):
+      self.skipTest("Requires libtpu >= 0.0.48")
     self.skip_if_tc_tiling(
         "Fails due to incorrectly inferred tiling in tpu.memref_squeeze"
     )
     new_shape = (
         self.num_lanes * jnp.dtype(dtype).itemsize // jnp.dtype(new_dtype).itemsize,
     )
+    # TODO(b/562994815): Until bitwidth-changing plsc.bitcast is supported with
+    # layout passes, test_bitcast0/1 (i32 -> i8/i16 on 1D vectors) cannot move
+    # off needs_layout_passes=False.
+    changes_bitwidth = (
+        jnp.dtype(dtype).itemsize != jnp.dtype(new_dtype).itemsize
+    )
 
     @self.vector_subcore_kernel(
         out_shape=jax.ShapeDtypeStruct(shape=new_shape, dtype=new_dtype),
-        compiler_params=pltpu.CompilerParams(needs_layout_passes=False),
+        compiler_params=pltpu.CompilerParams(
+            needs_layout_passes=not changes_bitwidth
+        ),
     )
     def kernel(x_ref, o_ref):
       o_ref[...] = plsc.bitcast(x_ref[...], o_ref.dtype)
@@ -1961,6 +1970,8 @@ class VectorSubcoreTest(PallasSCTest):
       ("debug_print", lambda vec: pl.debug_print("test", vec)),
   )
   def test_effect_discharge(self, effectful_op):
+    if not jtu.is_libtpu_at_least("0.0.48"):
+      self.skipTest("Requires libtpu >= 0.0.48")
     x = jnp.arange(self.sc_info.num_lanes)
     mesh = plsc.VectorSubcoreMesh(
         core_axis_name="core", subcore_axis_name="subcore", num_cores=1
@@ -1970,7 +1981,6 @@ class VectorSubcoreTest(PallasSCTest):
         mesh=mesh,
         out_type=x,
         scratch_types=[pltpu.VMEM(x.shape, x.dtype)],
-        compiler_params=pltpu.CompilerParams(needs_layout_passes=False),
     )
     def body(x_ref, o_ref, scratch_ref):
       pltpu.sync_copy(x_ref, scratch_ref)
