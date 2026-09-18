@@ -65,7 +65,6 @@ from jax._src.interpreters import ad as ad_internal
 from jax._src.interpreters import mlir
 from jax._src.interpreters import partial_eval as pe
 from jax._src.lax.eval_jaxpr import eval_jaxpr_p
-from jax._src.lib import jaxlib_extension_version
 from jax._src.compilation_cache import is_persistent_cache_enabled
 from jax._src.sharding_impls import make_single_device_sharding
 import jax._src.util as jax_util
@@ -1335,7 +1334,7 @@ class JitTest(jtu.BufferDonationTestCase):
 
   def test_jit_lower_cost_analysis(self):
     # TODO(b/261771737): add support for uncompiled cost analysis in C API.
-    if "PJRT C API" in xla_bridge.get_backend().platform_version:
+    if xla_bridge.using_pjrt_c_api():
       raise unittest.SkipTest("C API does not support uncompiled cost analysis")
     f = jit(lambda x: x).lower(1.)
     g = jit(lambda x: x + 4).lower(1.)
@@ -1374,10 +1373,6 @@ class JitTest(jtu.BufferDonationTestCase):
         }
     )
 
-  @unittest.skipIf(
-      jaxlib_extension_version < 484,
-      "Requires jaxlib extension version 484 or newer",
-  )
   @jtu.run_on_devices("gpu")
   def test_jit_lower_compile_with_individually_defined_outputs(self):
     def f(x):

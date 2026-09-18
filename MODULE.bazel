@@ -14,7 +14,7 @@ bazel_dep(name = "grpc", version = "1.78.0", repo_name = "com_github_grpc_grpc")
 bazel_dep(name = "platforms", version = "1.1.0")
 bazel_dep(name = "protobuf", version = "32.1", repo_name = "com_google_protobuf")
 bazel_dep(name = "pybind11_bazel", version = "3.0.0")
-bazel_dep(name = "rules_cc", version = "0.2.20")
+bazel_dep(name = "rules_cc", version = "0.2.25")
 bazel_dep(name = "rules_python", version = "2.2.0")
 bazel_dep(name = "zlib", version = "1.3.2")
 
@@ -31,9 +31,9 @@ archive_override(
 bazel_dep(name = "xla")
 archive_override(
     module_name = "xla",
-    integrity = "sha256-MsuAh9iDGKAfmXTq1iVOHKBtJj+hhH9hUDN5UlvUaJc=",
-    strip_prefix = "xla-91888df6ce85102c30220e41d952065925e10886",
-    urls = ["https://github.com/openxla/xla/archive/91888df6ce85102c30220e41d952065925e10886.tar.gz"],
+    integrity = "sha256-jcCvyRfMLvFUuaU8DmgSOoOn84yXwsBrZcHToRuWvOY=",
+    strip_prefix = "xla-796e731794b58a5eb7f7b0f6bc382a9e28578a3e",
+    urls = ["https://github.com/openxla/xla/archive/796e731794b58a5eb7f7b0f6bc382a9e28578a3e.tar.gz"],
 )
 
 # TODO: upstream, otherwise we have to duplicate the patches in jax
