@@ -29,18 +29,29 @@ export TF_CPP_MIN_LOG_LEVEL=0
 export JAX_ENABLE_X64="$JAXCI_ENABLE_X64"
 
 # ==============================================================================
-# Number of parallel processes for pytest (default 4 workers per GPU).
-# Override with ROCM_PYTEST_WORKERS_PER_GPU from the workflow (e.g. 1 for
-# shared-node experiments).
+# Number of parallel processes for pytest.
+# Prefer nproc (cpuset-aware) so DPX DOKS matches baremetal density.
+# Set ROCM_PYTEST_FORCE_WORKERS_PER_GPU=1 to use ROCM_PYTEST_WORKERS_PER_GPU.
 # ==============================================================================
 
 export gpu_count=$(rocminfo | egrep -c "Device Type:\s+GPU")
 echo "Number of GPUs detected: $gpu_count"
 
-workers_per_gpu="${ROCM_PYTEST_WORKERS_PER_GPU:-4}"
-export num_processes=$((gpu_count * workers_per_gpu))
-echo "Workers per GPU: $workers_per_gpu"
-echo "Number of processes to run: $num_processes"
+available_cpus=$(nproc 2>/dev/null || echo 0)
+if [[ "${ROCM_PYTEST_FORCE_WORKERS_PER_GPU:-0}" == "1" && -n "${ROCM_PYTEST_WORKERS_PER_GPU:-}" ]]; then
+  workers_per_gpu="$ROCM_PYTEST_WORKERS_PER_GPU"
+  export num_processes=$((gpu_count * workers_per_gpu))
+  echo "Workers per GPU: $workers_per_gpu (forced override)"
+  echo "Number of processes to run: $num_processes"
+elif [[ "$available_cpus" -gt 0 ]]; then
+  export num_processes="$available_cpus"
+  echo "Number of processes to run: $num_processes (from nproc=$available_cpus)"
+else
+  workers_per_gpu="${ROCM_PYTEST_WORKERS_PER_GPU:-4}"
+  export num_processes=$((gpu_count * workers_per_gpu))
+  echo "Workers per GPU: $workers_per_gpu (fallback)"
+  echo "Number of processes to run: $num_processes"
+fi
 
 export JAX_ENABLE_ROCM_XDIST="$gpu_count"
 export XLA_PYTHON_CLIENT_ALLOCATOR=address
