@@ -260,7 +260,7 @@ jobs:
     strategy:
         fail-fast: false # don't cancel all jobs on failure
         matrix:
-          runner: ["amd-do-linux.jax.gpu.gfx950.1", "amd-do-linux.jax.gpu.gfx950.4", "amd-do-linux.jax.gpu.gfx950.8"]
+          runner: ["amd-do-linux.jax.gpu.gfx950.4-dpx", "amd-sandbox-linux.jax.gpu.gfx950.8-dpx"]
           python: ["3.12", "3.13", "3.14", "3.15"]
           rocm: [
             {label: "TheRock 10.0.0", wheel-version: "10", release-version: "10.0.0", tag: "therock-10.0"},
@@ -281,48 +281,6 @@ jobs:
       skip-download-jaxlib-and-plugins-from-gcs: ${{inputs.skip-download-jaxlib-and-plugins-from-gcs}}
       gcs_download_uri: ${{inputs.gcs_download_uri}}
       s3_download_uri: 's3://jax-ci-amd/rocm-wheels/${{ github.repository }}/${{ github.ref_name }}/${{ matrix.rocm.release-version }}/wheel-tests-nightly/${{ github.run_number }}/${{ github.run_attempt }}'
-      git_commit: ${{ inputs.git_commit }}
-      # Must match the artifact list of the build job above.
-      jax-jaxlib-source: ${{ github.repository_owner == 'ROCm' && 'vendor' || 'upstream' }}
-
-  run-bazel-test-rocm:
-    if: ${{ !cancelled() && (github.repository_owner == 'jax-ml' || github.repository_owner == 'ROCm') }}
-    needs: [build-rocm-artifacts]
-    permissions:
-      id-token: write
-      contents: read
-    uses: ./.github/workflows/bazel_rocm.yml
-    strategy:
-        fail-fast: false # don't cancel all jobs on failure
-        matrix:
-          runner: ["amd-do-linux.jax.gpu.gfx950.1"]
-          python: ["3.12", "3.13", "3.14", "3.15"]
-          rocm: [
-            {label: "TheRock 10.0.0", wheel-version: "10", release-version: "10.0.0", tag: "therock-10.0"},
-            {label: "TheRock Next (pre-release)", wheel-version: "10", release-version: "therock-latest", tag: "therock-latest"},
-          ]
-          enable-x64: [0]
-          exclude:
-            # Release runs test only the ROCm that ships with them, not the moving pre-release.
-            - rocm:
-                release-version: ${{ (startsWith(github.ref_name, 'release/') || startsWith(github.ref_name, 'rocm-jaxlib-v') || inputs.artifact-type == 'release') && 'therock-latest' }}
-    name: "Bazel ROCm ${{ matrix.rocm.label }}"
-    with:
-      runner: ${{ matrix.runner }}
-      python: ${{ matrix.python }}
-      rocm-version: ${{ matrix.rocm.wheel-version }}
-      rocm-release-version: ${{ matrix.rocm.release-version }}
-      rocm-tag: ${{ matrix.rocm.tag }}
-      enable-x64:  ${{ matrix.enable-x64 }}
-      gcs_download_uri: ${{inputs.gcs_download_uri}}
-      halt-for-connection: ${{inputs.halt-for-connection}}
-      s3_download_uri: 's3://jax-ci-amd/rocm-wheels/${{ github.repository }}/${{ github.ref_name }}/${{ matrix.rocm.release-version }}/wheel-tests-nightly/${{ github.run_number }}/${{ github.run_attempt }}'
-      build_jaxlib: ${{ 'false' }}
-      build_jax: ${{ 'false' }}
-      jaxlib-version: "head"
-      write_to_bazel_remote_cache: 1
-      run_multiaccelerator_tests: ${{ 'true' }}
-      clone_main_xla: 0
       git_commit: ${{ inputs.git_commit }}
       # Must match the artifact list of the build job above.
       jax-jaxlib-source: ${{ github.repository_owner == 'ROCm' && 'vendor' || 'upstream' }}
