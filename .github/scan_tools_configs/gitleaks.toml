@@ -67,3 +67,22 @@ regexes = [
   '''[A-Z][A-Z0-9_]*SHA512\s*[=:]''',
   '''[A-Z][A-Z0-9_]*MD5\s*[=:]''',
 ]
+
+[[allowlists]]
+description = "Bazel repo_env build toggles"
+# `common:oneapi --repo_env=ENABLE_INTEL_XPU_TRITON=1` in `.bazelrc`. The
+# right-hand side is restricted to a boolean or 0/1, so a build flag carrying
+# a real credential -- `--repo_env=GITHUB_TOKEN=...` -- is still reported.
+regexes = [
+  '''^[A-Z][A-Z0-9_]*=(?:[01]|true|false|True|False)$''',
+]
+
+[[allowlists]]
+description = "mTLS loopback test fixture key"
+# `tests/distributed_initialize_test.py` starts a coordination service on
+# localhost and connects to it, so it needs a real keypair on disk. The
+# matching `mtls_cert.pem` is self-signed with CN=localhost and the key
+# authenticates nothing beyond that test.
+paths = [
+  '''(^|/)tests/testdata/mtls_key\.pem$''',
+]
