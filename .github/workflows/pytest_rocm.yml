@@ -23,6 +23,7 @@ on:
         options:
           - "amd-do-linux.jax.gpu.gfx950.1"
           - "amd-do-linux.jax.gpu.gfx950.1-dpx"
+          - "amd-do-linux.jax.gpu.gfx950.1-dpx-k8s"
           - "amd-do-linux.jax.gpu.gfx950.4"
           - "amd-do-linux.jax.gpu.gfx950.4-dpx"
           - "amd-do-linux.jax.gpu.gfx950.8"
