@@ -52,10 +52,16 @@ on:
         required: false
         default: ''
         type: string
+      soak-until:
+        description: "Soak mode: re-dispatch this workflow back-to-back until this UTC time (e.g. 2026-10-01T07:00Z). Empty = single run."
+        required: false
+        default: ''
+        type: string
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
-  cancel-in-progress: true
+  # A soak iteration must queue behind the one that dispatched it, not cancel it.
+  cancel-in-progress: ${{ inputs.soak-until == '' }}
 permissions: {}
 
 env:
@@ -284,6 +290,45 @@ jobs:
       git_commit: ${{ inputs.git_commit }}
       # Must match the artifact list of the build job above.
       jax-jaxlib-source: ${{ github.repository_owner == 'ROCm' && 'vendor' || 'upstream' }}
+
+  soak-redispatch:
+    if: ${{ !cancelled() && inputs.soak-until != '' && github.repository_owner == 'ROCm' }}
+    needs: [build-rocm-artifacts, run-pytest-rocm]
+    runs-on: amd-do-linux.jax.cpu
+    container: "ghcr.io/rocm/jax-manylinux_2_28-therock-10.0:latest"  # zizmor: ignore[unpinned-images]
+    permissions:
+      actions: write
+    defaults:
+      run:
+        shell: bash
+    name: "Soak: dispatch next iteration"
+    steps:
+      - name: Dispatch next iteration if the soak window is still open
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOAK_UNTIL: ${{ inputs.soak-until }}
+          # Pin every iteration to the commit the first one tested, even if the branch moves.
+          GIT_COMMIT: ${{ inputs.git_commit || github.sha }}
+          GCS_DOWNLOAD_URI: ${{ inputs.gcs_download_uri }}
+          SKIP_DOWNLOAD: ${{ inputs.skip-download-jaxlib-and-plugins-from-gcs }}
+          ARTIFACT_TYPE: ${{ inputs.artifact-type }}
+          WHEEL_VERSION_SUFFIX: ${{ inputs.wheel-version-suffix }}
+        run: |
+          deadline="$(date -u -d "${SOAK_UNTIL}" +%s)"
+          now="$(date -u +%s)"
+          if (( now >= deadline )); then
+            echo "Soak window ended at ${SOAK_UNTIL}; not dispatching another iteration."
+            exit 0
+          fi
+          body="$(printf '{"ref":"%s","inputs":{"gcs_download_uri":"%s","skip-download-jaxlib-and-plugins-from-gcs":"%s","halt-for-connection":"no","git_commit":"%s","artifact-type":"%s","wheel-version-suffix":"%s","soak-until":"%s"}}' \
+            "${GITHUB_REF_NAME}" "${GCS_DOWNLOAD_URI}" "${SKIP_DOWNLOAD}" "${GIT_COMMIT}" \
+            "${ARTIFACT_TYPE}" "${WHEEL_VERSION_SUFFIX}" "${SOAK_UNTIL}")"
+          curl -fsSL -X POST \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/workflows/wheel_tests_nightly_release.yml/dispatches" \
+            -d "${body}"
+          echo "Dispatched next soak iteration (commit ${GIT_COMMIT}, soak until ${SOAK_UNTIL})."
 
   run-pytest-tpu:
     if: github.repository_owner == 'jax-ml'
