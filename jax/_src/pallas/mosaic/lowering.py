@@ -1174,6 +1174,7 @@ def lower_jaxpr_into_pipelined_module(
   module.body.append(func_op)
   assert name not in sym_tab, f"Function name {name} already exists in symbol table."
   sym_tab.insert(func_op)
+  module.operation.attributes["sym_name"] = ir.StringAttr.get(name)
   window_params = []
   static_grid = None
   grid = mosaic_grid_mapping.grid
@@ -1273,6 +1274,11 @@ def lower_jaxpr_into_pipelined_module(
               "Lookahead is not supported for XLA pipeline emitter lowering."
           )
         buffer_count = pipeline_mode.buffer_count
+        if not isinstance(buffer_count, int):
+          raise LoweringException(
+              "Separate input/output buffer counts are only supported by"
+              f" emit_pipeline. Got {buffer_count}."
+          )
         if buffer_count < 1 or buffer_count > 2:
           raise LoweringException(
               "Only single (1) and double (2) buffering are supported. Got"
@@ -1511,6 +1517,7 @@ def lower_jaxpr_into_unpipelined_module(
   module.body.append(func_op)
   assert name not in sym_tab, f"Function name {name} already exists in symbol table."
   sym_tab.insert(func_op)
+  module.operation.attributes["sym_name"] = ir.StringAttr.get(name)
   grid = tuple(m[1] for m in mesh_shape)
   func_op.attributes["iteration_bounds"] = ir.DenseI64ArrayAttr.get(grid)
   func_op.attributes["scalar_prefetch"] = ir.IntegerAttr.get(
@@ -5364,6 +5371,9 @@ def _dma_start_lowering_rule(
   if add:
     raise NotImplementedError("DMA with add=True is not supported.")
   src_ref, dst_ref, sem, src_sem, device_id = _dma_unflatten(tree, args)
+  if sem is None:
+    raise NotImplementedError(
+        "Local DMA semaphore cannot be None on TensorCore.")
   src_ref_aval, dst_ref_aval, sem_aval, src_sem_aval, device_id_aval = (
       _dma_unflatten(tree, ctx.avals_in)
   )
@@ -5375,6 +5385,12 @@ def _dma_start_lowering_rule(
   else:
     dest_mesh = None
     dest_kernel_type = kernel_type
+  if (device_id is None and dest_kernel_type == kernel_type
+      and src_sem is not None):
+    raise NotImplementedError(
+        "Source semaphore (`src_sem`) on a local copy without device_id is not"
+        " implemented on TensorCore."
+    )
   core_id = None
   subcore_id = None
   if device_id is not None or dest_kernel_type != kernel_type:
@@ -5406,34 +5422,57 @@ def _dma_start_lowering_rule(
 @register_lowering_rule(tpu_primitives.dma_wait_p)
 def _dma_wait_lowering_rule(ctx: LoweringRuleContext, *args, tree,
                             device_id_type: primitives.DeviceIdType,
-                            insert_dummy_device: bool,
                             is_wait_send: bool = False):
-  del is_wait_send
-  src, dst, sem, _, device_id = _dma_unflatten(tree, args)
-  src_aval, dst_aval, sem_aval, _, device_id_aval = _dma_unflatten(
+  src, dst, sem, src_sem, device_id = _dma_unflatten(tree, args)
+  if is_wait_send and device_id is None:
+    raise NotImplementedError(
+        "`wait_read` on a local copy without device_id is not implemented on"
+        " TensorCore."
+    )
+  if sem is None:
+    raise NotImplementedError("DMA semaphore cannot be None on TensorCore.")
+  src_aval, dst_aval, sem_aval, src_sem_aval, device_id_aval = _dma_unflatten(
       tree, ctx.avals_in
   )
   block_shapes = _dma_unflatten(tree, ctx.block_shapes)
 
-  if insert_dummy_device:
-    i32 = ir.IntegerType.get_signless(32)
-    device_id = core_id = arith.constant(i32, ir.IntegerAttr.get(i32, 0))
-  elif device_id is not None:
+  if is_wait_send:
+    # `wait_send` pre-swaps (src, dst, dst_sem, src_sem); undo it so that the
+    # operands match the `enqueue_dma` they are awaiting.
+    src, dst, src_aval, dst_aval = dst, src, dst_aval, src_aval
+    sem, src_sem, sem_aval, src_sem_aval = src_sem, sem, src_sem_aval, sem_aval
+    block_shapes = [block_shapes[i] for i in (1, 0, 3, 2, 4)]
+
+  core_id = None
+  subcore_id = None
+  if device_id is not None:
     if isinstance(sem_aval.memory_space, pallas_core.CoreMemorySpace):
       dest_mesh = sem_aval.memory_space.mesh
     else:
       dest_mesh = None
-    device_id, core_id, _ = _device_id_to_logical(
+    device_id, core_id, subcore_id = _device_id_to_logical(
         ctx, device_id, device_id_type, device_id_aval, dest_mesh=dest_mesh
     )
-  else:
-    core_id = None
 
-  def _dma_wait(src_ref, dst_ref, sem) -> list[ir.Value]:
-    tpu.wait_dma2(sem, src_ref, dst_ref, device_id=device_id, core_id=core_id)
+  def _dma_wait(src_ref, dst_ref, sem, src_sem) -> list[ir.Value]:
+    tpu.wait_dma(
+        source=src_ref,
+        target=dst_ref,
+        source_semaphore=src_sem,
+        target_semaphore=sem,
+        device_id=device_id,
+        core_id=core_id,
+        subcore_id=subcore_id,
+        wait_target=not is_wait_send,
+    )
     return []
 
-  return lower_with_transformed_refs(_dma_wait, [src, dst, sem], [src_aval, dst_aval, sem_aval], block_shapes[:3])
+  return lower_with_transformed_refs(
+      _dma_wait,
+      [src, dst, sem, src_sem],
+      [src_aval, dst_aval, sem_aval, src_sem_aval],
+      block_shapes[:4],
+  )
 
 
 def lower_with_transformed_refs(f, args, avals, block_shapes=None):

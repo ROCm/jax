@@ -419,6 +419,7 @@ def _run_scoped_resource_estimator(
 @_register_resource_estimator(lax.reduce_sum_p)
 @_register_resource_estimator(lax.reduce_max_p)
 @_register_resource_estimator(lax.reduce_min_p)
+@_register_resource_estimator(lax.reduce_prod_p)
 def _reduce_resource_estimator(
     ctx: ResourceEstimatorContext, x_aval: jax_core.ShapedArray, *, axes,
     **kwargs
@@ -1016,8 +1017,7 @@ def lower_jaxpr_to_module(
   )
 
   dump_options = mgpu.dialect.get_or_set_dump_options(module)
-  # TODO(bchetioui): clean up when the minimum jaxlib version is 0.11.2.
-  if getattr(dump_options, "resources", False):
+  if dump_options.resources:
     if prof_spec is not None:
       smem_scratch_bytes = rs.smem_scratch_bytes + prof_spec.smem_bytes(block)
       rs = dataclasses.replace(rs, smem_scratch_bytes=smem_scratch_bytes)
@@ -2105,7 +2105,7 @@ def _swap_lowering_rule(
     value,
     *leaves,
     tree,
-    optimized: bool | None = None,
+    optimized: bool = True,
     return_old: bool = True,
 ):
   if isinstance(x_ref, tcgen05.TMEMRef):
@@ -2113,13 +2113,6 @@ def _swap_lowering_rule(
         "Stores to TMEM are asynchronous operations and cannot be performed"
         " using the usual syntax. Please use plgpu.async_store_tmem instead."
     )
-  # `ref[...] = value` uses an optimized transfer for tiled references, and
-  # silently downgrades to an unoptimized one for untiled references.
-  # `optimized=None` preserves that behaviour, while `plgpu.store` always
-  # passes an explicit value.
-  # TODO(bchetioui): remove once the downgradable path is gone.
-  tiled_optimized = True if optimized is None else optimized
-  untiled_optimized = False if optimized is None else optimized
   v_aval = ctx.avals_in[1]
   barrier = mgpu.warpgroup_barrier
   if ctx.module_ctx.primitive_semantics == gpu_core.PrimitiveSemantics.Warp:
@@ -2201,13 +2194,13 @@ def _swap_lowering_rule(
             is_signed=mgpu_utils.is_signed(v_aval.dtype),
             swizzle=swizzle,
             layout=value.layout,
-            optimized=tiled_optimized,
+            optimized=optimized,
             tiling_rank=len(tiling),
         )
       value.store_tiled(
           x_smem,
           swizzle=swizzle,
-          optimized=tiled_optimized,
+          optimized=optimized,
           tiling_rank=len(tiling),
       )
     case ():
@@ -2219,10 +2212,10 @@ def _swap_lowering_rule(
                 layout=value.layout,
                 is_signed=mgpu_utils.is_signed(v_aval.dtype),
                 swizzle=swizzle or 16,
-                optimized=untiled_optimized,
+                optimized=optimized,
             )
           value.store_untiled(
-              x_smem, swizzle=swizzle or 16, optimized=untiled_optimized
+              x_smem, swizzle=swizzle or 16, optimized=optimized
           )
         case _:
           if swizzle is not None:
@@ -2249,7 +2242,7 @@ def _swap_lowering_rule_wg(
     value,
     *leaves,
     tree,
-    optimized: bool | None = None,
+    optimized: bool = True,
     return_old: bool = True,
 ):
   v_aval = ctx.avals_in[1]
@@ -3196,7 +3189,16 @@ def _squeeze_lowering_rule_wg(ctx: LoweringRuleContext, x, dimensions):
     return vector_dialect.shape_cast(res_ty, x)
 
 
-def _reduce_lowering_rule(op, ctx: LoweringRuleContext, x, *, axes, **kwargs):
+def _reduce_lowering_rule(
+    op,
+    ctx: LoweringRuleContext,
+    x,
+    *,
+    axes,
+    accumulator_ilp: int | None = None,
+    **kwargs,
+):
+  del kwargs
   [x_aval] = ctx.avals_in
   match x.layout:
     case mgpu.WGStridedFragLayout():
@@ -3212,7 +3214,7 @@ def _reduce_lowering_rule(op, ctx: LoweringRuleContext, x, *, axes, **kwargs):
         )
       scratch_ty = jax.ShapeDtypeStruct(shape=(4,), dtype=x_aval.dtype)
       with ctx.module_ctx.scratch_view(scratch_ty) as scratch:
-        return x.reduce(op, axes, scratch)
+        return x.reduce(op, axes, scratch, acc_ilp=accumulator_ilp)
     case mgpu.TiledLayout():
       if len(axes) != 1:
         raise NotImplementedError("Multi-axis reductions not supported")
@@ -3227,7 +3229,7 @@ def _reduce_lowering_rule(op, ctx: LoweringRuleContext, x, *, axes, **kwargs):
       else:
         scratch_ctx = contextlib.nullcontext(None)
       with scratch_ctx as scratch:
-        return x.reduce(op, axes[0], scratch=scratch)
+        return x.reduce(op, axes[0], scratch=scratch, acc_ilp=accumulator_ilp)
     case _:
       raise NotImplementedError(f"Unsupported layout {x.layout}")
 
@@ -3240,6 +3242,9 @@ register_lowering_rule(lax.reduce_max_p, mgpu.LoweringSemantics.Lane)(
 register_lowering_rule(lax.reduce_min_p, mgpu.LoweringSemantics.Lane)(
     functools.partial(_reduce_lowering_rule, "min")
 )
+register_lowering_rule(lax.reduce_prod_p, mgpu.LoweringSemantics.Lane)(
+    functools.partial(_reduce_lowering_rule, "prod")
+)
 
 
 def _reduce_lowering_rule_wg(
@@ -3248,6 +3253,7 @@ def _reduce_lowering_rule_wg(
     acc: int | float,
     x,
     axes,
+    accumulator_ilp: int | None = None,
 ) -> ir.Value:
   [x_aval] = ctx.avals_in
   [out_aval] = ctx.avals_out
@@ -3273,19 +3279,36 @@ def _reduce_lowering_rule_wg(
   # TODO(bchetioui): here, we could just donate all the remaining free SMEM that
   # we have at this point in time.
   reduction.attributes["scratch_size"] = i32_attr(ctx.module_ctx.reduction_scratch_bytes)
+  if accumulator_ilp is not None:
+    reduction.attributes["acc_ilp"] = i32_attr(accumulator_ilp)
   return reduction.result
 
 
 @register_lowering_rule(lax.reduce_sum_p, mgpu.LoweringSemantics.Warpgroup)
-def _reduce_sum_lowering_rule_wg(ctx: LoweringRuleContext, x, *, axes,
-                                 out_sharding):
+def _reduce_sum_lowering_rule_wg(
+    ctx: LoweringRuleContext,
+    x,
+    *,
+    axes,
+    out_sharding=None,
+    accumulator_ilp: int | None = None,
+):
+  del out_sharding
   kind = vector_dialect.CombiningKind.ADD
-  return _reduce_lowering_rule_wg(ctx, kind, 0, x, axes)
+  return _reduce_lowering_rule_wg(
+      ctx, kind, 0, x, axes, accumulator_ilp=accumulator_ilp
+  )
 
 
 @register_lowering_rule(lax.reduce_max_p, mgpu.LoweringSemantics.Warpgroup)
-def _reduce_max_lowering_rule_wg(ctx: LoweringRuleContext, x, *, axes,
-                                 out_sharding):
+def _reduce_max_lowering_rule_wg(
+    ctx: LoweringRuleContext,
+    x,
+    *,
+    axes,
+    out_sharding=None,
+    accumulator_ilp: int | None = None,
+):
   del out_sharding
   [x_aval] = ctx.avals_in
   if jnp.issubdtype(x_aval.dtype, jnp.floating):
@@ -3299,12 +3322,20 @@ def _reduce_max_lowering_rule_wg(ctx: LoweringRuleContext, x, *, axes,
     acc = np.iinfo(x_aval.dtype).min
   else:
     raise NotImplementedError(f"Unsupported dtype {x_aval.dtype}")
-  return _reduce_lowering_rule_wg(ctx, kind, acc, x, axes)
+  return _reduce_lowering_rule_wg(
+      ctx, kind, acc, x, axes, accumulator_ilp=accumulator_ilp
+  )
 
 
 @register_lowering_rule(lax.reduce_min_p, mgpu.LoweringSemantics.Warpgroup)
-def _reduce_min_lowering_rule_wg(ctx: LoweringRuleContext, x, *, axes,
-                                 out_sharding):
+def _reduce_min_lowering_rule_wg(
+    ctx: LoweringRuleContext,
+    x,
+    *,
+    axes,
+    out_sharding=None,
+    accumulator_ilp: int | None = None,
+):
   del out_sharding
   [x_aval] = ctx.avals_in
   if jnp.issubdtype(x_aval.dtype, jnp.floating):
@@ -3318,11 +3349,19 @@ def _reduce_min_lowering_rule_wg(ctx: LoweringRuleContext, x, *, axes,
     acc = np.iinfo(x_aval.dtype).max
   else:
     raise NotImplementedError(f"Unsupported dtype {x_aval.dtype}")
-  return _reduce_lowering_rule_wg(ctx, kind, acc, x, axes)
+  return _reduce_lowering_rule_wg(
+      ctx, kind, acc, x, axes, accumulator_ilp=accumulator_ilp
+  )
 
 
 @register_lowering_rule(lax.reduce_prod_p, mgpu.LoweringSemantics.Warpgroup)
-def _reduce_prod_lowering_rule_wg(ctx: LoweringRuleContext, x, *, axes):
+def _reduce_prod_lowering_rule_wg(
+    ctx: LoweringRuleContext,
+    x,
+    *,
+    axes,
+    accumulator_ilp: int | None = None,
+):
   [x_aval] = ctx.avals_in
   if jnp.issubdtype(x_aval.dtype, jnp.floating):
     acc = 1.0
@@ -3331,7 +3370,9 @@ def _reduce_prod_lowering_rule_wg(ctx: LoweringRuleContext, x, *, axes):
   else:
     raise NotImplementedError(f"Unsupported dtype {x_aval.dtype}")
   kind = vector_dialect.CombiningKind.MUL
-  return _reduce_lowering_rule_wg(ctx, kind, acc, x, axes)
+  return _reduce_lowering_rule_wg(
+      ctx, kind, acc, x, axes, accumulator_ilp=accumulator_ilp
+  )
 
 
 def _block_id(ctx: LoweringRuleContext, dim: gpu_dialect.Dimension) -> ir.Value:

@@ -181,11 +181,22 @@ def _or(a, b):
 
 def _tuples_differ(xs, ys):
   """Dynamic index-tuple comparison calculation."""
-  diffs = (
-      x is not y and x != y
-      for x, y in zip(jax.tree.leaves(xs), jax.tree.leaves(ys), strict=True)
+
+  # A Slice (jax.ds/pl.ds) keeps its static fields in the treedef, so compare it
+  # field by field rather than letting jax.tree.map descend into it.
+  _is_slice = lambda x: isinstance(x, Slice)
+  _differ = lambda x, y: x is not y and x != y
+  _slices_differ = lambda x, y: functools.reduce(
+      _or,
+      (_differ(x.start, y.start), _differ(x.size, y.size),
+       _differ(x.stride, y.stride)),
+      False,
   )
-  return functools.reduce(_or, diffs, False)
+  diffs = jax.tree.map(
+      lambda x, y: _slices_differ(x, y) if _is_slice(x) else _differ(x, y),
+      xs, ys, is_leaf=_is_slice
+  )
+  return functools.reduce(_or, jax.tree.leaves(diffs), False)
 
 
 def _tuple_all_binop(binop, xs, ys):
@@ -257,27 +268,52 @@ class BufferType(enum.Enum):
     ]
 
 
+def _normalize_buffer_count(
+    buffer_count: int | tuple[int, int], buffer_type: BufferType
+) -> tuple[int, int]:
+  """Normalizes buffer_count into (in_buffer_count, out_buffer_count)."""
+  if not buffer_type.is_input and not buffer_type.is_output:
+    raise ValueError(f"Cannot infer buffer counts for {buffer_type}.")
+  if isinstance(buffer_count, int):
+    if buffer_type == BufferType.INPUT_OUTPUT:
+      # An int keeps the slot count at buffer_count, so output writeback is
+      # synchronous; use an (in, out) pair to buffer outputs as well.
+      in_count, out_count = buffer_count, 1
+    else:
+      in_count = buffer_count if buffer_type.is_input else 0
+      out_count = buffer_count if buffer_type.is_output else 0
+  elif (
+      buffer_type == BufferType.INPUT_OUTPUT
+      and isinstance(buffer_count, tuple)
+      and len(buffer_count) == 2
+      and all(isinstance(c, int) for c in buffer_count)
+  ):
+    in_count, out_count = buffer_count
+  else:
+    raise ValueError(
+        "buffer_count must be a static int, or a static (in, out) pair of ints"
+        f" for input_output buffers; got {buffer_count!r} for {buffer_type}"
+    )
+  if (buffer_type.is_input and in_count < 1) or (
+      buffer_type.is_output and out_count < 1
+  ):
+    raise ValueError(f"buffer_count must be at least 1, got {buffer_count}")
+  return in_count, out_count
+
+
+def _total_buffer_count(in_count: int, out_count: int, buffer_type: BufferType):
+  return in_count + out_count - int(buffer_type == BufferType.INPUT_OUTPUT)
+
+
 def _get_block_shape(spec: pallas_core.BlockSpec) -> tuple[int, ...]:
   """Get the block shape for a given block spec."""
-  def _get_dim_size(bd):
-    match bd:
-      case int():
-        return bd
-      case None | Squeezed():
-        return None
-      case (
-          Blocked(block_size)
-          | Element(block_size)
-          | BoundedSlice(block_size)
-          | Indirect(block_size)
-      ):
-        return block_size
-      case _:
-        raise ValueError(f"Unsupported block dimension type: {bd}")
   if spec.block_shape is None:
     raise ValueError("Block shape must be specified.")
-  block_shape_nones = tuple(_get_dim_size(x) for x in spec.block_shape)
-  return tuple(x for x in block_shape_nones if x is not None)
+  return tuple(
+      pallas_core.get_block_size(bd)
+      for bd in spec.block_shape
+      if not (bd is None or isinstance(bd, Squeezed))
+  )
 
 
 class BufferedRefBase:
@@ -290,6 +326,14 @@ class BufferedRefBase:
   @property
   def buffer_type(self) -> BufferType:
     raise NotImplementedError()
+
+  @property
+  def in_buffer_count(self) -> int:
+    return 0
+
+  @property
+  def out_buffer_count(self) -> int:
+    return 0
 
   @property
   def is_buffered(self) -> bool:
@@ -492,7 +536,8 @@ class BufferedRef(BufferedRefBase):
   """
   _spec: pallas_core.BlockSpec = jax.tree.static()
   _buffer_type: BufferType = jax.tree.static()
-  _buffer_count: int = jax.tree.static()
+  _in_buffer_count: int = jax.tree.static()
+  _out_buffer_count: int = jax.tree.static()
   _grid_rank: int | None = jax.tree.static()
   window_ref: ArrayRef | None
   copy_in_slot: int | jax.Array | None
@@ -509,17 +554,6 @@ class BufferedRef(BufferedRefBase):
   # New style prefetch with folded emit_pipeline await. New is False here.
   await_prefetch: bool = jax.tree.static(default=False)
 
-  def __post_init__(self):
-    if self.is_buffered and self.buffer_count < 1:
-      raise ValueError(
-          f"buffer_count must be at least 1, got {self.buffer_count}"
-      )
-    if self.is_output:
-      if self.is_buffered and self.buffer_count > 2:
-        raise NotImplementedError(
-            "Buffer count >2 not supported for output buffered refs."
-        )
-
   @property
   def spec(self):
     return self._spec
@@ -529,9 +563,22 @@ class BufferedRef(BufferedRefBase):
     return self._buffer_type
 
   @property
+  def in_buffer_count(self) -> int:
+    """Number of slots the pipeline prefetches inputs into."""
+    return self._in_buffer_count
+
+  @property
+  def out_buffer_count(self) -> int:
+    """Number of slots the pipeline writes back from."""
+    return self._out_buffer_count
+
+  @property
   def is_buffered(self) -> bool:
     """Whether this buffer is multiple-buffered."""
-    return self._buffer_count > 0
+    # A buffer count of non-zero on either input or output means we don't just
+    # synchronously load (or slice). We actually pipeline over it, potentially
+    # synchronously (buffer_count == 1).
+    return self._in_buffer_count > 0 or self._out_buffer_count > 0
 
   @property
   def use_lookahead(self) -> bool:
@@ -543,7 +590,9 @@ class BufferedRef(BufferedRefBase):
     """Returns the number of buffers used for multiple buffering."""
     if not self.is_buffered:
       raise ValueError("buffer count is undefined")
-    return self._buffer_count
+    return _total_buffer_count(
+        self._in_buffer_count, self._out_buffer_count, self._buffer_type
+    )
 
   @classmethod
   def create(
@@ -597,14 +646,15 @@ class BufferedRef(BufferedRefBase):
       )
     if source_memory_space is buffer_memory_space or buffer_memory_space is HBM:
       if buffer_memory_space is HBM:
-        if spec.memory_space not in (ANY, HBM):
+        if source_memory_space not in (ANY, HBM):
           raise ValueError(
               "You cannot request HBM block spec for a non-HBM source for"
               f"{spec=} and {source_memory_space=}")
       return cls(
           _spec=spec,
           _buffer_type=buffer_type,
-          _buffer_count=0,
+          _in_buffer_count=0,
+          _out_buffer_count=0,
           _grid_rank=None,
           window_ref=None,  # to be bound to existing ref by the pipeline routine
           copy_in_slot=None,
@@ -624,29 +674,36 @@ class BufferedRef(BufferedRefBase):
             "grid_rank must be specified when use_lookahead is True."
         )
 
+      in_buffer_count, out_buffer_count = _normalize_buffer_count(
+          buffer_count, buffer_type
+      )
+      total_buffer_count = _total_buffer_count(
+          in_buffer_count, out_buffer_count, buffer_type
+      )
       if is_trivial_windowing:
         buffer_ty = ty
       else:
         block_shape = _get_block_shape(spec)
         if len(block_shape) == 1 and tiling is not Tiling.SPARSE_CORE:
-          buffer_ty = ty.update(shape=(buffer_count * block_shape[0],))
+          buffer_ty = ty.update(shape=(total_buffer_count * block_shape[0],))
         else:
-          buffer_ty = ty.update(shape=(buffer_count, *block_shape))
+          buffer_ty = ty.update(shape=(total_buffer_count, *block_shape))
 
       window_ref = buffer_memory_space.from_type(buffer_ty)
       if prefetched_count > 0:
         window_ref = None
-        if not is_trivial_windowing and prefetched_count > buffer_count:
+        if not is_trivial_windowing and prefetched_count > in_buffer_count:
           raise ValueError(
-              "prefetched_count must be at most buffer_count for"
+              "prefetched_count must be at most in_buffer_count for"
               f" non-trivial windowing, got prefetched_count={prefetched_count}"
-              f" and buffer_count={buffer_count}"
+              f" and in_buffer_count={in_buffer_count}"
           )
 
       return cls(
           _spec=spec,
           _buffer_type=buffer_type,
-          _buffer_count=buffer_count,
+          _in_buffer_count=in_buffer_count,
+          _out_buffer_count=out_buffer_count,
           _grid_rank=grid_rank if use_lookahead else None,
           window_ref=window_ref,
           copy_in_slot=None,
@@ -657,12 +714,12 @@ class BufferedRef(BufferedRefBase):
           sem_recvs=(
               None
               if buffer_type is BufferType.OUTPUT or is_trivial_windowing
-              else SemaphoreType.DMA((buffer_count,))
+              else SemaphoreType.DMA((total_buffer_count,))
           ),
           sem_sends=(
               None
               if buffer_type is BufferType.INPUT or is_trivial_windowing
-              else SemaphoreType.DMA((buffer_count,))
+              else SemaphoreType.DMA((total_buffer_count,))
           ),
           tiling=tiling,
           is_trivial_windowing=is_trivial_windowing,
@@ -683,7 +740,14 @@ class BufferedRef(BufferedRefBase):
     )
 
   @classmethod
-  def input_output(cls, spec, dtype_or_type, buffer_count=2, **kwargs):
+  def input_output(
+      cls,
+      spec,
+      dtype_or_type,
+      buffer_count: int | tuple[int, int] = (2, 1),
+      **kwargs,
+  ):
+    """Creates an input_output BufferedRef, which uses in + out - 1 slots."""
     return cls.create(
         spec, dtype_or_type, BufferType.INPUT_OUTPUT, buffer_count, **kwargs
     )
@@ -935,7 +999,7 @@ class BufferedRef(BufferedRefBase):
     slot = self.current_copy_out_slot
     dst_slice = self.get_dma_slice(_ref_to_value_aval(dst_ref), grid_indices)
     src_slice = self._to_window_slice(dst_slice)
-    if self.buffer_count == 1:
+    if self.out_buffer_count == 1:
       tpu_helpers.sync_copy(
           self._window_ref_at(slot, src_slice),
           dst_ref.at[dst_slice],
@@ -972,7 +1036,7 @@ class BufferedRef(BufferedRefBase):
     dst_slice = self.get_dma_slice(_ref_to_value_aval(dst_ref), grid_indices)
     src_slice = self._to_window_slice(dst_slice)
     # Single-buffered outputs are synchronously copied.
-    if self.buffer_count > 1:
+    if self.out_buffer_count > 1:
       tpu_primitives.make_async_copy(
           self._window_ref_at(wait_slot, src_slice),  # nb: doesn't matter
           dst_ref.at[dst_slice],  # only dst shape is important
@@ -1012,7 +1076,7 @@ def fetch_with_lookahead(buffered_ref, src_ref,
     else:
       return x.astype(jnp.uint32)
 
-  fetch_limit = buffered_ref.cumulative_wait_in + buffered_ref.buffer_count
+  fetch_limit = buffered_ref.cumulative_wait_in + buffered_ref.in_buffer_count
   if max_num_fetches is not None:
     fetch_once_limit = buffered_ref.cumulative_copy_in + max_num_fetches
     # We would like to write jnp.minimum(fetch_limit, fetch_once_limit)
@@ -1173,34 +1237,29 @@ class Scheduler:
     self.first_step = step == 0
     self.last_step = step == self.num_steps - 1
 
-    # Derived grid indices for present, previous, and next steps.
-    self.indices = tuple(
-        i + j for i, j in zip(indices, grid_offsets, strict=True)
-    )
-
-    self.prev_indices = tuple(
-        i + j
-        for i, j in zip(_prev_index(indices, grid), grid_offsets, strict=True)
-    )
-    next_indices = _next_index(indices, grid)
-    self.next_indices = tuple(
-        i + j
-        for i, j in zip(next_indices, grid_offsets, strict=True)
-    )
     self.add_offset = lambda x: tuple(i + j for i, j in zip(x, grid_offsets,
                                                             strict=True))
+
+    # Derived grid indices for present, previous, and next steps.
+    self.indices = self.add_offset(indices)
+    next_indices = _next_index(indices, grid)
+    self.next_indices = self.add_offset(next_indices)
+
     # TODO(justinfu): Don't recompute these on each iteration.
-    # fetch_indices stores the grid indices indexed by the amount of lookahead.
-    # i.e. fetch_indices[2] contains the grid indices 2 iterations
-    # ahead.
+    # fetch_indices/prev_indices store the grid indices indexed by the amount
+    # of lookahead/lag, i.e. fetch_indices[2] contains the grid indices 2
+    # iterations ahead and prev_indices[2] the ones 2 iterations behind.
+    # Entries of prev_indices wrap around the grid, so prev_indices[k] is only
+    # meaningful once step >= k.
     self.fetch_indices = [self.indices, self.next_indices]
+    self.prev_indices = [self.indices]
+    prev_indices = indices
     fetch_indices = next_indices
-    for _ in range(self.num_stages-1):
+    for _ in range(self.num_stages - 1):
+      prev_indices = _prev_index(prev_indices, grid)
       fetch_indices = _next_index(fetch_indices, grid)
-      self.fetch_indices.append(tuple(
-            i + j
-            for i, j in zip(fetch_indices, grid_offsets, strict=True)
-      ))
+      self.prev_indices.append(self.add_offset(prev_indices))
+      self.fetch_indices.append(self.add_offset(fetch_indices))
     self._compute_index_cache = {}
 
   def _compute_index(self, buffered_ref, *indices):
@@ -1233,15 +1292,21 @@ class Scheduler:
     # lookahead this will depend on whether the lookahead reached the end.
     if not buffered_ref.is_buffered:
       return False
-    return self.step >= (self.num_steps - buffered_ref.buffer_count + 1)
+    return self.step >= (self.num_steps - buffered_ref.in_buffer_count + 1)
 
-  def has_changed(self, buffered_ref):
+  def has_changed(self, buffered_ref, steps_back=1):
+    """Whether the block changed on entering step ``step - steps_back + 1``."""
+    assert steps_back >= 1, steps_back
     if not buffered_ref.is_buffered or buffered_ref.is_trivial_windowing:
       return False
     if buffered_ref.has_indirect:
       return True
-    indices = self._compute_index(buffered_ref, *self.indices)
-    prev_indices = self._compute_index(buffered_ref, *self.prev_indices)
+    indices = self._compute_index(
+        buffered_ref, *self.prev_indices[steps_back - 1]
+    )
+    prev_indices = self._compute_index(
+        buffered_ref, *self.prev_indices[steps_back]
+    )
     return _tuples_differ(indices, prev_indices)
 
   def will_change_current(self, buffered_ref):
@@ -1258,12 +1323,14 @@ class Scheduler:
       return False
     if buffered_ref.has_indirect:
       return True
-    if buffered_ref.buffer_count < 2:
+    if buffered_ref.in_buffer_count < 2:
       return self.has_changed(buffered_ref)
     indices = self._compute_index(
-        buffered_ref, *self.fetch_indices[buffered_ref.buffer_count-2])
+        buffered_ref, *self.fetch_indices[buffered_ref.in_buffer_count - 2]
+    )
     next_indices = self._compute_index(
-        buffered_ref, *self.fetch_indices[buffered_ref.buffer_count-1])
+        buffered_ref, *self.fetch_indices[buffered_ref.in_buffer_count - 1]
+    )
     return _tuples_differ(indices, next_indices)
 
   def alias_local_refs(self, buffered_ref, ref):
@@ -1295,7 +1362,7 @@ class Scheduler:
         return buffered_ref
 
       if init_limit is None:
-        init_limit = max(buffered_ref.buffer_count - 1, 0)
+        init_limit = max(buffered_ref.in_buffer_count - 1, 0)
       if step >= init_limit:
         return buffered_ref
 
@@ -1360,7 +1427,7 @@ class Scheduler:
 
     # Single-buffered refs skip the prologue, so the first copy_in in the
     # loop must always fire to populate the buffer before wait_in.
-    if buffered_ref.is_buffered and buffered_ref.buffer_count < 2:
+    if buffered_ref.is_buffered and buffered_ref.in_buffer_count < 2:
       pred = pred | self.first_step
     if not buffered_ref.is_input:
       return buffered_ref
@@ -1372,33 +1439,36 @@ class Scheduler:
     else:
       needs_copy_in = True
       if buffered_ref.prefetched_count > 0:
-        needs_copy_in = (self.step + buffered_ref.buffer_count
+        needs_copy_in = (self.step + buffered_ref.in_buffer_count
                          > buffered_ref.prefetched_count)
       @when(pred & needs_copy_in)
       @self._named_scope("ep_copy_in")
       def _send():
         if buffered_ref.is_input and buffered_ref.is_buffered:
           buffered_ref.copy_in(src_ref,
-            self.fetch_indices[buffered_ref.buffer_count-1])
+            self.fetch_indices[buffered_ref.in_buffer_count - 1])
       buffered_ref = buffered_ref.advance_copy_in_slot(
           pred & buffered_ref.is_input)
     return buffered_ref
 
   def wait_out(self, buffered_ref, dst_ref) -> BufferedRef:
-    if buffered_ref.is_trivial_windowing:
+    if (
+        buffered_ref.is_trivial_windowing
+        or not buffered_ref.is_buffered
+        or not buffered_ref.is_output
+    ):
       return buffered_ref
-    pred = self.has_changed(buffered_ref) & jnp.logical_not(self.first_step)
+    # With one buffer, lag 0 would wait in the same step as copy_out. We floor
+    # at 1 so async subclasses get a deferred wait; for base synchronous
+    # copies, wait_out safely no-ops.
+    # TODO(rdyro): lag by output blocks, not grid steps (like input lookahead).
+    lag = max(buffered_ref.out_buffer_count - 1, 1)
+    pred = self.has_changed(buffered_ref, lag) & (self.step >= lag)
     @when(pred)
     @self._named_scope("ep_wait_out")
     def _wait():
       if buffered_ref.is_output:
-        # Note: As implemented, the current scheduler cannot support multiple
-        # buffering on outputs. In order to do so properly, we need to save
-        # the indices for which the copy_out was issued, and wait on them
-        # here. In the current schedule we always immediately wait_out
-        # on the iteration after the copy_out, so the prev_indices is always
-        # the correct grid index to wait on.
-        buffered_ref.wait_out(dst_ref, self.prev_indices)
+        buffered_ref.wait_out(dst_ref, self.prev_indices[lag])
     return buffered_ref.advance_wait_out_slot(pred & buffered_ref.is_output)
 
   def copy_out(self, buffered_ref, dst_ref) -> BufferedRef:
@@ -1414,16 +1484,24 @@ class Scheduler:
 
     return buffered_ref.advance_copy_out_slot(pred & buffered_ref.is_output)
 
-  def finalize(self, buffered_ref, dst_ref):
-    if buffered_ref.is_trivial_windowing:
-      return
-    pred = self.last_step
+  def finalize_step(self, buffered_ref, dst_ref, lag=0):
+    if (
+        buffered_ref.is_trivial_windowing
+        or not buffered_ref.is_buffered
+        or not buffered_ref.is_output
+        or lag >= max(buffered_ref.out_buffer_count - 1, 1)
+    ):
+      return buffered_ref
+    changed = lag == 0 or self.has_changed(buffered_ref, lag)
+    pred = self.last_step & (lag < self.num_steps) & changed
 
     @when(pred)
-    @self._named_scope("ep_finalize")
+    @self._named_scope(f"ep_finalize_{lag}")
     def _end():
       if buffered_ref.is_output:
-        buffered_ref.wait_out(dst_ref, self.indices)
+        buffered_ref.wait_out(dst_ref, self.prev_indices[lag])
+
+    return buffered_ref.advance_wait_out_slot(pred & buffered_ref.is_output)
 
   def advance_slots(self, buffered_ref):
     if buffered_ref.is_input:
@@ -1521,6 +1599,15 @@ def _make_pipeline_allocations(
       buffer_count = out_spec.pipeline_mode.buffer_count
       if out_spec.pipeline_mode.use_lookahead:
         raise ValueError("Output buffering does not support lookahead.")
+      if out_spec.pipeline_mode.revisit is not None:
+        raise NotImplementedError(
+            "emit_pipeline does not implement RevisitMode. A block may be"
+            " revisited once the previous write back has landed: it is awaited"
+            " out_buffer_count - 1 steps after the visit that wrote it, and an"
+            " input_output block is re-fetched in_buffer_count - 1 steps before"
+            " the revisit, so visits must be in_buffer_count +"
+            " out_buffer_count - 1 grid steps apart."
+        )
     is_trivial = _spec_has_trivial_windowing(out_spec, grid, out_aval.shape)
     if not has_buffering and is_trivial:
       buffer_count = 1
@@ -1687,7 +1774,7 @@ def sync_copy(src: REF | BufferedRef, dst: REF | BufferedRef, indices):
     tpu_helpers.sync_copy(window_ref, hbm_ref)
 
 
-@tree_util.register_pytree_node_class
+@tree_util.register_dataclass
 @dataclasses.dataclass(frozen=True, eq=False)
 class PipelineStep:
   """Positional context for a single pipeline body invocation.
@@ -1699,26 +1786,8 @@ class PipelineStep:
       grid is partitioned along some ``core_axis``, each core has its own
       independent local index over its partition of the grid.
   """
-  index: tuple[int | jax.Array, ...]
+  index: tuple[jax.Array, ...]
   local_index: jax.Array
-
-  def tree_flatten(self):
-    children: list[jax.Array] = []
-    aux: list[int | None] = []
-    for v in (*self.index, self.local_index):
-      if isinstance(v, int):
-        aux.append(v)
-      else:
-        aux.append(None)
-        children.append(v)
-    return children, tuple(aux)
-
-  @classmethod
-  def tree_unflatten(cls, aux, children):
-    it = iter(children)
-    vals = [v if v is not None else next(it) for v in aux]
-    *index, local_index = vals
-    return cls(index=tuple(index), local_index=local_index)
 
 
 def _emit_pipeline(
@@ -1770,10 +1839,6 @@ def _emit_pipeline(
   num_steps = math.prod(grid)
   in_specs = _normalize_specs(in_specs)
   out_specs = _normalize_specs(out_specs)
-  get_buffer_count = lambda spec: (spec.pipeline_mode.buffer_count if
-    (spec is not None and spec.pipeline_mode is not None) else 2)
-  flattened_specs = jax.tree.leaves((in_specs, out_specs))
-  max_buffer_count = max((2, *map(get_buffer_count, flattened_specs)))
 
   def pipeline(
       *refs: Any,
@@ -1834,6 +1899,14 @@ def _emit_pipeline(
             ),
         )
 
+    alloc_brefs = jax.tree.leaves(
+        allocations, is_leaf=lambda x: isinstance(x, BufferedRefBase)
+    )
+    max_buffer_count = max(
+        (2, *(max(b.in_buffer_count, b.out_buffer_count)
+              for b in alloc_brefs))
+    )
+
     def make_scheduler(step, indices):
       return Scheduler(
           step,
@@ -1861,7 +1934,8 @@ def _emit_pipeline(
         with scheduler._named_scope("ep_run_kernel"):
           if _explicit_indices:
             pipeline_step = PipelineStep(
-                scheduler.indices, scheduler.step
+                tuple(jnp.asarray(i, jnp.int32) for i in scheduler.indices),
+                scheduler.step,
             )
             body(pipeline_step, *current_refs, *scratches)
           else:
@@ -1898,7 +1972,8 @@ def _emit_pipeline(
           with scheduler._named_scope("ep_run_kernel"):
             if _explicit_indices:
               pipeline_step = PipelineStep(
-                  scheduler.indices, scheduler.step
+                  tuple(jnp.asarray(i, jnp.int32) for i in scheduler.indices),
+                  scheduler.step,
               )
               body(pipeline_step, *current_refs, *scratches)
             else:
@@ -1946,7 +2021,10 @@ def _emit_pipeline(
         final_indices = _prev_index(next_indices, grid)
         scheduler = make_scheduler(num_steps - 1, final_indices)
         with scheduler.grid_env():
-          map_brefs(scheduler.finalize, brefs, refs)
+          for lag in range(scheduler.num_stages - 2, -1, -1):
+            brefs = map_brefs(functools.partial(
+                scheduler.finalize_step, lag=lag),
+                brefs, refs)
 
         def _sync_copy_out(bref, ref):
           if bref.is_trivial_windowing and bref.window_ref is not None:
@@ -2519,8 +2597,7 @@ def emit_pipeline_to_jaxpr(
 
     def new_body(ps: PipelineStep, *args):
       original_indices = tuple(
-          jnp.array(idx) if isinstance(idx, int) else idx
-          for i, idx in enumerate(ps.index)
+          idx for i, idx in enumerate(ps.index)
           if i not in grid_mapping.vmapped_dims)
       ps = dataclasses.replace(ps, index=original_indices)
       indices_consts_args = (ps, all_args.body_consts, args)
@@ -2597,9 +2674,6 @@ def _emit_pipeline_lowering_rule(
   )
 
   all_args = args_tree.unflatten(args_flat)
-  grid_val_iter = iter(all_args.dynamic_grid_spec)
-  grid_indices = tuple(next(grid_val_iter) if pallas_core.is_dynamic_dim(d)
-                       else ir_constant(d) for d in grid_mapping.grid)
   global_grid = _zip_grid(all_args.dynamic_grid_spec, grid_mapping.grid)
   grid_sizes = tuple(ir_constant(d) if isinstance(d, int) else d
                      for d in global_grid)
@@ -2612,9 +2686,9 @@ def _emit_pipeline_lowering_rule(
     grid_names = (None,) * len(ctx.lowering_context.grid_sizes)
   grid_names = (tuple(None for _ in grid_sizes)
                 + (tuple(grid_names)))
-  user_grid_indices = (tuple(g for i, g in enumerate(grid_indices)
-                             if i not in grid_mapping.vmapped_dims)
-                       + tuple(ctx.lowering_context.user_grid_indices))
+  user_grid_indices = tuple(
+      g for i, g in enumerate(grid_sizes) if i not in grid_mapping.vmapped_dims
+  ) + tuple(ctx.lowering_context.user_grid_indices)
   grid_sizes += tuple(ctx.lowering_context.grid_sizes)
 
   lowering_context = ctx.lowering_context.replace(

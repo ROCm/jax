@@ -1047,6 +1047,20 @@ class JaxArrayTest(jtu.JaxTestCase):
     with jax.set_mesh(mesh):
       f(x)
 
+  @jtu.sample_product(size=[50, 100, 150])  # _chunk_iter hard-codes size=100
+  def test_array_reversed(self, size):
+    x_numpy = np.arange(size, dtype='int32')
+    x_jax = jnp.array(x_numpy)
+    self.assertArraysEqual(list(reversed(x_jax)), list(reversed(x_numpy)))
+
+  @parameterized.parameters(iter, reversed)
+  def test_traced_iter_uses_unstack(self, iter_method):
+    def f(x):
+      return list(iter_method(x))
+    jaxpr = jax.make_jaxpr(f)(np.arange(3))
+    primitives = [eqn.primitive for eqn in jaxpr.eqns]
+    self.assertIn(jax.lax.unstack_p, primitives)
+
 
 class ShardingTest(jtu.JaxTestCase):
 

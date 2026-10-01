@@ -34,6 +34,7 @@ def MosaicGPU_Dialect : Dialect {
   let cppNamespace = "::mosaic_gpu";
   let useDefaultTypePrinterParser = 1;
   let useDefaultAttributePrinterParser = 1;
+  let useStrictPropertiesInAssemblyFormat = 1;
 }
 
 class MosaicGPU_Type<string name, string mnemonic_, list<Trait> traits = []>
@@ -109,11 +110,6 @@ def MosaicGPU_ArriveExpectTxOp : Op<MosaicGPU_Dialect, "arrive_expect_tx", []> {
     $expect_tx
     attr-dict
   }];
-}
-
-// TODO: Remove when the minimum jaxlib version is 0.11.1
-def ArriveDynExpectTxSupportedOp : Op<MosaicGPU_Dialect, "arrive_dyn_expect_tx_supported"> {
-  let summary = "Dummy op that will be removed. DO NOT USE.";
 }
 
 def MosaicGPU_WaitOp : Op<MosaicGPU_Dialect, "wait", []> {
@@ -536,8 +532,7 @@ def MosaicGPU_VectorLoadOp : Op<MosaicGPU_Dialect, "vector_load",
     non-contiguous memory.
 
     If `optimized` is true, raises an error if we cannot generate an optimised
-    transfer. If unset, fall back to a non-optimized transfer if unable to
-    generate an optimized transfer.
+    transfer. `optimized` defaults to true when unset.
   }];
 
   let arguments = (ins
@@ -610,8 +605,7 @@ def MosaicGPU_VectorStoreOp : Op<MosaicGPU_Dialect, "vector_store",
     non-contiguous memory.
 
     If `optimized` is true, raises an error if we cannot generate an optimised
-    transfer. If unset, fall back to a non-optimized transfer if unable to
-    generate an optimized transfer.
+    transfer. `optimized` defaults to true when unset.
 
     If `atomic_type` is set, performs an atomic store-(add|min|...) of the value.
 
@@ -675,7 +669,7 @@ def MosaicGPU_LayoutCastOp : Op<MosaicGPU_Dialect, "layout_cast",
 
   let results = (outs AnyVectorOfAnyRank);
 
-  let assemblyFormat = "`x` `(` $x `:` type($x) `)` attr-dict";
+  let assemblyFormat = "`x` `(` $x `:` type($x) `)` prop-dict attr-dict";
 }
 
 def MosaicGPU_TmemLayoutCastOp : Op<MosaicGPU_Dialect, "tmem_layout_cast",
@@ -716,7 +710,7 @@ def MosaicGPU_BroadcastInDimOp : Op<MosaicGPU_Dialect, "broadcast_in_dim", [Pure
 
   let results = (outs AnyVectorOfAnyRank);
   let assemblyFormat = [{
-    `(` $operand `:` type($operand) `)` attr-dict `->` type(results)
+    `(` $operand `:` type($operand) `)` prop-dict attr-dict `->` type(results)
   }];
   let hasVerifier = 1;
   let hasFolder = 1;
@@ -741,7 +735,7 @@ def MosaicGPU_VectorConcatOp : Op<MosaicGPU_Dialect, "vector_concat",
 
   let results = (outs AnyVectorOfNonZeroRank);
   let assemblyFormat = [{
-    `(` $operands `:` type($operands) `)` attr-dict `->` type(results)
+    `(` $operands `:` type($operands) `)` prop-dict attr-dict `->` type(results)
   }];
 }
 
@@ -1064,7 +1058,7 @@ def MosaicGPU_TmemAllocOp : Op<MosaicGPU_Dialect, "tmem_alloc", []> {
 
   let assemblyFormat = [{
     `smem_ptr` `(` $smem_ptr `:` type($smem_ptr) `)`
-    attr-dict `->` type(results)
+    prop-dict attr-dict `->` type(results)
   }];
 
   let hasVerifier = 1;

@@ -25,6 +25,8 @@ When releasing, please add the new-release-boilerplate to docs/pallas/CHANGELOG.
     implementations.
   * Added a `remat` option to {func}`jax.custom_gradient`, for writing
     {func}`jax.custom_vjp.defremat` rules with closures.
+  * `arr.at[...].get()` now accepts a `strategy` argument that allows choosing
+    whether the operation lowers to `gather`, `dynamic_slice`, or `slice`.
 
 * Breaking changes
   * Removed `jax.custom_remat`. Use {func}`jax.custom_vjp.defremat` instead:
@@ -34,6 +36,9 @@ When releasing, please add the new-release-boilerplate to docs/pallas/CHANGELOG.
     (roughly 2013 onwards, requiring AVX2 and FMA support). Older CPUs that
     only support AVX are no longer supported, though you can still build from
     source for older CPUs.
+  * {func}`jax.numpy.atleast_1d`, {func}`jax.numpy.atleast_2d`, and
+    {func}`jax.numpy.atleast_3d` now return tuples of arrays rather than
+    lists, matching the behavior in NumPy 2.0+.
 
 * Changes
   * JAX now uses Bazel 9.2.0 to build from source.
@@ -55,10 +60,17 @@ When releasing, please add the new-release-boilerplate to docs/pallas/CHANGELOG.
     {func}`~jax.numpy.ldexp`, {func}`jax.numpy.frexp`. Typical users should not
     see any change in behavior, but you may notice more efficient batching
     and autodiff, and more concise representations in jaxprs.
+  * The "web" debugger now defaults to hostname "localhost", which is a safer
+    default that avoids inadvertently opening a port to the world.
 
 * Bug fixes
   * Fixed the gradient of {func}`jax.numpy.ldexp` at `x = 0.0`, which previously
     returned `1.0` instead of `2**n`.
+  * Fixed the derivative of {func}`jax.lax.sign` and {func}`jax.numpy.sign` for
+    complex inputs, which was previously always zero ({jax-issue}`#41000`).
+  * {func}`jax.scipy.linalg.lu` now accepts batched inputs of shape
+    `(..., M, N)`, as documented; previously it raised a `ValueError` for any
+    input with more than two dimensions.
 
 
 ## JAX 0.11.2 (September 17, 2026)

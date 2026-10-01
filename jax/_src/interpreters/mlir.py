@@ -1949,7 +1949,7 @@ def lower_jaxpr_to_fun(
           attrs["mhlo.is_same_data_across_replicas"] = ir.BoolAttr.get(True)
 
     if ir_arg_shardings is not None:
-      for attrs, ir_s, arg_s in zip(arg_attrs, ir_arg_shardings, arg_shardings):
+      for attrs, ir_s, arg_s in zip(arg_attrs, ir_arg_shardings, arg_shardings):  # pyrefly: ignore[bad-argument-type]
         if (ir_s is not None and
             (use_sharding_annotations or
             (isinstance(arg_s, NamedSharding) and arg_s.spec.unreduced))):
@@ -2025,7 +2025,7 @@ def lower_jaxpr_to_fun(
 
   if ir_result_shardings is not None:
     for attrs, ir_s, res_s, cu in zip(
-        result_attrs, ir_result_shardings, result_shardings,
+        result_attrs, ir_result_shardings, result_shardings,  # pyrefly: ignore[bad-argument-type]
         sharding_contains_unconstrained):  # type: ignore
       if (ir_s is not None and not cu and
           (use_sharding_annotations or
@@ -3022,7 +3022,7 @@ def multi_broadcast_in_dim(ctx: LoweringRuleContext,
       elif op_aval_sharding == out_sharding:
         out.append(op)
       else:
-        out.append(lower_with_sharding_in_types(ctx, op, out_aval))
+        out.append(lower_with_explicit_types(ctx, op, out_aval))
     else:
       if op_aval_sharding.spec.unreduced:
         raise NotImplementedError()
@@ -3030,7 +3030,7 @@ def multi_broadcast_in_dim(ctx: LoweringRuleContext,
       broadcast_dimensions = list(range(len(out_shape) - len(op_aval_shape), len(out_shape)))
       b_out = broadcast_in_dim(
           ctx, op, out_aval, broadcast_dimensions=broadcast_dimensions)
-      b_out = lower_with_sharding_in_types(ctx, b_out, out_aval)
+      b_out = lower_with_explicit_types(ctx, b_out, out_aval)
       out.append(b_out)
   return out
 
@@ -3263,6 +3263,11 @@ wrap_with_full_to_shard_op = partial(_wrap_with_spmd_op, "SPMDFullToShardShape")
 wrap_with_shard_to_full_op = partial(_wrap_with_spmd_op, "SPMDShardToFullShape")
 
 
+def lower_with_explicit_types(ctx, op, aval):
+  out = lower_with_sharding_in_types(ctx, op, aval)
+  out = lower_with_layout_in_types(ctx, out, aval)
+  return out
+
 def lower_with_sharding_in_types(ctx, op, aval):
   if aval.sharding.mesh.empty:
     return op
@@ -3284,6 +3289,15 @@ def lower_with_sharding_in_types(ctx, op, aval):
     if aval.sharding.mesh._any_axis_auto:
       unspecified_dims = set(range(aval.ndim))
     return wrap_with_sharding_op(ctx, op, aval, proto, unspecified_dims)
+
+
+def lower_with_layout_in_types(ctx, op, aval):
+  if isinstance(aval.layout, AutoLayoutSingleton):
+    return op
+  if dtypes.issubdtype(aval.dtype, dtypes.extended):
+    aval = core.physical_aval(aval)
+  assert isinstance(aval.layout, Layout)
+  return wrap_with_layout_op(ctx, op, aval, aval.layout, aval)
 
 
 def set_sharding(ctx: ModuleContext, op,
@@ -3310,10 +3324,8 @@ def get_sharding_attr(
       return ir.StringAttr.get(repr(xc.HloSharding.from_proto(sharding)))
 
 
-def wrap_with_layout_op(ctx: LoweringRuleContext,
-                        x: ir.Value,
-                        aval_out: core.AbstractValue,
-                        layout: Layout,
+def wrap_with_layout_op(ctx: LoweringRuleContext, x: ir.Value,
+                        aval_out: core.AbstractValue, layout: Layout,
                         aval_in: core.AbstractValue):
   (result_type,) = aval_to_ir_types(ctx.module_context, aval_out)
   out_shape = core.physical_aval(aval_out).shape  # pyrefly: ignore[missing-attribute]

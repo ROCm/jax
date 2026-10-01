@@ -28,13 +28,14 @@ from jax._src import api_util
 from jax._src import config
 from jax._src import core as jax_core
 from jax._src import debugging
+from jax._src import deprecations
 from jax._src import dtypes
 from jax._src import effects
+from jax._src import flattree as ft
 from jax._src import numpy as jnp
 from jax._src import pretty_printer as pp
 from jax._src import source_info_util
 from jax._src import state
-from jax._src import flattree as ft
 from jax._src import tree_util
 from jax._src import typing as jax_typing
 from jax._src import util
@@ -853,6 +854,13 @@ def _get_global_abstract_eval(*, what):
   return what
 
 
+def _get_global_jvp(primals, tangents, *, what):
+  del primals, tangents
+  return get_global_p.bind(what=what), ad_util.Zero(what)
+
+ad.primitive_jvps[get_global_p] = _get_global_jvp
+
+
 def _get_global_discharge_rule(ctx, *, what):
   del ctx, what
   raise NotImplementedError(
@@ -980,7 +988,7 @@ def semaphore_signal(
     inc: int | jax_typing.Array = 1,
     *,
     device_id: DeviceId = None,
-    device_id_type: DeviceIdType = DeviceIdType.MESH,
+    device_id_type: DeviceIdType | None = None,
     core_index: int | jax_typing.Array | None = None,
 ):
   """Increments the value of a semaphore.
@@ -1001,6 +1009,14 @@ def semaphore_signal(
     core_index (optional): If on a multi-core device,
       specifies which core to signal.
   """
+  if device_id_type is not None:
+    deprecations.warn(
+        "jax-pallas-device-id-type",
+        "device_id_type is deprecated and will be removed in a future release.",
+        stacklevel=2,
+    )
+  else:
+    device_id_type = DeviceIdType.MESH
   ref, transforms = _get_ref_and_transforms(sem_or_view)
   inc = jnp.asarray(inc, dtype=jnp.int32)
   args = [ref, transforms, inc, device_id, core_index]
@@ -1228,9 +1244,7 @@ def _device_id_dict_to_mesh(mesh_context: pallas_utils.MeshInfo | None, device_i
           partial_device_idx = idx // inner_mesh_size
 
         if axis_size & (axis_size - 1) == 0:
-          device_idx = partial_device_idx & jnp.asarray(
-              axis_size - 1, dtype=partial_device_idx.dtype
-          )
+          device_idx = partial_device_idx & (axis_size - 1)
         else:
           device_idx = lax.rem(partial_device_idx, axis_size)
         physical_axis_dict[axis_name] = device_idx

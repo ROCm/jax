@@ -37,10 +37,10 @@ jax_multiplatform_test(
     enable_configs = ["tpu_v3_x4"],
     shard_count = {
         "cpu": select({
-            "//tests/config:tsan_freethreading_rbe": 12,
+            "//tests/config:is_tsan": 12,
             "//conditions:default": 5,
         }),
-        "gpu": 5,
+        "gpu": 10,
         "tpu": 5,
     },
     deps = [
@@ -344,6 +344,9 @@ jax_multiplatform_test(
             "notsan",
         ],  # Times out on TPU with asan/tsan.
     },
+    env = {
+        "XLA_PYTHON_CLIENT_ALLOCATOR": "platform",
+    },
     shard_count = {
         "tpu": 5,
         "cpu": 5,
@@ -411,7 +414,7 @@ jax_multiplatform_test(
     name = "svd_test",
     srcs = ["svd_test.py"],
     shard_count = {
-        "cpu": 10,
+        "cpu": 20,
         "gpu": 10,
         "tpu": 15,
     },
@@ -729,6 +732,12 @@ jax_multiplatform_test(
         "cpu": ["noasan"],
         "gpu": ["noasan"],
         "tpu": ["noasan"],  # Times out.
+    },
+    shard_count = {
+        "cpu": select({
+            "//tests/config:is_tsan": 5,
+            "//conditions:default": 1,
+        }),
     },
     deps = py_deps([
         "absl/testing",
@@ -1447,6 +1456,9 @@ jax_multiplatform_test(
     disable_configs = [
         "gpu_h100",  # TODO(phawkins): numerical failure on h100
     ],
+    env = {
+        "XLA_PYTHON_CLIENT_ALLOCATOR": "platform",
+    },
     shard_count = {
         "cpu": 20,
         "gpu": 20,
@@ -1949,7 +1961,10 @@ jax_multiplatform_test(
     name = "mutable_array_test",
     srcs = ["mutable_array_test.py"],
     shard_count = {
-        "cpu": 10,
+        "cpu": select({
+            "//tests/config:is_tsan": 20,
+            "//conditions:default": 10,
+        }),
     },
     deps = py_deps([
         "absl/testing",

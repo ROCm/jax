@@ -622,7 +622,9 @@ def broadcast_prefix(prefix_tree: Any, full_tree: Any,
   num_leaves = lambda t: tree_structure(t).num_leaves
   add_leaves = lambda x, subtree: result.extend([x] * num_leaves(subtree))
   try:
-    tree_map(add_leaves, prefix_tree, full_tree, is_leaf=is_leaf)
+    leaves, treedef = tree_flatten(prefix_tree, is_leaf=is_leaf)
+    for x, subtree in zip(leaves, treedef.flatten_up_to(full_tree)):
+      add_leaves(x, subtree)
   except ValueError:
       e, *_ = prefix_errors(prefix_tree, full_tree)
       raise e('broadcast_prefix prefix_tree') from None
@@ -1375,17 +1377,3 @@ def _prefix_error(
      f"{prefix_tree_keys} and {full_tree_keys}")
   for k, t1, t2 in zip(prefix_tree_keys, prefix_tree_children, full_tree_children):
     yield from _prefix_error((*key_path, k), t1, t2)
-
-def _ensure_inbounds(allow_invalid: bool, num_args: int, argnums: Sequence[int]
-                     ) -> tuple[int, ...]:
-  """Ensure argnum is within bounds. Also resolves negative argnums."""
-  result = []
-  for i in argnums:
-    if i >= num_args and allow_invalid: continue
-    if not -num_args <= i < num_args:
-      raise ValueError(
-          "Positional argument indices, e.g. for `static_argnums`, must have "
-          "value greater than or equal to -len(args) and less than len(args), "
-          f"but got value {i} for len(args) == {num_args}.")
-    result.append(i % num_args)  # Resolve negative
-  return tuple(result)

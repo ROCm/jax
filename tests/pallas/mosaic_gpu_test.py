@@ -1582,10 +1582,7 @@ class PallasCallTest(PallasTest, jtu.CudaArchSpecificTest):
         ],
     )
     def kernel(x_ref_gmem, o_ref, scratch_ref, barrier_ref):
-      plgpu.async_prefetch(
-          x_ref_gmem.at[indexer],
-          predicate=None if predicate is None else jnp.bool_(predicate),
-      )
+      plgpu.async_prefetch(x_ref_gmem.at[indexer], predicate=predicate)
       plgpu.copy_gmem_to_smem(
           x_ref_gmem.at[indexer], scratch_ref.at[indexer], barrier_ref
       )
@@ -3885,6 +3882,147 @@ class PallasCallTest(PallasTest, jtu.CudaArchSpecificTest):
     x_result = jax.block_until_ready(kernel(x))
     np.testing.assert_allclose(x_result, op(x, axis=axis), atol=5e-5)
 
+  @parameterized.named_parameters(
+      ("negative_ilp", -1, ValueError),
+      ("zero_ilp", 0, ValueError),
+      ("float_ilp", 2.5, ValueError),
+      ("string_ilp", "4", ValueError),
+      ("bool_ilp", True, ValueError),
+  )
+  def test_reduction_accumulator_ilp_validation(self, ilp, expected_error):
+    def make_kernel(op):
+      @self.kernel(out_type=jax.ShapeDtypeStruct((128,), jnp.float32))
+      def kernel(x_ref, y_ref):
+        x_val = plgpu.load(x_ref, layout=plgpu.Layout.WGMMA, optimized=False)
+        plgpu.store(
+            y_ref, op(x_val, axis=-1, accumulator_ilp=ilp), optimized=False
+        )
+
+      return kernel
+
+    x = jnp.ones((128, 128), dtype=jnp.float32)
+    for op in (plgpu.sum, plgpu.max, plgpu.min, plgpu.prod):
+      with self.assertRaises(expected_error):
+        make_kernel(op)(x)
+
+  @parameterized.product(
+      op_info=(
+          (plgpu.sum, jnp.sum),
+          (plgpu.max, jnp.max),
+          (plgpu.min, jnp.min),
+          (plgpu.prod, jnp.prod),
+      ),
+      ilp=(1, 2, 4),
+  )
+  def test_reduction_accumulator_ilp(self, op_info, ilp):
+    pl_op, jnp_op = op_info
+    axis = -1
+
+    @self.kernel(out_type=jax.ShapeDtypeStruct((128,), jnp.float32))
+    def kernel(x_ref, y_ref):
+      x_val = plgpu.load(x_ref, layout=plgpu.Layout.WGMMA, optimized=False)
+      plgpu.store(
+          y_ref, pl_op(x_val, axis=axis, accumulator_ilp=ilp), optimized=False
+      )
+
+    x = jax.random.uniform(jax.random.key(0), shape=(128, 128), dtype=jnp.float32)
+    if jnp_op == jnp.prod:
+      x = x * 0.1 + 0.95  # Avoid overflow / underflow for product reduction.
+    with mock.patch.object(
+        mgpu.FragmentedArray,
+        "reduce",
+        autospec=True,
+        side_effect=mgpu.FragmentedArray.reduce,
+    ) as mock_reduce:
+      x_result = jax.block_until_ready(kernel(x))
+      mock_reduce.assert_called()
+      for call in mock_reduce.call_args_list:
+        self.assertEqual(call.kwargs.get("acc_ilp"), ilp)
+    np.testing.assert_allclose(x_result, jnp_op(x, axis=axis), atol=1e-4, rtol=1e-4)
+
+  @parameterized.product(
+      op_info=(
+          (plgpu.sum, jnp.sum),
+          (plgpu.max, jnp.max),
+          (plgpu.min, jnp.min),
+          (plgpu.prod, jnp.prod),
+      ),
+      keepdims=(True, False),
+  )
+  def test_reduction_keepdims(self, op_info, keepdims):
+    pl_op, jnp_op = op_info
+    axis = 0
+    out_shape = (1, 128) if keepdims else (128,)
+
+    @self.kernel(out_type=jax.ShapeDtypeStruct(out_shape, jnp.float32))
+    def kernel(x_ref, y_ref):
+      x_val = plgpu.load(x_ref, layout=plgpu.Layout.WGMMA, optimized=False)
+      plgpu.store(
+          y_ref, pl_op(x_val, axis=axis, keepdims=keepdims), optimized=False
+      )
+
+    x = jax.random.uniform(jax.random.key(0), shape=(128, 128), dtype=jnp.float32)
+    if jnp_op == jnp.prod:
+      x = x * 0.1 + 0.95
+    if keepdims:
+      with self.assertRaises(NotImplementedError):
+        kernel(x)
+    else:
+      x_result = jax.block_until_ready(kernel(x))
+      np.testing.assert_allclose(
+          x_result,
+          jnp_op(x, axis=axis, keepdims=keepdims),
+          atol=1e-4,
+          rtol=1e-4,
+      )
+
+  @parameterized.product(
+      op_info=(
+          (plgpu.sum, jnp.sum),
+          (plgpu.max, jnp.max),
+          (plgpu.min, jnp.min),
+          (plgpu.prod, jnp.prod),
+      ),
+      axis=(-1, 1, (-1,), (1,), -2, 0, (-2,), (0,)),
+  )
+  def test_reduction_axis_canonicalization(self, op_info, axis):
+    pl_op, jnp_op = op_info
+
+    @self.kernel(out_type=jax.ShapeDtypeStruct((128,), jnp.float32))
+    def kernel(x_ref, y_ref):
+      x_val = plgpu.load(x_ref, layout=plgpu.Layout.WGMMA, optimized=False)
+      plgpu.store(y_ref, pl_op(x_val, axis=axis), optimized=False)
+
+    x = jax.random.uniform(jax.random.key(0), shape=(128, 128), dtype=jnp.float32)
+    if jnp_op == jnp.prod:
+      x = x * 0.1 + 0.95
+    x_result = jax.block_until_ready(kernel(x))
+    np.testing.assert_allclose(
+        x_result, jnp_op(x, axis=axis), atol=1e-4, rtol=1e-4
+    )
+
+  @parameterized.named_parameters(
+      ("out_of_bounds_pos", 2, ValueError),
+      ("out_of_bounds_neg", -3, ValueError),
+      ("duplicate_axis", (0, 0), ValueError),
+      ("duplicate_canonical_axis", (1, -1), ValueError),
+  )
+  def test_reduction_axis_canonicalization_validation(
+      self, axis, expected_error
+  ):
+    def make_kernel(op):
+      @self.kernel(out_type=jax.ShapeDtypeStruct((128,), jnp.float32))
+      def kernel(x_ref, y_ref):
+        x_val = plgpu.load(x_ref, layout=plgpu.Layout.WGMMA, optimized=False)
+        plgpu.store(y_ref, op(x_val, axis=axis), optimized=False)
+
+      return kernel
+
+    x = jnp.ones((128, 128), dtype=jnp.float32)
+    for op in (plgpu.sum, plgpu.max, plgpu.min, plgpu.prod):
+      with self.assertRaises(expected_error):
+        make_kernel(op)(x)
+
   def test_cross_warp_reduction(self):
     @self.kernel(
         out_type=jax.ShapeDtypeStruct((128,), jnp.float32),
@@ -4402,21 +4540,28 @@ class PallasCallTest(PallasTest, jtu.CudaArchSpecificTest):
   @jtu.thread_unsafe_test()  # Modifies ``os.environ``.
   def test_atomic_add_gmem(self):
     m, n = 128, 64
-
-    def body(inp_ref, out_ref):
-      val = plgpu.load(
-          inp_ref, layout=plgpu.Layout.WGMMA, optimized=False
-      )
-      out_ref[...] = jnp.zeros_like(out_ref)
-      plgpu.atomic_add(out_ref, val)
-
     x = jnp.arange(1, m * n + 1, dtype=jnp.float32).reshape(m, n)
-    inp = x
-    with jtu.set_env(MOSAIC_GPU_DUMP_PTX="1"), self.capture_stdout() as ptx:
-      result = self.kernel(
+
+    def run_kernel(optimized):
+      def body(inp_ref, out_ref):
+        val = plgpu.load(
+            inp_ref, layout=plgpu.Layout.WGMMA, optimized=False
+        )
+        out_ref[...] = jnp.zeros_like(out_ref)
+        plgpu.atomic_add(out_ref, val, optimized=optimized)
+
+      return self.kernel(
           body,
           out_type=jax.ShapeDtypeStruct([m, n], jnp.float32),
-      )(inp)
+      )(x)
+
+    with self.assertRaisesRegex(
+        Exception, "Only optimized transfers to SMEM supported"
+    ):
+      run_kernel(optimized=True)
+
+    with jtu.set_env(MOSAIC_GPU_DUMP_PTX="1"), self.capture_stdout() as ptx:
+      result = run_kernel(optimized=False)
       jax.block_until_ready(result)
     self.assertArraysEqual(result, x)
     self.assertIn("red.global", ptx())
@@ -4451,6 +4596,7 @@ class PallasCallTest(PallasTest, jtu.CudaArchSpecificTest):
       dtype=(
           jnp.bfloat16,
           jnp.float16,
+          jnp.float64,
           jnp.float8_e4m3fn,
           jnp.float8_e5m2,
           jnp.int8,
@@ -4461,8 +4607,15 @@ class PallasCallTest(PallasTest, jtu.CudaArchSpecificTest):
     m = k = 128
     n = 8
     dtype = jnp.dtype(dtype)
+    if dtype == jnp.float64 and not config.enable_x64.value:
+      self.skipTest("float64 requires x64 to be enabled")
     is_integer = jnp.issubdtype(dtype, jnp.integer)
-    acc_dtype = jnp.int32 if is_integer else jnp.float32
+    if is_integer:
+      acc_dtype = jnp.int32
+    elif dtype == jnp.float64:
+      acc_dtype = jnp.float64
+    else:
+      acc_dtype = jnp.float32
 
     @functools.partial(
         self.kernel,
@@ -4492,7 +4645,8 @@ class PallasCallTest(PallasTest, jtu.CudaArchSpecificTest):
     if is_integer:
       np.testing.assert_array_equal(res, ref)
     else:
-      np.testing.assert_allclose(res, ref, atol=1e-2, rtol=1e-2)
+      atol = rtol = 1e-12 if dtype == jnp.float64 else 1e-2
+      np.testing.assert_allclose(res, ref, atol=atol, rtol=rtol)
 
   @jtu.thread_unsafe_test()  # Modifies ``os.environ``.
   def test_griddepcontrol_warp_mesh(self):
@@ -5070,9 +5224,6 @@ class PallasCallWGTest(
 
   @jtu.thread_unsafe_test()  # Modifies ``os.environ``.
   def test_dump_layout_inference(self):
-    # TODO(bchetioui): Remove this once minimum jaxlib version is 0.11.1.
-    if not hasattr(mgpu.dialect, "get_or_set_dump_options"):
-      self.skipTest("Test requires jaxlib >= 0.11.1")
     x = jnp.ones((64, 64), dtype=jnp.float32)
 
     @self.kernel(out_type=jax.ShapeDtypeStruct(x.shape, x.dtype))
@@ -5093,10 +5244,6 @@ class PallasCallWGTest(
   @jtu.thread_unsafe_test()  # Modifies ``os.environ``.
   @parameterized.parameters(None, plgpu.TraceScope.WARP, plgpu.TraceScope.WARPGROUP)
   def test_dump_resources(self, profile_trace_scope):
-    # TODO(bchetioui): Remove this once minimum jaxlib version is 0.11.2.
-    if not hasattr(mgpu.dialect.DumpOptions(), "resources"):
-      self.skipTest("Test requires jaxlib with DumpOptions.resources")
-
     x = jax.ShapeDtypeStruct((64, 64), jnp.float32)
 
     compiler_params = plgpu.CompilerParams()

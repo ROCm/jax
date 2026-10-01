@@ -452,9 +452,8 @@ def _custom_jvp_vjp_call_lowering(ctx: mlir.LoweringRuleContext, *args,
   return out
 mlir.register_lowering(custom_jvp_call_p, _custom_jvp_vjp_call_lowering)
 
-def _custom_jvp_call_transpose_fancy(params, jaxpr, args, ct, _):
-  del params
-  return ad.backward_pass3(jaxpr, False, jaxpr.consts, args, ct)
+def _custom_jvp_call_transpose_fancy(cts, *args, call_jaxpr, **_):
+  return ad.backward_pass3(call_jaxpr, False, call_jaxpr.consts, args, cts)
 ad.fancy_transposes[custom_jvp_call_p] = _custom_jvp_call_transpose_fancy
 
 @weakref_lru_cache
@@ -467,9 +466,9 @@ def _cached_closed_call_dce_instantiate(jaxpr_: core.Jaxpr,
       used_outputs, True)
 
 def _custom_jvp_call_dce(
-    used_outs: Sequence[bool], eqn: core.JaxprEqn
+    used_outs: Sequence[bool], live_ins: Sequence[bool], eqn: core.JaxprEqn
 ) -> tuple[list[bool], core.JaxprEqn | None]:
-  if not any(used_outs) and not pe.has_effects(eqn):
+  if not any(used_outs) and not pe.has_effects(eqn, live_ins):
     return [False] * len(eqn.invars), None
 
   call_jaxpr = eqn.params["call_jaxpr"]
@@ -1138,9 +1137,9 @@ def _custom_vjp_call_typecheck(_, *in_avals, call_jaxpr, **kwargs):
 core.custom_typechecks[custom_vjp_call_p] = _custom_vjp_call_typecheck
 
 def _custom_vjp_call_dce(
-    used_outs: Sequence[bool], eqn: core.JaxprEqn
+    used_outs: Sequence[bool], live_ins: Sequence[bool], eqn: core.JaxprEqn
 ) -> tuple[list[bool], core.JaxprEqn | None]:
-  if not any(used_outs) and not pe.has_effects(eqn):
+  if not any(used_outs) and not pe.has_effects(eqn, live_ins):
     return [False] * len(eqn.invars), None
   call_jaxpr: core.Jaxpr = eqn.params["call_jaxpr"]
   fwd_jaxpr_thunk = eqn.params["fwd_jaxpr_thunk"]
@@ -1981,8 +1980,9 @@ def _remat_opt_transpose(
   raise NotImplementedError(
       "remat optimization for custom_vjp does not support higher-order AD")
 
-def _remat_opt_dce(used_outs: list[bool], eqn: core.JaxprEqn):
-  if not any(used_outs) and not pe.has_effects(eqn):
+def _remat_opt_dce(used_outs: list[bool], live_ins: list[bool],
+                   eqn: core.JaxprEqn):
+  if not any(used_outs) and not pe.has_effects(eqn, live_ins):
     return [False] * len(eqn.invars), None
   used_res, used_prims = split_list(used_outs, [eqn.params["num_res"]])
   outvars = [v for used, v in zip(used_outs, eqn.outvars) if used]

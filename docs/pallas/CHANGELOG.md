@@ -13,13 +13,56 @@ Remember to align the itemized text with the first line of an item within a list
 
 ## Unreleased
 
+* Deprecations
+
+  * {class}`jax.experimental.pallas.DeviceIdType` and the `device_id_type`
+    parameter of {func}`jax.experimental.pallas.semaphore_signal` are deprecated.
+
 ### Mosaic GPU
+
+* Changes
+
+  * `ref[...] = value` now always requires an optimized transfer; use
+    {func}`jax.experimental.pallas.mosaic_gpu.store` with `optimized=False` to
+    opt out. This is necessary when storing to GMEM, since optimized transfers
+    are currently only supported for SMEM.
+  * {func}`jax.experimental.pallas.mosaic_gpu.atomic_add`,
+    {func}`jax.experimental.pallas.mosaic_gpu.atomic_max`,
+    {func}`jax.experimental.pallas.mosaic_gpu.atomic_min`,
+    {func}`jax.experimental.pallas.mosaic_gpu.atomic_and`,
+    {func}`jax.experimental.pallas.mosaic_gpu.atomic_or`, and
+    {func}`jax.experimental.pallas.mosaic_gpu.atomic_xor` now take an
+    `optimized` argument (defaulting to `True`) that controls whether an
+    optimized transfer is required. Setting `optimized=False` is necessary when
+    storing to GMEM, since optimized transfers are currently only supported for
+    SMEM.
+
+* New features
+
+  * Added {func}`jax.experimental.pallas.mosaic_gpu.min`,
+  {func}`jax.experimental.pallas.mosaic_gpu.max`,
+  {func}`jax.experimental.pallas.mosaic_gpu.sum`, and
+  {func}`jax.experimental.pallas.mosaic_gpu.prod`. These mirror the equivalent
+  `jax.numpy` functions, but add an `accumulator_ilp` parameter.
+
+* Deprecations
+
+  * The `device_id_type` parameter of
+    {func}`jax.experimental.pallas.mosaic_gpu.remote_ref` is deprecated.
 
 * Removals
 
   * Removed the previously deprecated `idx` parameter of
     {func}`jax.experimental.pallas.mosaic_gpu.load`. Index the ref explicitly
     via `ref.at[idx]` prior to loading from it.
+
+### TPU
+
+* Deprecations
+
+  * The `device_id_type` parameter of
+    {func}`jax.experimental.pallas.tpu.async_remote_copy` and
+    {func}`jax.experimental.pallas.tpu.make_async_remote_copy` is deprecated.
 
 ## Released with JAX 0.11.2 (September 17, 2026)
 

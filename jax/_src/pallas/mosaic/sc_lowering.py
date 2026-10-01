@@ -16,6 +16,7 @@
 from collections.abc import Sequence
 import functools
 from typing import Any, NoReturn, cast
+import warnings
 
 from jax._src import core as jax_core
 from jax._src import debugging
@@ -578,8 +579,27 @@ def _prepare_dma_refs(
     )
   if indirect_offsets is None:
     # If typical DMA path, don't alter the refs.
-    return src_ref_orig, dst_ref_orig, None
-  return src_ref, dst_ref, indirect_offsets
+    return src_ref_orig, dst_ref_orig, None, False
+  return src_ref, dst_ref, indirect_offsets, indirect_offsets_ref_str == "dst_ref"
+
+
+def _is_push_stream(
+    ctx: LoweringRuleContext, src_aval: Any, dst_aval: Any, is_local: bool
+) -> bool:
+  """Returns whether a transfer is a SparseCore push stream (DMA)."""
+  core_type = ctx.lowering_context.kernel_type
+  src = tpu_core.memory_space_to_tpu_memory_space(
+      src_aval.memory_space, core_type)
+  dst = tpu_core.memory_space_to_tpu_memory_space(
+      dst_aval.memory_space, core_type)
+  if not is_local:
+    return False
+  if core_type == tpu_core.CoreType.SC_VECTOR_SUBCORE:
+    return (src == MemorySpace.VMEM and dst != MemorySpace.VMEM) or (
+        src == MemorySpace.VMEM_SHARED and dst == MemorySpace.SMEM)
+  if core_type == tpu_core.CoreType.SC_SCALAR_SUBCORE:
+    return src == MemorySpace.VMEM_SHARED and dst == MemorySpace.SMEM
+  return False
 
 
 # TODO(slebedev): Use the TC rule once we align the ``LoweringRuleContext``
@@ -600,7 +620,7 @@ def _dma_start_lowering_rule(
       tree, ctx.avals_in
   )
 
-  src_ref, dst_ref, indirect_offsets = _prepare_dma_refs(
+  src_ref, dst_ref, indirect_offsets, _ = _prepare_dma_refs(
       src_ref,
       dst_ref,
       src_aval,
@@ -616,10 +636,13 @@ def _dma_start_lowering_rule(
         "`pltpu.async_copy(..., dst_ref=ref.at[jnp.arange(vec_dim)], ...)` or "
         "`pltpu.async_copy(..., dst_ref=ref.at[iota_ref], ...)`."
     )
+  is_local = device_id is None
   core_index = None
   subcore_index = None
   if device_id is not None:
-    if isinstance(sem_aval.memory_space, pallas_core.CoreMemorySpace):
+    if sem_aval is not None and isinstance(
+        sem_aval.memory_space, pallas_core.CoreMemorySpace
+    ):
       dest_mesh = sem_aval.memory_space.mesh
     else:
       dest_mesh = None
@@ -629,6 +652,24 @@ def _dma_start_lowering_rule(
 
   # If not ``None``, we lower to an indirect DMA instead.
   if indirect_offsets is None:
+    is_push = _is_push_stream(ctx, src_aval, dst_aval, is_local)
+    if is_push and sem is not None:
+      warnings.warn(
+          "Destination semaphore is ignored for push streams (VMEM to HBM, "
+          "VMEM_SHARED or SMEM, or VMEM_SHARED to SMEM) on SparseCore; pass "
+          "`sem=None` to `async_copy` to suppress this warning.",
+          sc_core.SparseCorePushStreamWarning,
+      )
+    if is_local and not is_push and src_sem is not None:
+      # Local non-stream DMAs have no source semaphore in Mosaic, so `src_sem`
+      # would have no effect, we reject it instead of silently ignoring it.
+      raise ValueError(
+          "Source semaphore (`src_sem`) on a local copy is only supported for "
+          "push streams (VMEM to HBM, VMEM_SHARED or SMEM, or VMEM_SHARED to "
+          "SMEM) on SparseCore; pass `src_sem=None` and use `wait()`, which "
+          "already guarantees completion of this transfer."
+      )
+
     def _dma_start(src_ref, dst_ref, sem, src_sem):
       tpu.enqueue_dma(
           source=src_ref,
@@ -652,6 +693,11 @@ def _dma_start_lowering_rule(
     raise NotImplementedError(
         "Scatter/gather to or from a remote device via `pltpu.async_copy` is"
         " not supported"
+    )
+  if sem is None or src_sem is not None:
+    raise NotImplementedError(
+        "Specifying `sem=None` or `src_sem` in async_copy is not yet "
+        "implemented for scatters/gathers."
     )
 
   offset_filter = None
@@ -681,65 +727,91 @@ def _dma_wait_lowering_rule(
     *args,
     tree,
     device_id_type: pallas_primitives.DeviceIdType,
-    insert_dummy_device: bool,
     is_wait_send: bool = False,
 ):
-  del is_wait_send
-  src_ref, dst_ref, sem, _, device_id = _dma_unflatten(
-      tree, args
-  )
-  src_aval, dst_aval, sem_aval, _, device_id_aval = _dma_unflatten(
+  src_ref, dst_ref, sem, src_sem, device_id = _dma_unflatten(tree, args)
+  src_aval, dst_aval, sem_aval, src_sem_aval, device_id_aval = _dma_unflatten(
       tree, ctx.avals_in
   )
+  if is_wait_send:
+    # `wait_send` pre-swaps (src, dst, dst_sem, src_sem); undo it so that the
+    # operands match the `enqueue_dma` they are awaiting.
+    # TODO(rdyro): Stop swapping in wait_send.
+    src_ref, dst_ref, src_aval, dst_aval = dst_ref, src_ref, dst_aval, src_aval
+    sem, src_sem, sem_aval, src_sem_aval = src_sem, sem, src_sem_aval, sem_aval
 
-  src_ref, dst_ref, indirect_offsets = _prepare_dma_refs(
+  src_ref, dst_ref, indirect_offsets, is_scatter = _prepare_dma_refs(
       src_ref,
       dst_ref,
       src_aval,
       dst_aval,
       ctx.lowering_context.kernel_type,
   )
+  is_local = device_id is None
   core_id = None
   subcore_id = None
-  if insert_dummy_device:
-    i32 = ir.IntegerType.get_signless(32)
-    core_id = device_id = arith.constant(i32, ir.IntegerAttr.get(i32, 0))
-  elif device_id is not None:
-    if isinstance(sem_aval.memory_space, pallas_core.CoreMemorySpace):
+  if device_id is not None:
+    if sem_aval is not None and isinstance(
+        sem_aval.memory_space, pallas_core.CoreMemorySpace
+    ):
       dest_mesh = sem_aval.memory_space.mesh
     else:
       dest_mesh = None
     device_id, core_id, subcore_id = tc_lowering._device_id_to_logical(
         ctx, device_id, device_id_type, device_id_aval, dest_mesh
     )
-    if core_id:
-      raise NotImplementedError(
-          "Core index must be None when waiting on a local DMA."
-      )
-    if subcore_id:
-      raise NotImplementedError(
-          "Subcore index must be None when waiting on a local DMA."
-      )
 
   # If not ``None``, we lower to an indirect DMA instead of a regular DMA.
   if indirect_offsets is None:
-    def _dma_wait(src_ref, dst_ref, sem):
-      # `wait_dma2` does not support `subcore_id`, so it is ignored until
-      # we migrate to `wait_dma`.
-      tpu.wait_dma2(
-        sem, src_ref, dst_ref, device_id=device_id, core_id=core_id
+    if is_local and is_wait_send and not _is_push_stream(
+        ctx, src_aval, dst_aval, is_local
+    ):
+      raise ValueError(
+          "`wait_read()` on a local copy is only supported for push streams "
+          "(VMEM to HBM, VMEM_SHARED or SMEM, or VMEM_SHARED to SMEM) on "
+          "SparseCore; use `wait()` to await this transfer and guarantee "
+          "both read and write completion."
+      )
+
+    def _dma_wait(src_ref, dst_ref, sem, src_sem):
+      # Mosaic's verifier temporarily requires any source semaphore passed to a
+      # wait to live on the issuing core, which only holds for the enqueue.
+      # TODO(rdyro): Always pass it once that is relaxed.
+      tpu.wait_dma(
+          source=src_ref,
+          target=dst_ref,
+          source_semaphore=src_sem if is_wait_send else None,
+          target_semaphore=sem,
+          device_id=device_id,
+          core_id=core_id,
+          subcore_id=subcore_id,
+          wait_target=not is_wait_send,
       )
       return []
     return tc_lowering.lower_with_transformed_refs(
         _dma_wait,
-        [src_ref, dst_ref, sem],
-        [src_aval, dst_aval, sem_aval],
+        [src_ref, dst_ref, sem, src_sem],
+        [src_aval, dst_aval, sem_aval, src_sem_aval],
     )
 
   if device_id is not None:
     raise NotImplementedError(
         "Scatter/gather to or from a remote device via `pltpu.async_copy` is"
         " not supported"
+    )
+  if sem is None:
+    raise NotImplementedError(
+        "Specifying `sem=None` in async_copy is not yet implemented for"
+        " scatters/gathers: the compiler requires a semaphore."
+    )
+  # Indirect transfers have one semaphore tracking only the local side: the
+  # source for scatters and destination for gathers. `wait_read()` is therefore
+  # valid for scatters, but unsupported for gathers.
+  # TODO(rdyro): Scatters lack a write fence; `wait()` only awaits the read.
+  if is_wait_send and not is_scatter:
+    raise ValueError(
+        "`wait_read()` is only supported for scatters, not gathers; use `wait()`"
+        " to await the write into the local destination."
     )
   sem_aval, _ = _get_ref_and_transforms(sem_aval)
   sem, _ = _transform_ref(sem, sem_aval, sem_aval.shape)

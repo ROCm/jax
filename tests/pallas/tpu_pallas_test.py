@@ -2347,6 +2347,28 @@ class PallasCallTest(ptu.PallasTPUTest):
         jax.block_until_ready(reduce_with_shape_invariant_numerics(x)), expected
     )
 
+  @parameterized.named_parameters(
+      ('case_a_f32', jnp.float32, (1, 4, 1), (1, 4, 4), (4, 4, 1)),
+      ('case_b_f32', jnp.float32, (1, 8, 1), (8, 8, 1), (1, 2, 8, 4)),
+      ('case_c_i32', jnp.int32, (1, 4, 1), (64, 4, 4), (256, 4, 1)),
+  )
+  def test_broadcast_then_reshape(self, dtype, src, mid, dst):
+    if not jtu.is_libtpu_at_least('0.0.50'):
+      self.skipTest('Requires libtpu >= 0.0.50')
+    if src == (1, 8, 1) and not jtu.is_device_tpu_at_least(5):
+      self.skipTest('Requires TPU v5+ for sublane gather')
+
+    def kernel(x_ref, o_ref):
+      o_ref[...] = jnp.broadcast_to(x_ref[...], mid).reshape(dst)
+
+    x = (jnp.arange(math.prod(src), dtype=dtype) + 1).reshape(src)
+    out = self.pallas_call(
+        kernel,
+        out_shape=jax.ShapeDtypeStruct(dst, dtype),
+    )(x)
+    expected = jnp.broadcast_to(x, mid).reshape(dst)
+    np.testing.assert_array_equal(out, expected)
+
   def test_cost_analysis(self):
     def kernel(x, y):
       y[:] = x[:]
@@ -3830,6 +3852,35 @@ class PallasCallRefTransformTest(ptu.PallasTPUTest):
         out_shape=jax.ShapeDtypeStruct((8, 128), jnp.int32),
     )(x)
     np.testing.assert_array_equal(y, x[8:16, :128])
+
+  def test_column_sliced_ref_unaligned_sublane_slice(self):
+    if not jtu.is_libtpu_at_least('0.0.50'):
+      self.skipTest('Requires libtpu >= 0.0.50')
+
+    x = jnp.arange(16 * 256, dtype=jnp.float32).reshape((16, 256))
+
+    def load_kernel(x_ref, o_ref):
+      o_ref[...] = x_ref.at[:, 128:256].at[4:12][...]
+
+    got_load = self.pallas_call(
+        load_kernel,
+        out_shape=jax.ShapeDtypeStruct((8, 128), jnp.float32),
+    )(x)
+    np.testing.assert_array_equal(got_load, x[4:12, 128:256])
+
+    f = -x - 1
+    y = 100000 + jnp.arange(8 * 128, dtype=jnp.float32).reshape((8, 128))
+
+    def store_kernel(f_ref, y_ref, o_ref):
+      pltpu.sync_copy(f_ref, o_ref)
+      o_ref.at[:, 128:256].at[4:12][...] = y_ref[...]
+
+    got_store = self.pallas_call(
+        store_kernel,
+        out_shape=jax.ShapeDtypeStruct((16, 256), jnp.float32),
+    )(f, y)
+    expected_store = f.at[4:12, 128:256].set(y)
+    np.testing.assert_array_equal(got_store, expected_store)
 
 
 class PallasCallTraceTest(ptu.PallasTPUTest):
@@ -6446,10 +6497,10 @@ class ExplicitMXUTest(jtu.JaxTestCase):
       self.skipTest('TPU generation too old')
     shape = (8, 256)
     def kernel(out):
-      del out
       acc = jax.empty_ref(jax.ShapeDtypeStruct(shape, jnp.float32),
                           memory_space=pltpu.ACC(0))
       acc[...] = jnp.full(shape, 1.0, jnp.float32)
+      out[...] = pltpu.matmul_pop(acc)
     with self.assertRaisesRegex(
         ValueError, 'Storing into an accumulator is not supported'
     ):

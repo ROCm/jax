@@ -53,12 +53,10 @@ class PallasCallRemoteDMATest(parameterized.TestCase):
     def kernel(x_ref, y_ref):
       def body(ready_sem, send_sem, recv_sem):
         other_dev_id = 1 - lax.axis_index('x')
-        pl.semaphore_signal(ready_sem, device_id=other_dev_id,
-                               device_id_type=pl.DeviceIdType.LOGICAL)
+        pl.semaphore_signal(ready_sem, device_id=other_dev_id)
         pl.semaphore_wait(ready_sem)
         copy_done = pltpu.async_remote_copy(
-            x_ref, y_ref, send_sem, recv_sem, other_dev_id,
-            device_id_type=pl.DeviceIdType.LOGICAL,
+            x_ref, y_ref, send_sem, recv_sem, other_dev_id
         )
         copy_done.wait_send()
         copy_done.wait_recv()
@@ -101,12 +99,10 @@ class PallasCallRemoteDMATest(parameterized.TestCase):
     def kernel(x_ref, y_ref):
       def body(ready_sem, send_sem, recv_sem):
         other_dev_id = 1 - lax.axis_index('x')
-        pl.semaphore_signal(ready_sem, device_id=other_dev_id,
-                               device_id_type=pl.DeviceIdType.LOGICAL)
+        pl.semaphore_signal(ready_sem, device_id=other_dev_id)
         pl.semaphore_wait(ready_sem)
         copy_done = pltpu.async_remote_copy(
-            x_ref, y_ref, send_sem, recv_sem, other_dev_id,
-            device_id_type=pl.DeviceIdType.LOGICAL,
+            x_ref, y_ref, send_sem, recv_sem, other_dev_id
         )
         copy_done.wait_send()
         copy_done.wait_recv()
@@ -576,7 +572,6 @@ class PallasCallRemoteDMATest(parameterized.TestCase):
           send_sem=send_sem,
           recv_sem=recv_sem,
           device_id=device_id,
-          device_id_type=pl.DeviceIdType.MESH,
       )
 
       @pl.when(device_index == 0)
@@ -694,11 +689,7 @@ class PallasCallRemoteDMATest(parameterized.TestCase):
 
       def body(ready_sem, send_sem, recv_sem):
         other_dev_id = 1 - lax.axis_index('x')
-        pl.semaphore_signal(
-            ready_sem,
-            device_id=other_dev_id,
-            device_id_type=pl.DeviceIdType.LOGICAL,
-        )
+        pl.semaphore_signal(ready_sem, device_id=other_dev_id)
         pl.semaphore_wait(ready_sem)
 
         @pl.loop(0, num_refs)
@@ -709,7 +700,6 @@ class PallasCallRemoteDMATest(parameterized.TestCase):
               pl.select_ref(i % 2, send_sem.at[0], send_sem.at[1]),
               pl.select_ref(i % 2, recv_sem.at[0], recv_sem.at[1]),
               other_dev_id,
-              device_id_type=pl.DeviceIdType.LOGICAL,
           )
           copy_done.wait_send()
           copy_done.wait_recv()
@@ -761,20 +751,11 @@ class PallasCallRemoteDMATest(parameterized.TestCase):
     def kernel(idx_ref, x0_ref, x1_ref, y_ref):
       def body(ready_sem, send_sem, recv_sem):
         other_dev_id = 1 - lax.axis_index('x')
-        pl.semaphore_signal(
-            ready_sem,
-            device_id=other_dev_id,
-            device_id_type=pl.DeviceIdType.LOGICAL,
-        )
+        pl.semaphore_signal(ready_sem, device_id=other_dev_id)
         pl.semaphore_wait(ready_sem)
         x_ref = pl.select_ref(idx_ref[...], x0_ref, x1_ref)
         copy_done = pltpu.async_remote_copy(
-            x_ref,
-            y_ref,
-            send_sem,
-            recv_sem,
-            other_dev_id,
-            device_id_type=pl.DeviceIdType.LOGICAL,
+            x_ref, y_ref, send_sem, recv_sem, other_dev_id
         )
         copy_done.wait_send()
         copy_done.wait_recv()
@@ -971,15 +952,25 @@ class PallasCallRemoteDMAInterpretTest(parameterized.TestCase):
     if not jtu.is_device_tpu():
       self.skipTest('Test requires TPU')
 
-  @parameterized.parameters(('left',), ('right',))
-  def test_interpret_remote_dma_ppermute(self, permutation):
+  @parameterized.product(
+      permutation=['left', 'right', 'zero'],
+      device_id_fn=[
+          lambda x: x,
+          lambda x: (x,),
+          lambda x: {'x': x},
+          lambda x: {('x',): x},
+      ],
+  )
+  def test_interpret_remote_dma_ppermute(self, permutation, device_id_fn):
     if jax.device_count() <= 1:
       self.skipTest('Test requires multiple devices.')
     num_devices = jax.device_count()
     if permutation == 'left':
       permute_fn = lambda x: lax.rem(x + num_devices - 1, num_devices)
-    else:
+    elif permutation == 'right':
       permute_fn = lambda x: lax.rem(x + num_devices + 1, num_devices)
+    else:
+      permute_fn = lambda x: 0
 
     # Construct a kernel which performs a ppermute based on permute_fn.
     def test_kernel(x_ref,
@@ -989,14 +980,13 @@ class PallasCallRemoteDMAInterpretTest(parameterized.TestCase):
                 ):
       o_ref[...] = jnp.zeros_like(o_ref[...])
       my_id = lax.axis_index('x')
-      dst_device = permute_fn(my_id)
+      dst_device = device_id_fn(permute_fn(my_id))
       input_to_output_copy = pltpu.make_async_remote_copy(
           src_ref=x_ref,
           dst_ref=o_ref,
           send_sem=copy_send_sem,
           recv_sem=copy_recv_sem,
           device_id=dst_device,
-          device_id_type=pl.DeviceIdType.LOGICAL,
       )
       input_to_output_copy.start()
       input_to_output_copy.wait()
@@ -1033,14 +1023,17 @@ class PallasCallRemoteDMAInterpretTest(parameterized.TestCase):
       check_vma=False))
     result = compiled_func(sharded_arr)
 
-    perm = tuple((src, permute_fn(src)) for src in range(num_devices))
-    perm = jax.tree_util.tree_map(int, perm)
-    def lax_permute(x):
-      return lax.ppermute(x, 'x', perm)
-    expected = jax.jit(shard_map.shard_map(lax_permute,
-                                   mesh=mesh,
-                                   in_specs=P(None, 'x'),
-                                   out_specs=P(None, 'x')))(sharded_arr)
+    if permutation == 'zero':
+      expected = jnp.tile(unsharded_arr[:, :128], (1, num_devices))
+    else:
+      perm = tuple((src, permute_fn(src)) for src in range(num_devices))
+      perm = jax.tree_util.tree_map(int, perm)
+      def lax_permute(x):
+        return lax.ppermute(x, 'x', perm)
+      expected = jax.jit(shard_map.shard_map(lax_permute,
+                                     mesh=mesh,
+                                     in_specs=P(None, 'x'),
+                                     out_specs=P(None, 'x')))(sharded_arr)
     np.testing.assert_array_equal(result, expected)
 
   def test_interpret_remote_dma_asymmetrical_indexer(self):
@@ -1172,7 +1165,6 @@ class PallasCallRemoteDMAInterpretTest(parameterized.TestCase):
             send_sem=send_sem,
             recv_sem=recv_sem,
             device_id=neighbor,
-            device_id_type=pl.DeviceIdType.LOGICAL,
         )
         remote_dma.start()
         remote_dma.wait()
@@ -1184,7 +1176,6 @@ class PallasCallRemoteDMAInterpretTest(parameterized.TestCase):
             send_sem=send_sem,
             recv_sem=recv_sem,
             device_id=neighbor,
-            device_id_type=pl.DeviceIdType.LOGICAL,
         )
         remote_dma.start()
         remote_dma.wait()

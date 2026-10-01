@@ -4441,38 +4441,28 @@ def unop_dtype_rule(result_dtype, accepted_dtypes, name, aval,
 def default_unop_reduced_rule(aval):
   return getr(aval)
 
-# Elementwise ops that are linear, so that applying them to unreduced inputs
-# could make sense, but that don't have an unreduced rule yet. Applying any
-# other elementwise op to an unreduced input is an error.
-_linear_elementwise_ops = frozenset({'neg', 'real', 'imag', 'conj', 'sub',
-                                     'complex'})
-
-def _unreduced_input_error(name, *avals):
-  if name in _linear_elementwise_ops:
-    return NotImplementedError(
-        f'unreduced rule for {name} is not implemented. Please'
-        ' file an issue at https://github.com/jax-ml/jax/issues')
-  axes = tuple(sorted(frozenset().union(*map(getu, avals)), key=str))
-  return core.ShardingTypeError(
-      f'{name} got an input that is unreduced along mesh axes {axes}, but'
-      f' {name} is not linear, so applying it to the partial sums held on'
-      ' each device would compute the wrong result. Reduce the input first,'
-      ' for example with `jax.reshard` (or with `jax.lax.psum` inside'
-      ' `shard_map`).')
 
 def unop_ur_rule(name, aval, **kwargs):
   reduced = default_unop_reduced_rule(aval)
-  if any(getu(aval)):
-    raise _unreduced_input_error(name, aval)
+  if getu(aval):
+    raise core.ShardingTypeError(
+        f'{name} is a non-linear operation and cannot accept input that is'
+        f' unreduced. Got {aval}')
   return frozenset(), reduced, None
 
-def unop(result_dtype, accepted_dtypes, name, supports_narrow_ints=True):
+def unop_layout_rule(aval, **kwargs):
+  return aval.layout
+
+def unop(result_dtype, accepted_dtypes, name, supports_narrow_ints=True,
+         ur_rule=None):
   dtype_rule = partial(unop_dtype_rule, result_dtype, accepted_dtypes, name,
                        supports_narrow_ints=supports_narrow_ints)
-  prim = standard_primitive(_attrgetter('shape'), dtype_rule, name,
-                            sharding_rule=_attrgetter('sharding'),
-                            vma_rule=lambda x, **kwargs: x.mat.varying,
-                            ur_rule=partial(unop_ur_rule, name))
+  prim = standard_primitive(
+      _attrgetter('shape'), dtype_rule, name,
+      sharding_rule=_attrgetter('sharding'),
+      vma_rule=lambda x, **kwargs: x.mat.varying,
+      ur_rule=partial(unop_ur_rule, name) if ur_rule is None else ur_rule,
+      layout_rule=unop_layout_rule)
   batching.defvectorized(prim)
   return prim
 
@@ -4601,8 +4591,27 @@ def default_nary_reduced_rule(*avals, **params):
 def nary_ur_rule(name, *avals, **params):
   reduced = default_nary_reduced_rule(*avals, **params)
   if any(getu(a) for a in avals):
-    raise _unreduced_input_error(name, *avals)
+    raise core.ShardingTypeError(
+        f'{name} is a non-linear operation and cannot accept inputs that are'
+        f' unreduced. Got {avals}')
   return frozenset(), reduced, None
+
+
+def broadcasting_layout_rule(name, *avals, **kwargs):
+  prev_aval = None
+  for a in avals:
+    if not a.ndim:
+      continue
+    if prev_aval is not None and prev_aval.layout != a.layout:
+      raise ValueError(
+          f'layout of all inputs passed to `{name}` must be the same. Got one'
+          f' operand with layout: {prev_aval.layout} and another operand with'
+          f' layout: {a.layout}')
+    prev_aval = a
+  if prev_aval is None:
+    raise NotImplementedError
+  return prev_aval.layout
+
 
 def naryop(result_dtype, accepted_dtypes, name, allow_extended_dtype=False,
            require_same_dtypes=True, ur_rule=None):
@@ -4611,10 +4620,12 @@ def naryop(result_dtype, accepted_dtypes, name, allow_extended_dtype=False,
                        require_same=require_same_dtypes)
   shape_rule = partial(broadcasting_shape_rule, name)
   sharding_rule = partial(broadcasting_sharding_rule, name)
+  layout_rule = partial(broadcasting_layout_rule, name)
   prim = standard_primitive(
       shape_rule, dtype_rule, name, sharding_rule=sharding_rule,
       vma_rule=partial(core.standard_vma_rule, name),
-      ur_rule=partial(nary_ur_rule, name) if ur_rule is None else ur_rule)
+      ur_rule=partial(nary_ur_rule, name) if ur_rule is None else ur_rule,
+      layout_rule=layout_rule)
   batching.defbroadcasting(prim)
   return prim
 standard_naryop = partial(naryop, input_dtype)
@@ -4675,7 +4686,7 @@ def _nary_lower_hlo(
   out = op(*args)
   if accuracy:
     out = op(*args, result_accuracy=accuracy_attr(accuracy))
-  return [mlir.lower_with_sharding_in_types(ctx, out, aval_out)]
+  return [mlir.lower_with_explicit_types(ctx, out, aval_out)]
 
 def _unary_with_accuracy_pp_rule(eqn, context, settings):
   params = dict(eqn.params)
@@ -4695,12 +4706,35 @@ _any = _int | _float | _complex | _bool
 _bool_or_int = _int | _bool
 _ordered = _int | _float | _bool
 
-neg_p = standard_unop(_num, 'neg')
+def _neg_ur_rule(aval, **kwargs):
+  out_u = getu(aval)
+  return out_u, getr(aval), UnreducedKind.sum if out_u else None
+
+neg_p = unop(_identity, _num, 'neg', ur_rule=_neg_ur_rule)
 ad.deflinear2(neg_p, lambda t, operand: [neg(t)])
 mlir.register_lowering(neg_p, partial(_nary_lower_hlo, hlo.negate))
 
 sign_p = standard_unop(_num, 'sign')
-ad.defjvp_zero(sign_p)
+
+def _sign_jvp_rule(g, ans, x):
+  if not _iscomplex(x):
+    # sign is piecewise constant on the real line, so its derivative is zero
+    # (we also take it to be zero at the discontinuity at x == 0).
+    return ad_util.p2tz(ans)
+  # For complex inputs, sign(x) = x / |x| is not holomorphic. For x != 0,
+  # sign(x) = exp(i * theta) with theta = angle(x), so its differential is
+  #   d sign(x) = i * sign(x) * dtheta, where
+  #   dtheta = Im(dx / x) = Im(conj(sign(x)) * dx) / |x|.
+  # This is equivalent to the Wirtinger form
+  #   d sign(x) = (dx - sign(x)**2 * conj(dx)) / (2 * |x|),
+  # but does not rely on |sign(x)| == 1 (which holds only approximately in
+  # floating point) to cancel the component of dx parallel to x.
+  # sign is not differentiable at x == 0; there sign(x) == 0, so this evaluates
+  # to a zero tangent, matching the real case.
+  dtheta = div(imag(mul(conj(ans), g)), _replace_zero(abs(x)))
+  return mul(ans, complex(_zeros(dtheta), dtheta))
+
+ad.defjvp2(sign_p, _sign_jvp_rule)
 
 def _sign_lower_hlo(ctx, x):
   x_aval, = ctx.avals_in
@@ -5339,14 +5373,14 @@ def _add_transpose(t, x, y):
   else:
     return [_unbroadcast(x_aval, t), _unbroadcast(y_aval, t)]
 
-def _add_ur_rule(x, y):
+def _add_ur_rule(name, x, y):
   out_reduced = default_nary_reduced_rule(x, y)
   x_ur, y_ur = getu(x), getu(y)
   if x_ur and y_ur:
     if x_ur != y_ur:
       raise core.ShardingTypeError(
-          'lhs and rhs to `add` must be unreduced along the same mesh axes. '
-          f'Got lhs={x_ur}, rhs={y_ur}')
+          f'lhs and rhs to `{name}` must be unreduced along the same mesh axes.'
+          f' Got lhs={x_ur}, rhs={y_ur}')
     out_unreduced = x_ur
   elif x_ur or y_ur:
     if x_ur and not y_ur:
@@ -5355,16 +5389,16 @@ def _add_ur_rule(x, y):
       assert not x_ur and y_ur
       lhs_str, rhs_str = 'rhs', 'lhs'
     raise core.ShardingTypeError(
-        f'{lhs_str} is unreduced while {rhs_str} is not. `add` operation does'
+        f'{lhs_str} is unreduced while {rhs_str} is not. `{name}` operation does'
         ' not allow this because there will be implicit communication. Please'
-        f' reduce {lhs_str} via `reshard` before calling `add`.')
+        f' reduce {lhs_str} via `reshard` before calling `{name}`.')
   else:
     out_unreduced = frozenset()
   kind = UnreducedKind.sum if out_unreduced else None
   return out_unreduced, out_reduced, kind
 
 add_p: Primitive = naryop(input_dtype, [_num, _num], 'add',
-                          ur_rule=_add_ur_rule)
+                          ur_rule=partial(_add_ur_rule, 'add'))
 ad.primitive_jvps[add_p] = _add_jvp
 ad.primitive_transposes[add_p] = _add_transpose
 mlir.register_lowering(add_p, partial(_nary_lower_hlo, hlo.add))
@@ -5388,14 +5422,15 @@ def _sub_transpose(t, x, y):
   # Morally the following assertion is true, but see the comment in add_p's
   # transpose rule.
   # assert ad.is_undefined_primal(x) and ad.is_undefined_primal(y)
-  x_aval = x.aval if ad.is_undefined_primal(x) else core.typeof(x)
-  y_aval = y.aval if ad.is_undefined_primal(y) else core.typeof(y)
+  x_aval = x.aval if ad.is_undefined_primal(x) else core.typeof(x).to_ct_aval()
+  y_aval = y.aval if ad.is_undefined_primal(y) else core.typeof(y).to_ct_aval()
   if type(t) is ad_util.Zero:
     return [ad_util.Zero(x_aval), ad_util.Zero(y_aval)]
   else:
     return [_unbroadcast(x_aval, t), _unbroadcast(y_aval, neg(t))]
 
-sub_p = standard_naryop([_num, _num], 'sub')
+sub_p = standard_naryop([_num, _num], 'sub',
+                        ur_rule=partial(_add_ur_rule, 'sub'))
 ad.primitive_jvps[sub_p] = _sub_jvp
 ad.primitive_transposes[sub_p] = _sub_transpose
 mlir.register_lowering(sub_p, partial(_nary_lower_hlo, hlo.subtract))
@@ -7275,7 +7310,9 @@ def _broadcast_in_dim_sharding_rule(operand, *, shape, broadcast_dimensions,
       mesh=mesh, spec=operand.sharding.spec.update(partitions=new_spec))
 
 def _broadcast_in_dim_unreduced_rule(operand, sharding):
-  if sharding is not None and sharding.mesh.are_all_axes_explicit:
+  if (sharding is not None and sharding.mesh.explicit_axes and
+      sharding.mesh.are_all_axes_explicit_or_manual):
+    assert not operand.mat.unreduced
     out = sharding.spec.unreduced
     if out and sharding.spec.unreduced_kind is not UnreducedKind.sum:
       raise ValueError(
@@ -7287,7 +7324,9 @@ def _broadcast_in_dim_unreduced_rule(operand, sharding):
   return out, kind
 
 def _broadcast_in_dim_reduced_rule(operand, sharding):
-  if sharding is not None and sharding.mesh.are_all_axes_explicit:
+  if (sharding is not None and sharding.mesh.explicit_axes and
+      sharding.mesh.are_all_axes_explicit_or_manual):
+    assert not operand.mat.reduced
     return sharding.spec.reduced
   return getr(operand)
 

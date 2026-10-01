@@ -50,8 +50,8 @@ from jax._src.util import (
     fun_name)
 from jax._src.tree_util import (
     tree_map, tree_flatten, tree_unflatten, tree_leaves, tree_leaves_checked,
-    broadcast_prefix, register_static, register_pytree_node, tree_map_with_path,
-    keystr, tracing_registry)
+    broadcast_prefix, register_static, register_pytree_node,
+    tree_flatten_with_path, keystr, tracing_registry)
 map, unsafe_map = safe_map, map
 zip, unsafe_zip = safe_zip, zip
 
@@ -175,8 +175,10 @@ class HiPrim:
 
   def vjp_bwd(self, res, outgrad, /, *arg_accums):
     args_grad, logs = self.vjp_bwd_retval_logs(res, outgrad)
-    maybe_accum = lambda acc, v: isinstance(acc, ad.GradAccum) and acc.accum(v)
-    tree_map(maybe_accum, arg_accums, args_grad)
+    leaves, treedef = tree_flatten(arg_accums)
+    for acc, v in zip(leaves, treedef.flatten_up_to(args_grad)):
+      if isinstance(acc, ad.GradAccum):
+        acc.accum(v)
     return logs
 
   def vjp_bwd_retval_logs(self, res, outgrad, /):
@@ -221,7 +223,8 @@ class HiPrim:
                               "implement `batch` or `batch_dim_rule`")
 
   # optional dce control
-  def dce(self, used_outs):
+  def dce(self, used_outs, live_ins):
+    del live_ins
     used_outs_flat = tree_leaves_checked(self.out_tree, used_outs)
     if not any(used_outs_flat):
       return False, False, None
@@ -509,6 +512,7 @@ def fake_linear_op(prim, nz_in_flat, nz_out_flat, rs, sres, *tangents):
     return [ad_util.Zero(a.to_tangent_aval()) for a in prim.out_avals_flat]
   rs = rs if sres is None else (rs, sres)  # unpacked in the transpose rule
   residuals_flat, residuals_tree = tree_flatten(rs)
+  residuals_flat = map(dtypes.canonicalize_value, residuals_flat)
   assert nz_in_flat == [not isinstance(t, ad_util.Zero) for t in tangents]
   nz_tangents = tree_leaves(tangents)
   out_nz = call_hi_primitive_linearized_p.bind(
@@ -600,10 +604,11 @@ def _call_hi_primitive_transpose(cts_flat, *primals_flat, _prim):
   return log
 ad.fancy_transposes[call_hi_primitive_p] = _call_hi_primitive_transpose
 
-def _call_hi_primitive_dce(used_outs_flat, eqn):
+def _call_hi_primitive_dce(used_outs_flat, live_ins_flat, eqn):
   _prim = eqn.params['_prim']
   used_out = tree_unflatten(_prim.out_tree, used_outs_flat)
-  used_ins, produced_outs, new_prim = _prim.dce(used_out)
+  live_in = tree_unflatten(_prim.in_tree, live_ins_flat)
+  used_ins, produced_outs, new_prim = _prim.dce(used_out, live_in)
   if new_prim is None:
     return [False] * len(eqn.invars), None
   name = f'{type(_prim).__name__}.dce'
@@ -615,8 +620,9 @@ def _call_hi_primitive_dce(used_outs_flat, eqn):
       f'the second (produced outputs) return value of {name}')
   new_invars = [x for x, u in zip(eqn.invars, used_ins_flat) if u]
   new_outvars = [v for v, u in zip(eqn.outvars, produced_outs_flat) if u]
+  new_effs = core.resolve_input_effects(new_prim.effects, new_invars)
   new_eqn = eqn.replace(invars=new_invars, outvars=new_outvars,
-                        params=dict(_prim=new_prim))
+                        params=dict(_prim=new_prim), effects=new_effs)
   return used_ins_flat, new_eqn
 pe.dce_rules[call_hi_primitive_p] = _call_hi_primitive_dce
 
@@ -897,7 +903,9 @@ class CustomVJPTraced(HiPrim):
                                self.out_tree.num_leaves)
     if ((tree := tracing_registry.flatten(out)[1]) != self.out_tree):
       raise TypeError(_vjp_primal_fwd_tree_mismatch_err(self, tree))
-    tree_map_with_path(_vjp_fwd_aval_mismatch_err, self.out_aval, out)
+    path_avals, treedef = tree_flatten_with_path(self.out_aval)
+    for (p, a), x in zip(path_avals, treedef.flatten_up_to(out)):
+      _vjp_fwd_aval_mismatch_err(p, a, x)
     if self.symbolic_zeros:
       out_pairs_flat = tree_leaves_checked(self.out_tree, out)
       out_flat, out_nzs_flat = unzip2(
@@ -944,8 +952,9 @@ class CustomVJPTraced(HiPrim):
                        f"length {len(in_cts)}")
     in_cts = broadcast_prefix(in_cts, in_avals_, is_leaf=lambda x: x is None)
     in_cts = tree_unflatten(self.in_tree, map(_replace_none, self.in_avals_flat, in_cts))
-    tree_map_with_path(partial(_vjp_bwd_aval_mismatch_err, self.traced._fun_sourceinfo),
-                               self.in_avals[2:], in_cts[2:])
+    path_avals, treedef = tree_flatten_with_path(self.in_avals[2:])
+    for (p, a), ct in zip(path_avals, treedef.flatten_up_to(in_cts[2:])):
+      _vjp_bwd_aval_mismatch_err(self.traced._fun_sourceinfo, p, a, ct)
     if self.symbolic_zeros:
       in_cts = tree_map(ad_util.replace_rule_output_symbolic_zeros, in_cts)
     return in_cts, logs
@@ -979,7 +988,7 @@ class CustomVJPTraced(HiPrim):
     effs = self.traced.jaxpr.effects
     disallowed = effects.custom_derivatives_allowed_effects.filter_not_in(effs)
     if disallowed:
-      raise NotImplementedError(f'Effects not supported in `custom_jvp`: {disallowed}')
+      raise NotImplementedError(f'Effects not supported in `custom_vjp`: {disallowed}')
 
   def remat(self, trace, *args):  # type: ignore
     if not trace.custom_vjp_rules or (self.opt_remat and not self.remat_rules):
@@ -1056,8 +1065,9 @@ def _vjp_bwd_aval_mismatch_err(primal_sourceinfo, path, primal_aval, ct):
         f" type {expected.str_short()}")
 
 def _replace_none(primal_in_aval, maybe_ct):
-  if maybe_ct is None:
-    return ad_util.Zero(primal_in_aval.to_ct_aval())
+  ct_aval = primal_in_aval.to_ct_aval()
+  if maybe_ct is None or getattr(ct_aval, 'dtype', None) is dtypes.float0:
+    return ad_util.Zero(ct_aval)
   else:
     return maybe_ct
 
@@ -1180,7 +1190,8 @@ class OptRemat(HiPrim):
     new_prim = OptRemat(new_orig, new_traced_fwd)
     return call_hi_primitive_p.bind(*args, _prim=new_prim)
 
-  def dce(self, used_outs):
+  def dce(self, used_outs, live_ins):
+    del live_ins
     used_primals, used_res = used_outs
     if any(tree_leaves(used_res)):
       return True, (True, True), self  # if any res used, no dce at all
@@ -1282,7 +1293,7 @@ class CustomJVPTraced(HiPrim):
     return out, out_tangent
 
   lin, linearized = linearize_from_jvp
-  vjp_fwd, vjp_bwd_retval = vjp_from_jvp
+  vjp_fwd, vjp_bwd_retval = vjp_from_lin
 
   def transpose(self, out_ct, *args):
     # The application must be linear in the accumulated args

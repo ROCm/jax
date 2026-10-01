@@ -22,6 +22,7 @@ from typing import Any
 
 import jax
 from jax._src import core as jax_core
+from jax._src import deprecations
 from jax._src import dtypes
 from jax._src import effects
 from jax._src import flattree as ft
@@ -36,6 +37,7 @@ from jax._src.lax import convolution
 from jax._src.lax import lax
 from jax._src.pallas import core as pl_core
 from jax._src.pallas import primitives
+from jax._src.pallas import utils as pallas_utils
 from jax._src.pallas.mosaic import core as tpu_core
 from jax._src.random import prng as jax_prng
 from jax._src.state import discharge as state_discharge
@@ -181,9 +183,13 @@ class AsyncCopyDescriptor:
   )
 
   def __post_init__(self):
-    if (self.src_sem is None) ^ (self.device_id is None):
-      raise ValueError("Either both or neither `src_sem` and `device_id` "
-                       "can be set.")
+    if self.device_id is not None and (
+        self.src_sem is None or self.dst_sem is None
+    ):
+      raise ValueError(
+          "Both `src_sem` and `dst_sem` (`sem`) must be set when `device_id` is"
+          " set."
+      )
 
   def __del__(self):
     if not self._used:
@@ -195,7 +201,7 @@ class AsyncCopyDescriptor:
 
   @property
   def is_remote(self):
-    return self.src_sem is not None
+    return self.device_id is not None
 
   def _get_args_and_tree(
       self,
@@ -225,33 +231,54 @@ class AsyncCopyDescriptor:
     )
 
   def wait(self):
-    if self.is_remote:
-      self.wait_send()
-    self.wait_recv()
+    """Waits for both the read and write which the copy describes to complete.
 
-  def wait_recv(self):
+    Awaits the read from `src_ref` if a source semaphore was given, and always
+    awaits the write to `dst_ref`.
+    """
+    # TODO(rdyro): Consider disallowing calling `.wait()` on remote copies and
+    # asking the user to explicitly use `wait_send`/`wait_recv`.
+    if self.src_sem is not None:
+      self.wait_read()
+    self.wait_write()
+
+  def wait_write(self):
+    """Waits until writing to `dst_ref` has completed."""
     self._used = True
     flat_args, tree = self._get_args_and_tree()
     dma_wait_p.bind(
         *flat_args, tree=tree, device_id_type=self.device_id_type,
-        insert_dummy_device=False, is_wait_send=False
+        is_wait_send=False
     )
 
-  def wait_send(self):
+  def wait_recv(self):
+    """Waits until writing to `dst_ref` has completed. Alias of `wait_write`."""
+    self.wait_write()
+
+  def wait_read(self):
+    """Waits until reading from `src_ref` has completed."""
     self._used = True
-    if not self.is_remote:
-      raise ValueError("Cannot `wait_send` on a local copy.")
     # We swap src and dst since by default dma_wait_p waits on the dst_sem
     # TODO(rdyro): Update the lowering to use `is_wait_send` instead of
     # swapping src and dst.
-    flat_args, tree = self._get_args_and_tree(
-        swap_src_and_dst=True,
-    )
+    flat_args, tree = self._get_args_and_tree(swap_src_and_dst=True)
     dma_wait_p.bind(
         *flat_args, tree=tree, device_id_type=self.device_id_type,
-        insert_dummy_device=self.is_remote,
-        is_wait_send=True,
+        is_wait_send=True
     )
+
+  def wait_send(self):
+    """Waits until reading from `src_ref` has completed.
+
+    Only valid on a remote copy; use `wait_read` for a local one.
+    """
+    self._used = True
+    if not self.is_remote:
+      raise RuntimeError(
+          "Cannot `wait_send` on a local copy. Use `wait_read()` to await "
+          "`src_ref` read, or `wait()` to also await the write to `dst_ref`."
+      )
+    self.wait_read()
 
 
 def _dma_flatten(*args):
@@ -275,7 +302,8 @@ def _get_dma_effects(
     device_id_aval,
     device_id_type,
     *,
-    is_wait_send: bool = False,
+    is_wait: bool = False,
+    src_dst_swapped: bool = False,
 ):
   n_src_transforms = len(_dma_tree_leaves(src_ref_aval))
   n_dst_transforms = len(_dma_tree_leaves(dst_ref_aval))
@@ -284,7 +312,7 @@ def _get_dma_effects(
   # TODO(rdyro): We swap read vs write effects when dma_wait is bound via
   # `wait_send`. `wait_send` swaps the src and dst args when binding dma_wait_p.
   # Consider handling this in a cleaner way.
-  if is_wait_send:
+  if src_dst_swapped:
     src_ref_effect = state.WriteEffect(0)
     dst_ref_effect = state.ReadEffect(n_src_transforms)
   else:
@@ -293,9 +321,15 @@ def _get_dma_effects(
   effs: set[jax_core.Effect] = {
       src_ref_effect,
       dst_ref_effect,
-      state.WriteEffect(dst_sem_index),  # Write to dst sem
   }
-  if src_sem_aval is not None:
+  if dst_sem_aval is not None:
+    effs.add(state.WriteEffect(dst_sem_index))
+  # A wait never touches the semaphore in the `src_sem` slot. For `wait_read`
+  # the args are pre-swapped, so the semaphore being awaited already sits in
+  # the `dst_sem` slot and `src_sem` holds the untouched `dst_sem`; for
+  # `wait_write` the slot holds the real source semaphore, which only the
+  # matching `wait_read` drains.
+  if not is_wait and src_sem_aval is not None:
     src_sem_index = n_src_transforms + n_dst_transforms + n_dst_sem_transforms
     effs.add(state.WriteEffect(src_sem_index))
   if device_id_aval is not None:
@@ -324,9 +358,9 @@ def _dma_start_to_lojax(*args, tree, device_id_type, priority, add):
   dst_ref_aval = jax_core.typeof(_get_ref(dst_ref))
   if not (src_ref_aval.is_high and dst_ref_aval.is_high):
     raise NotImplementedError("dma_start not implemented in LoJAX yet.")
-  dst_sem_aval = jax_core.typeof(_get_ref(dst_sem))
-  if dst_sem_aval.is_high:
-    raise NotImplementedError("dma_start not implemented in LoJAX yet.")
+  if _get_ref(dst_sem) is not None:
+    if jax_core.typeof(_get_ref(dst_sem)).is_high:
+      raise NotImplementedError("dma_start not implemented in LoJAX yet.")
   if _get_ref(src_sem) is not None:
     if jax_core.typeof(_get_ref(src_sem)).is_high:
       raise NotImplementedError("dma_start not implemented in LoJAX yet.")
@@ -352,15 +386,16 @@ def _dma_start_abstract_eval(*args, tree, device_id_type, priority, add):
   )
   if not all(
       isinstance(x, (state.AbstractRef, state.TransformedRef))
-      for x in [src_ref_aval, dst_ref_aval, dst_sem_aval]
+      for x in [src_ref_aval, dst_ref_aval]
   ):
-    raise ValueError(
-        "DMA source/destination/semaphore arguments must be Refs.")
-  dst_sem_shape = dst_sem_aval.shape
-  if dst_sem_shape:
-    raise ValueError(
-        f"Cannot signal on a non-()-shaped semaphore: {dst_sem_shape}"
-    )
+    raise ValueError("DMA source/destination arguments must be Refs.")
+  if dst_sem_aval is not None:
+    if not isinstance(dst_sem_aval, (state.AbstractRef, state.TransformedRef)):
+      raise ValueError("DMA destination semaphore must be a Ref.")
+    if dst_sem_aval.shape:
+      raise ValueError(
+          f"Cannot signal on a non-()-shaped semaphore: {dst_sem_aval.shape}"
+      )
   if src_sem_aval is not None:
     if not isinstance(src_sem_aval, (state.AbstractRef, state.TransformedRef)):
       raise ValueError("DMA source semaphore must be a Ref.")
@@ -389,15 +424,16 @@ def _dma_start_pp_eqn(eqn: jax_core.JaxprEqn,
   # TODO(sharadmv): pretty print source semaphores and device id
   if src_sem or device_id:
     return jax_core._pp_eqn(eqn, context, settings)
-  return pp.concat([
+  parts = [
       pp.text(f"dma_start(p{priority}{', add' if add else ''})"),
       pp.text(" "),
       sp.pp_ref_transforms(context, src_ref),
       pp.text(" -> "),
       sp.pp_ref_transforms(context, dst_ref),
-      pp.text(" "),
-      sp.pp_ref_transforms(context, dst_sem),
-  ])
+  ]
+  if dst_sem is not None:
+    parts.extend([pp.text(" "), sp.pp_ref_transforms(context, dst_sem)])
+  return pp.concat(parts)
 
 jax_core.pp_eqn_rules[dma_start_p] = _dma_start_pp_eqn
 
@@ -417,25 +453,17 @@ def dma_start_discharge_rule(
   dst_sem, dst_sem_transforms = _get_ref_and_transforms(dst_sem)
   src_sem, src_sem_transforms = _get_ref_and_transforms(src_sem)
 
-  src_ref_aval, dst_ref_aval, dst_sem_aval, src_sem_aval, _ = _dma_unflatten(
-      tree, ctx.in_avals
+  src_ref_aval, dst_ref_aval, dst_sem_aval, src_sem_aval, device_id_aval = (
+      _dma_unflatten(tree, ctx.in_avals)
   )
 
-  _, dst_discharge, dst_sem_discharge, *maybe_src_sem_discharge = (
-      _dma_unflatten(tree, ctx.should_discharge)
+  _, dst_discharge, dst_sem_discharge, src_sem_discharge, _ = _dma_unflatten(
+      tree, ctx.should_discharge
   )
   dst_discharge = _get_ref(dst_discharge)
   dst_sem_discharge = _get_ref(dst_sem_discharge)
+  src_sem_discharge = _get_ref(src_sem_discharge)
   is_remote = device_id is not None
-  src_sem_discharge = None
-
-  if is_remote:
-    src_sem_discharge = _get_ref(maybe_src_sem_discharge[0])
-
-  if not is_remote:
-    # Local async copies only use one semaphore.
-    assert src_sem is None
-    assert src_sem_transforms == ()
 
   num_src_sem_transforms = len(_dma_tree_leaves(src_sem_aval)) - 1
   num_dst_sem_transforms = len(_dma_tree_leaves(dst_sem_aval)) - 1
@@ -450,41 +478,29 @@ def dma_start_discharge_rule(
     # the DMA then the devices that do will hang.
     # TODO(justinfu): Verify that code only works in SPMD mode.
     axis_env = jax_core.get_axis_env()
-    nonempty_axes = [name for name in axis_env.axis_sizes if name is not None]
-    if isinstance(device_id, dict):
-      if device_id_type is not primitives.DeviceIdType.MESH:
-        raise ValueError(
-            "`device_id_type` must be MESH if `device_id` is a dict,"
-            f" got: {device_id_type = }."
-        )
-      device_id_list = []
-      for axis in nonempty_axes:
-        device_id_list.append(device_id.get(axis, jax.lax.axis_index(axis)))
-      device_id = tuple(device_id_list)
-    if device_id_type == primitives.DeviceIdType.LOGICAL:
-      if len(nonempty_axes) > 1:
-        raise NotImplementedError("Sharding with more than one named axis not "
-                                  "implemented in dma_start_p for LOGICAL "
-                                  "device_id_type.")
-      shard_axis = nonempty_axes[0]
-      my_axis = jax.lax.axis_index(shard_axis)
-    elif device_id_type == primitives.DeviceIdType.MESH:
-      device_id_len = 1
-      if isinstance(device_id, jax.Array):
-        device_id_len = device_id.size
-      elif hasattr(device_id, '__len__'):
-        device_id_len = len(device_id)
-      if device_id_len != len(axis_env.axis_sizes):
-        raise ValueError(
-            f"device_id ({device_id_len}) and mesh ({len(axis_env.axis_sizes)}) "
-            "must have same length.")
-      if device_id_len > 1 or len(nonempty_axes) > 1:
-        raise NotImplementedError("Meshes with more than 1 named dimension not "
-                                  "implemented in dma_start_p")
-      shard_axis = nonempty_axes[0]
-      my_axis = jax.lax.axis_index(shard_axis)
-    else:
-      raise ValueError(f"Unknown device_id_type: {device_id_type}")
+    nonempty_axes = tuple(
+        name for name in axis_env.axis_sizes if name is not None
+    )
+    if len(nonempty_axes) > 1:
+      raise NotImplementedError(
+          "Meshes with more than 1 named dimension not implemented in"
+          " dma_start_p"
+      )
+    mesh_shape = tuple(axis_env.axis_sizes[a] for a in nonempty_axes)
+    mesh_context = pallas_utils.MeshInfo(
+        mesh_shape,
+        nonempty_axes,
+        pallas_utils.strides_from_shape(mesh_shape),
+    )
+    device_id, non_mesh_axes = primitives.device_id_to_logical(
+        mesh_context, device_id, device_id_type, jax.lax.axis_index
+    )
+    if non_mesh_axes:
+      raise NotImplementedError(
+          f"Non-mesh axes not implemented in dma_start_p: {non_mesh_axes}"
+      )
+    shard_axis = nonempty_axes[0]
+    my_axis = jax.lax.axis_index(shard_axis)
     # Compute the update that is being sent to the current device.
     who_copy_to_me = jax.lax.all_gather(device_id, shard_axis) == my_axis
     # TODO(justinfu): Add a checkify for verifying there is at most one source.
@@ -541,12 +557,13 @@ def dma_start_discharge_rule(
   new_vals += (None,) * num_src_transform_vals
   new_vals += (do_discharge_dst() if dst_discharge else None,)  # dst_val
   new_vals += (None,) * num_dst_transform_vals
-  new_vals += (do_discharge_dst_sem() if dst_sem_discharge else None,)  # dst_sem
-  new_vals += (None,) * num_dst_sem_transforms
-  if is_remote:
-    new_vals += (do_discharge_src_sem() if src_sem_discharge else None,) # src_sem
-    new_vals += (None,) * num_src_sem_transforms
-    new_vals += (None,)  # device_id
+  if dst_sem_aval is not None:
+    val = do_discharge_dst_sem() if dst_sem_discharge else None
+    new_vals += (val,) + (None,) * num_dst_sem_transforms
+  if src_sem_aval is not None:
+    val = do_discharge_src_sem() if src_sem_discharge else None
+    new_vals += (val,) + (None,) * num_src_sem_transforms
+  new_vals += (None,) * len(_dma_tree_leaves(device_id_aval))  # device_id
   assert (len(new_vals) ==
           len(ctx.in_avals)), f"{len(new_vals), new_vals} != {len(ctx.in_avals)}"
 
@@ -554,9 +571,9 @@ def dma_start_discharge_rule(
   # to the references that are left over.
   if not dst_discharge:
     sp.ref_set(dst_ref, None, do_discharge_dst(dst_ref=dst_ref[...]))
-  if not dst_sem_discharge:
+  if dst_sem is not None and not dst_sem_discharge:
     sp.ref_set(dst_sem, None, do_discharge_dst_sem(dst_sem=dst_sem[...]))
-  if is_remote and not src_sem_discharge:
+  if src_sem is not None and not src_sem_discharge:
     sp.ref_set(src_sem, None, do_discharge_src_sem(src_sem=src_sem[...]))
 
   return new_vals, []
@@ -570,17 +587,18 @@ dma_wait_p.multiple_results = True
 
 dma_wait_p.is_high = _dma_is_high
 
-def _dma_wait_to_lojax(*args, tree, device_id_type, insert_dummy_device: bool,
-                       is_wait_send: bool):
-  del insert_dummy_device, is_wait_send
+def _dma_wait_to_lojax(*args, tree, device_id_type, is_wait_send: bool):
+  if is_wait_send:
+    raise NotImplementedError(
+        "wait_read/wait_send not implemented in LoJAX yet.")
   src_ref, dst_ref, dst_sem, src_sem, device_id = _dma_unflatten(tree, args)
   src_ref_aval = jax_core.typeof(_get_ref(src_ref))
   dst_ref_aval = jax_core.typeof(_get_ref(dst_ref))
   if not (src_ref_aval.is_high and dst_ref_aval.is_high):
     raise NotImplementedError("dma_wait not implemented in LoJAX yet.")
-  dst_sem_aval = jax_core.typeof(_get_ref(dst_sem))
-  if dst_sem_aval.is_high:
-    raise NotImplementedError("dma_wait not implemented in LoJAX yet.")
+  if _get_ref(dst_sem) is not None:
+    if jax_core.typeof(_get_ref(dst_sem)).is_high:
+      raise NotImplementedError("dma_wait not implemented in LoJAX yet.")
   if _get_ref(src_sem) is not None:
     if jax_core.typeof(_get_ref(src_sem)).is_high:
       raise NotImplementedError("dma_wait not implemented in LoJAX yet.")
@@ -598,24 +616,26 @@ dma_wait_p.to_lojax = _dma_wait_to_lojax
 
 @dma_wait_p.def_effectful_abstract_eval
 def _dma_wait_abstract_eval(
-    *args, tree, device_id_type, insert_dummy_device: bool, is_wait_send: bool
+    *args, tree, device_id_type, is_wait_send: bool
 ):
   src_ref_aval, dst_ref_aval, dst_sem_aval, src_sem_aval, device_id_aval = (
       _dma_unflatten(tree, args)
   )
-  if not isinstance(dst_sem_aval, (state.AbstractRef, state.TransformedRef)):
-    raise ValueError("Expected the destination semaphore to be a reference")
-  allowed_semaphore_types = {
-      tpu_core.dma_semaphore,
-      pl_core.SEMAPHORE_INTERPRET_DTYPE,
-  }
-  if not any(
-      jnp.issubdtype(dst_sem_aval.dtype, t) for t in allowed_semaphore_types
-  ):
-    raise ValueError(
-        "dma_wait requires a DMA semaphore, but got a regular semaphore."
-        " Use pl.semaphore_wait() instead."
-    )
+  if dst_sem_aval is not None:
+    if not isinstance(dst_sem_aval, (state.AbstractRef, state.TransformedRef)):
+      sem_name = "source" if is_wait_send else "destination"
+      raise ValueError(f"Expected the {sem_name} semaphore to be a reference")
+    allowed_semaphore_types = {
+        tpu_core.dma_semaphore,
+        pl_core.SEMAPHORE_INTERPRET_DTYPE,
+    }
+    if not any(
+        jnp.issubdtype(dst_sem_aval.dtype, t) for t in allowed_semaphore_types
+    ):
+      raise ValueError(
+          "dma_wait requires a DMA semaphore, but got a regular semaphore."
+          " Use pl.semaphore_wait() instead."
+      )
   return [], _get_dma_effects(
       src_ref_aval,
       dst_ref_aval,
@@ -623,7 +643,8 @@ def _dma_wait_abstract_eval(
       src_sem_aval,
       device_id_aval,
       device_id_type,
-      is_wait_send=is_wait_send,
+      is_wait=True,
+      src_dst_swapped=is_wait_send,
   )
 
 def _dma_wait_pp_eqn(eqn: jax_core.JaxprEqn,
@@ -632,14 +653,17 @@ def _dma_wait_pp_eqn(eqn: jax_core.JaxprEqn,
   del settings
   invars = eqn.invars
   tree = eqn.params["tree"]
+  is_wait_send = eqn.params["is_wait_send"]
   _, ref, sem, _, _ = _dma_unflatten(tree, invars)
-  return pp.concat([
-      pp.text("dma_wait"),
+  op_name = "dma_wait_read" if is_wait_send else "dma_wait"
+  parts = [
+      pp.text(op_name),
       pp.text(" "),
       sp.pp_ref_transforms(context, ref),
-      pp.text(" "),
-      sp.pp_ref_transforms(context, sem),
-  ])
+  ]
+  if sem is not None:
+    parts.extend([pp.text(" "), sp.pp_ref_transforms(context, sem)])
+  return pp.concat(parts)
 
 jax_core.pp_eqn_rules[dma_wait_p] = _dma_wait_pp_eqn
 
@@ -649,11 +673,10 @@ def dma_wait_discharge_rule(
     *args,
     tree,
     device_id_type,
-    insert_dummy_device: bool,
     is_wait_send: bool = False,
 ):
   # TODO(b/370563115): perform ref update in dma_wait discharge rule instead of dma_start
-  del device_id_type, insert_dummy_device, is_wait_send
+  del device_id_type, is_wait_send
   _, dst_ref, dst_sem, _, _ = _dma_unflatten(tree, args)
   dst_ref, dst_ref_transforms = _get_ref_and_transforms(dst_ref)
   dst_sem, dst_sem_transforms = _get_ref_and_transforms(dst_sem)
@@ -665,7 +688,7 @@ def dma_wait_discharge_rule(
   # buffers are only specified for their types and not their value so
   # it's completely irrelevant for us here if they are discharged.
   should_discharge_unflattened = _dma_unflatten(tree, ctx.should_discharge)
-  if not _get_ref(should_discharge_unflattened[2]):
+  if dst_sem is None or not _get_ref(should_discharge_unflattened[2]):
     return (None,) * len(ctx.in_avals), []
 
   num_sem_transforms = len(_dma_tree_leaves(dst_sem_aval)) - 1
@@ -700,32 +723,31 @@ def _get_ref(ref):
   return _get_ref_and_transforms(ref)[0]
 
 
-def make_async_copy(src_ref, dst_ref, sem) -> AsyncCopyDescriptor:
+def make_async_copy(
+    src_ref, dst_ref, sem=None, *, src_sem=None
+) -> AsyncCopyDescriptor:
   """Creates a description of an asynchronous copy operation.
 
   Args:
     src_ref: The source Reference.
     dst_ref: The destination Reference.
-    sem: The semaphore used to track completion of the copy.
+    sem: Optional semaphore tracking completion of the write to `dst_ref`.
+    src_sem: Optional semaphore tracking completion of the read from `src_ref`.
 
   Returns:
     An AsyncCopyDescriptor.
   """
   return AsyncCopyDescriptor(
-      src_ref,
-      dst_ref,
-      sem,
-      None,
-      None,
-      primitives.DeviceIdType.MESH,
+      src_ref, dst_ref, sem, src_sem, None, primitives.DeviceIdType.MESH
   )
 
 
 def async_copy(
-    src_ref, dst_ref, sem, *, priority: int = 0, add: bool = False,
+    src_ref, dst_ref, sem=None, *,
+    src_sem=None, priority: int = 0, add: bool = False,
 ) -> AsyncCopyDescriptor:
   """Issues a DMA copying from src_ref to dst_ref."""
-  copy_descriptor = make_async_copy(src_ref, dst_ref, sem)
+  copy_descriptor = make_async_copy(src_ref, dst_ref, sem, src_sem=src_sem)
   copy_descriptor.start(priority=priority, add=add)
   return copy_descriptor
 
@@ -736,7 +758,7 @@ def make_async_remote_copy(
     send_sem,
     recv_sem,
     device_id: MultiDimDeviceId | IntDeviceId | None,
-    device_id_type: primitives.DeviceIdType = primitives.DeviceIdType.MESH,
+    device_id_type: primitives.DeviceIdType | None = None,
 ) -> AsyncCopyDescriptor:
   """Creates a description of a remote copy operation.
 
@@ -752,12 +774,27 @@ def make_async_remote_copy(
     send_sem: The semaphore on the source device.
     recv_sem: The semaphore on the destination device.
     device_id: The device id of the destination device. It could be a tuple, or
-      a dictionary specifying the communication axis and destination index.
+      a dictionary specifying the communication axis and destination index. It
+      is typed as optional only because callers commonly hold it in an optional
+      field, but `None` is rejected.
     device_id_type: The type of the device id.
 
   Returns:
     An AsyncCopyDescriptor.
   """
+  if device_id is None:
+    raise ValueError(
+        "`device_id` is required for a remote copy. Use `make_async_copy` for"
+        " a local one."
+    )
+  if device_id_type is not None:
+    deprecations.warn(
+        "jax-pallas-device-id-type",
+        "device_id_type is deprecated and will be removed in a future release.",
+        stacklevel=2,
+    )
+  else:
+    device_id_type = primitives.DeviceIdType.MESH
   if device_id_type == primitives.DeviceIdType.LOGICAL:
     assert not isinstance(
         device_id, tuple | dict
@@ -779,7 +816,7 @@ def async_remote_copy(
     send_sem,
     recv_sem,
     device_id,
-    device_id_type: primitives.DeviceIdType = primitives.DeviceIdType.MESH,
+    device_id_type: primitives.DeviceIdType | None = None,
 ) -> AsyncCopyDescriptor:
   """Issues a remote DMA copying from src_ref to dst_ref."""
   copy_descriptor = make_async_remote_copy(src_ref, dst_ref, send_sem, recv_sem,

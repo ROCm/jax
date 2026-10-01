@@ -21,7 +21,6 @@ import contextlib
 import dataclasses
 import enum
 import functools
-import inspect
 import itertools
 import math
 from typing import Any, Literal, assert_never, overload
@@ -36,6 +35,7 @@ from jax._src import pretty_printer as pp
 from jax._src import state
 from jax._src import tree_util
 from jax._src import util
+from jax._src.interpreters import batching
 from jax._src.lax import utils as lax_utils
 from jax._src.layout import get_layout_mode, LayoutMode
 from jax._src.lib.mlir import ir
@@ -97,6 +97,14 @@ def _check_layout_mode():
         "Layout mode must be PALLAS_GPU or AUTO, when tracing a Pallas/Mosaic "
         f"GPU kernel, but got {layout_mode}"
     )
+
+
+def _andi_maybe_none(a: ir.Value | None, b: ir.Value | None) -> ir.Value | None:
+  if a is None:
+    return b
+  if b is None:
+    return a
+  return arith_dialect.andi(a, b)
 
 
 print_layout_p = jax_core.Primitive("print_layout")
@@ -335,11 +343,7 @@ def _copy_smem_to_gmem_lowering(
   if ctx.module_ctx.lowering_semantics == mgpu.LoweringSemantics.Lane:
     if not is_scatter:
       lane_pred = ctx.module_ctx.single_lane_predicate
-      assert lane_pred is not None  # Satisfy pytype
-      if predicate is not None:
-        predicate = arith_dialect.andi(predicate, lane_pred)
-      else:
-        predicate = lane_pred
+      predicate = _andi_maybe_none(predicate, lane_pred)
 
     ctx.launch_ctx.async_copy(
         src_ref=src,
@@ -489,7 +493,7 @@ def _extract_smem_copy_params(aval, transforms):
 def copy_smem_to_gmem(
     src: _Ref,
     dst: _Ref,
-    predicate: jax.Array | None = None,
+    predicate: bool | jax.Array | None = None,
     *,
     commit_group: bool = True,
     reduction_op: mgpu.TMAReductionOp | None = None,
@@ -1080,11 +1084,7 @@ def _copy_gmem_to_smem_lowering(
           barrier.arrive_expect_tx(bytes)
 
     lane_pred = ctx.module_ctx.single_lane_predicate
-    if predicate is not None:
-      predicate = arith_dialect.andi(predicate, lane_pred)
-    else:
-      predicate = lane_pred
-
+    predicate = _andi_maybe_none(predicate, lane_pred)
     predicate_kwarg = (
         {}
         if is_cp_async
@@ -1135,11 +1135,6 @@ def _copy_gmem_to_smem_lowering(
     )
     return ()
 
-  # TODO: Remove when the minimum jaxlib version is 0.11.1
-  if has_user_predicate and not hasattr(mgpu.dialect, "arrive_dyn_expect_tx_supported"):
-    raise NotImplementedError(
-        "predicate is not supported with Warpgroup lowering in jaxlib < 0.11.1"
-    )
   match leader_tracked:
     case CopyPartition.REPLICATED:
       leader_tracked_attr = mgpu.dialect.CopyReplicatedAttr.get()
@@ -1161,32 +1156,12 @@ def _copy_gmem_to_smem_lowering(
   else:
     arrive_ctx = contextlib.nullcontext()
 
-  # TODO: Remove when the minimum jaxlib version is 0.11.1
-  # keep the conversion of bytes from int into ir.Value
-  if hasattr(mgpu.dialect, "arrive_dyn_expect_tx_supported"):
-    bytes = mgpu.c(bytes, ir.IntegerType.get_signless(32))
-
+  bytes = mgpu.c(bytes, ir.IntegerType.get_signless(32))
   if predicate is not None:
-    # We can not enter this branch with bytes as int
-    # because NotImplementedError is raised earlier for
-    # jaxlib<0.11.1 and predicate is not None
-    assert isinstance(bytes, ir.Value)
     bytes = arith_dialect.select(predicate, bytes, mgpu.c(0, i32))
 
   with arrive_ctx:
     mgpu.dialect.arrive_expect_tx(barrier_ref, bytes)
-
-  peer_id = copy_params.get("gmem_peer_id")
-  # TODO(bchetioui): Remove once 0.11.1 is the minimum jaxlib version.
-  if "gmem_peer_id" in inspect.signature(mgpu.dialect.async_load).parameters:
-    peer_kwarg = dict(gmem_peer_id=peer_id)
-  else:
-    if peer_id is not None:
-      raise NotImplementedError(
-          "Loading from a remote ref is only supported in jaxlib version "
-          "0.11.1 or higher under Warpgroup lowering semantics"
-      )
-    peer_kwarg = {}
 
   mgpu.dialect.async_load(
       src,
@@ -1200,7 +1175,7 @@ def _copy_gmem_to_smem_lowering(
       ),
       leader_tracked=leader_tracked_attr,
       oob_fill_mode=ir.IntegerAttr.get(i32, oob_mode.value),
-      **peer_kwarg,  # pyrefly: ignore[bad-argument-type]
+      gmem_peer_id=copy_params.get("gmem_peer_id"),
   )
   return ()
 
@@ -1212,7 +1187,7 @@ def copy_gmem_to_smem(
     collective_axes: str | tuple[str, ...] | None = None,
     leader_tracked: CopyPartition | None = None,
     oob_mode: OOBFillMode | None = None,
-    predicate: jax.Array | None = None,
+    predicate: bool | jax.Array | None = None,
 ) -> None:
   """Asynchronously copies a GMEM reference to a SMEM reference.
 
@@ -1429,11 +1404,9 @@ def _async_prefetch_lowering(
     )
 
   if ctx.module_ctx.lowering_semantics == mgpu.LoweringSemantics.Lane:
-    pred = ctx.module_ctx.single_lane_predicate
-    if predicate is not None:
-      pred = arith_dialect.andi(predicate, pred)
-
-    predicate_kwarg: dict[str, Any] = dict(predicate=pred)
+    lane_pred = ctx.module_ctx.single_lane_predicate
+    predicate = _andi_maybe_none(predicate, lane_pred)
+    predicate_kwarg: dict[str, Any] = dict(predicate=predicate)
     if gmem_slice := copy_params.get("gmem_slice", ()):
       first_idx = gmem_slice[0]
       # Gathers are a warpgroup-level collective and can't take a predicate.
@@ -1480,7 +1453,7 @@ def async_prefetch(
     *,
     collective_axes: str | tuple[str, ...] | None = None,
     leader_tracked: CopyPartition | None = None,
-    predicate: jax.Array | None = None,
+    predicate: bool | jax.Array | None = None,
 ) -> None:
   """Asynchronously prefetches a GMEM reference to the L2 cache.
 
@@ -1641,12 +1614,10 @@ def _barrier_arrive_lowering(
       arrival_count = 1
 
     pred = ctx.module_ctx.single_lane_predicate if orders_tensor_core else None
-    if predicate is not None:
-      pred = predicate if pred is None else arith_dialect.andi(predicate, pred)
     barrier.arrive(
         arrival_count=arrival_count,
         orders_tensor_core=orders_tensor_core,
-        predicate=pred,
+        predicate=_andi_maybe_none(predicate, pred),
         scope=scope,
     )
   return ()
@@ -1655,7 +1626,7 @@ def _barrier_arrive_lowering(
 def barrier_arrive(
     barrier: state.AbstractRef,
     *,
-    predicate: jax.Array | None = None,
+    predicate: bool | jax.Array | None = None,
 ) -> None:
   """Arrives at the given barrier."""
   barrier, transforms = state_primitives.get_ref_and_transforms(
@@ -2927,13 +2898,9 @@ def _tcgen05_mma_lowering(
       )
 
   predicate = ctx.module_ctx.single_lane_predicate
-  if collective_axis is not None:
-    assert predicate is not None
+  if collective := collective_axis is not None:
     is_leader_block = _collective_mma_predicate(ctx, collective_axis)
-    predicate = arith_dialect.andi(predicate, is_leader_block)
-    collective = True
-  else:
-    collective = False
+    predicate = _andi_maybe_none(predicate, is_leader_block)
 
   with mgpu.when(predicate):
     tcgen05.mma(
@@ -2950,9 +2917,9 @@ def _tcgen05_mma_lowering(
     )
     if arrive:
       assert barrier_ref is not None
-      tcgen05.commit_arrive(barrier_ref,
-                            collective=collective,
-                            ctx=ctx.launch_ctx)
+      tcgen05.commit_arrive(
+          barrier_ref, collective=collective, ctx=ctx.launch_ctx
+      )
   return []
 
 
@@ -4563,13 +4530,9 @@ def _async_copy_to_tmem_lowering_rule(
     return ()
 
   predicate = ctx.module_ctx.single_lane_predicate
-  if collective_axis is not None:
-    assert predicate is not None
+  if collective := collective_axis is not None:
     is_leader_block = _collective_mma_predicate(ctx, collective_axis)
-    predicate = arith_dialect.andi(predicate, is_leader_block)
-    collective = True
-  else:
-    collective = False
+    predicate = _andi_maybe_none(predicate, is_leader_block)
 
   with mgpu.when(predicate):
     impl(smem_ref, tmem_ref, collective=collective)
@@ -4757,13 +4720,9 @@ def _async_copy_smem_to_tmem_lowering_rule(
     )
 
   predicate = ctx.module_ctx.single_lane_predicate
-  if collective_axis is not None:
-    assert predicate is not None
+  if collective := collective_axis is not None:
     is_leader_block = _collective_mma_predicate(ctx, collective_axis)
-    predicate = arith_dialect.andi(predicate, is_leader_block)
-    collective = True
-  else:
-    collective = False
+    predicate = _andi_maybe_none(predicate, is_leader_block)
 
   with mgpu.when(predicate):
     tcgen05.async_copy_smem_to_tmem(
@@ -5224,8 +5183,8 @@ atomic_store_p.multiple_results = True
 
 
 @atomic_store_p.def_effectful_abstract_eval
-def _atomic_store_abstract_eval(*avals_flat, args_tree, atomic_type):
-  del atomic_type
+def _atomic_store_abstract_eval(*avals_flat, args_tree, atomic_type, optimized):
+  del atomic_type, optimized
   ref, transforms, val = args_tree.unflatten(avals_flat)
   if transforms is not None:
     ref = pallas_core.TransformedRef(ref, transforms)
@@ -5244,8 +5203,9 @@ def _atomic_store_abstract_eval(*avals_flat, args_tree, atomic_type):
 
 @discharge.register_discharge_rule(atomic_store_p)
 def _atomic_store_discharge_rule(
-    ctx, *args_flat, args_tree, atomic_type: AtomicOpType
+    ctx, *args_flat, args_tree, atomic_type: AtomicOpType, optimized: bool
 ):
+  del optimized
   ref, transforms, val, mask = args_tree.unflatten(args_flat)
   *prev_transforms, idx = transforms
   ref = discharge.transform_array(ref, prev_transforms)
@@ -5295,13 +5255,17 @@ def _atomic_store(
     val,
     *,
     atomic_type: AtomicOpType,
+    optimized: bool = True,
 ):
   x_ref, transforms = state_primitives.get_ref_and_transforms(
       x_ref_or_view, None, "atomic_store"
   )
   args_flat, args_tree = tree_util.tree_flatten((x_ref, transforms, val))
   atomic_store_p.bind(
-      *args_flat, args_tree=args_tree, atomic_type=atomic_type
+      *args_flat,
+      args_tree=args_tree,
+      atomic_type=atomic_type,
+      optimized=optimized,
   )
 
 
@@ -5313,6 +5277,7 @@ def _atomic_store_lowering_rule_wg(
     *args_flat,
     args_tree,
     atomic_type: AtomicOpType,
+    optimized: bool,
 ):
   ref, transforms, value = args_tree.unflatten(args_flat)
   ref_aval, transforms_avals, value_aval = args_tree.unflatten(ctx.avals_in)
@@ -5327,7 +5292,12 @@ def _atomic_store_lowering_rule_wg(
         f"Unsupported transforms for atomic_store: {remaining_transforms}"
     )
 
-  mgpu.dialect.vector_store(value, ref, atomic_type=_atomic_op_type_to_int(atomic_type))
+  mgpu.dialect.vector_store(
+      value,
+      ref,
+      optimized=optimized,
+      atomic_type=_atomic_op_type_to_int(atomic_type),
+  )
   return ()
 
 
@@ -5337,6 +5307,7 @@ def _atomic_store_lowering_rule(
     *args_flat,
     args_tree,
     atomic_type: AtomicOpType,
+    optimized: bool,
 ):
   ref, transforms, value = args_tree.unflatten(args_flat)
   ref_aval, transforms_avals, value_aval = args_tree.unflatten(ctx.avals_in)
@@ -5360,11 +5331,14 @@ def _atomic_store_lowering_rule(
             f"Only 2D tiling is supported, got: {tiling}"
         )
       value.store_tiled(
-          ref, swizzle=swizzle, tiling_rank=len(tiling),
+          ref,
+          swizzle=swizzle,
+          optimized=optimized,
+          tiling_rank=len(tiling),
           atomic=atomic_type.value,  # pyrefly: ignore[bad-argument-type]
       )
     case ():
-      value.store_untiled(ref, optimized=False, atomic=atomic_type.value)  # pyrefly: ignore[bad-argument-type]
+      value.store_untiled(ref, optimized=optimized, atomic=atomic_type.value)  # pyrefly: ignore[bad-argument-type]
     case _:
       raise NotImplementedError(
           f"Unsupported transforms for atomic_store: {remaining_transforms}"
@@ -5372,7 +5346,7 @@ def _atomic_store_lowering_rule(
   return ()
 
 
-def atomic_add(ref: _Ref, val) -> None:
+def atomic_add(ref: _Ref, val, *, optimized: bool = True) -> None:
   """Performs an atomic store-add of the value to the reference.
 
   Note that atomicity is only guaranteed on the element-level
@@ -5382,11 +5356,13 @@ def atomic_add(ref: _Ref, val) -> None:
   Args:
     ref: The reference to store the value to.
     val: The value to store.
+    optimized: If True, a compilation error will be raised if no optimized
+      implementation for the store is available.
   """
-  _atomic_store(ref, val, atomic_type=AtomicOpType.ADD)
+  _atomic_store(ref, val, atomic_type=AtomicOpType.ADD, optimized=optimized)
 
 
-def atomic_max(ref: _Ref, val) -> None:
+def atomic_max(ref: _Ref, val, *, optimized: bool = True) -> None:
   """Performs an atomic store-max of the value to the reference.
 
   Note that atomicity is only guaranteed on the element-level.
@@ -5394,11 +5370,13 @@ def atomic_max(ref: _Ref, val) -> None:
   Args:
     ref: The reference to store the value to.
     val: The value to store.
+    optimized: If True, a compilation error will be raised if no optimized
+      implementation for the store is available.
   """
-  _atomic_store(ref, val, atomic_type=AtomicOpType.MAX)
+  _atomic_store(ref, val, atomic_type=AtomicOpType.MAX, optimized=optimized)
 
 
-def atomic_min(ref: _Ref, val) -> None:
+def atomic_min(ref: _Ref, val, *, optimized: bool = True) -> None:
   """Performs an atomic store-min of the value to the reference.
 
   Note that atomicity is only guaranteed on the element-level.
@@ -5406,11 +5384,13 @@ def atomic_min(ref: _Ref, val) -> None:
   Args:
     ref: The reference to store the value to.
     val: The value to store.
+    optimized: If True, a compilation error will be raised if no optimized
+      implementation for the store is available.
   """
-  _atomic_store(ref, val, atomic_type=AtomicOpType.MIN)
+  _atomic_store(ref, val, atomic_type=AtomicOpType.MIN, optimized=optimized)
 
 
-def atomic_and(ref: _Ref, val) -> None:
+def atomic_and(ref: _Ref, val, *, optimized: bool = True) -> None:
   """Performs an atomic store-and of the value to the reference.
 
   Note that atomicity is only guaranteed on the element-level.
@@ -5418,11 +5398,13 @@ def atomic_and(ref: _Ref, val) -> None:
   Args:
     ref: The reference to store the value to.
     val: The value to store.
+    optimized: If True, a compilation error will be raised if no optimized
+      implementation for the store is available.
   """
-  _atomic_store(ref, val, atomic_type=AtomicOpType.AND)
+  _atomic_store(ref, val, atomic_type=AtomicOpType.AND, optimized=optimized)
 
 
-def atomic_or(ref: _Ref, val) -> None:
+def atomic_or(ref: _Ref, val, *, optimized: bool = True) -> None:
   """Performs an atomic store-or of the value to the reference.
 
   Note that atomicity is only guaranteed on the element-level.
@@ -5430,11 +5412,13 @@ def atomic_or(ref: _Ref, val) -> None:
   Args:
     ref: The reference to store the value to.
     val: The value to store.
+    optimized: If True, a compilation error will be raised if no optimized
+      implementation for the store is available.
   """
-  _atomic_store(ref, val, atomic_type=AtomicOpType.OR)
+  _atomic_store(ref, val, atomic_type=AtomicOpType.OR, optimized=optimized)
 
 
-def atomic_xor(ref: _Ref, val) -> None:
+def atomic_xor(ref: _Ref, val, *, optimized: bool = True) -> None:
   """Performs an atomic store-xor of the value to the reference.
 
   Note that atomicity is only guaranteed on the element-level.
@@ -5442,8 +5426,10 @@ def atomic_xor(ref: _Ref, val) -> None:
   Args:
     ref: The reference to store the value to.
     val: The value to store.
+    optimized: If True, a compilation error will be raised if no optimized
+      implementation for the store is available.
   """
-  _atomic_store(ref, val, atomic_type=AtomicOpType.XOR)
+  _atomic_store(ref, val, atomic_type=AtomicOpType.XOR, optimized=optimized)
 
 
 multimem_store_p = jax_core.Primitive("multimem_store")
@@ -5978,3 +5964,77 @@ def _semaphore_wait_lowering_rule(
         val, decrement=decrement, scope=scope, memory_scope=memory_scope,
     )
   return ()
+
+
+reduce_sum_p = jax_core.Primitive("mosaic_gpu_reduce_sum")
+reduce_max_p = jax_core.Primitive("mosaic_gpu_reduce_max")
+reduce_min_p = jax_core.Primitive("mosaic_gpu_reduce_min")
+reduce_prod_p = jax_core.Primitive("mosaic_gpu_reduce_prod")
+
+
+def _reduce_abstract_eval(
+    x_aval: jax_core.ShapedArray,
+    *,
+    axes: tuple[int, ...],
+    accumulator_ilp: int | None = None,
+) -> jax_core.ShapedArray:
+  if accumulator_ilp is not None and (
+      not isinstance(accumulator_ilp, int)
+      or isinstance(accumulator_ilp, bool)
+      or accumulator_ilp <= 0
+  ):
+    raise ValueError(
+        f"accumulator_ilp must be a positive integer, got: {accumulator_ilp}"
+    )
+
+  out_shape = tuple(s for i, s in enumerate(x_aval.shape) if i not in axes)
+  return jax_core.ShapedArray(out_shape, x_aval.dtype)
+
+
+for prim, op in (
+    (reduce_sum_p, "add"),
+    (reduce_max_p, "max"),
+    (reduce_min_p, "min"),
+    (reduce_prod_p, "prod"),
+):
+  prim.def_abstract_eval(_reduce_abstract_eval)
+  batching.defreducer(prim)
+  lowering._register_resource_estimator(prim)(
+      lowering._reduce_resource_estimator
+  )
+  lowering.register_lowering_rule(prim, mgpu.LoweringSemantics.Lane)(
+      functools.partial(lowering._reduce_lowering_rule, op)
+  )
+
+lowering.register_lowering_rule(reduce_sum_p, mgpu.LoweringSemantics.Warpgroup)(
+    lowering._reduce_sum_lowering_rule_wg
+)
+lowering.register_lowering_rule(reduce_max_p, mgpu.LoweringSemantics.Warpgroup)(
+    lowering._reduce_max_lowering_rule_wg
+)
+lowering.register_lowering_rule(reduce_min_p, mgpu.LoweringSemantics.Warpgroup)(
+    lowering._reduce_min_lowering_rule_wg
+)
+lowering.register_lowering_rule(reduce_prod_p, mgpu.LoweringSemantics.Warpgroup)(
+    lowering._reduce_prod_lowering_rule_wg
+)
+
+
+def _reduce(
+    prim: jax_core.Primitive,
+    x: Any,
+    axis: int | Sequence[int] | None = None,
+    keepdims: bool = False,
+    *,
+    accumulator_ilp: int | None = None,
+) -> Any:
+  if keepdims:
+    raise NotImplementedError("keepdims=True is not yet supported.")
+  axes = util.canonicalize_axis_tuple(axis, x.ndim)
+  return prim.bind(x, axes=axes, accumulator_ilp=accumulator_ilp)
+
+
+sum = functools.partial(_reduce, reduce_sum_p)
+max = functools.partial(_reduce, reduce_max_p)
+min = functools.partial(_reduce, reduce_min_p)
+prod = functools.partial(_reduce, reduce_prod_p)

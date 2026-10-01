@@ -166,6 +166,24 @@ class PallasCallPipelineTest(jtu.JaxTestCase):
     x = jnp.arange(8 * 512).reshape(8, 512)
     np.testing.assert_allclose(kernel(x), x)
 
+  def test_hbm_block_spec_requires_hbm_source(self):
+    @functools.partial(
+        pl.pallas_call, out_shape=jax.ShapeDtypeStruct((8, 512), jnp.int32)
+    )
+    def kernel(o_ref):
+      pltpu.emit_pipeline(
+          pltpu.touch,
+          grid=(4,),
+          out_specs=pl.BlockSpec(
+              (8, 128), lambda i: (0, i), memory_space=pltpu.HBM
+          ),
+      )(o_ref)
+
+    with self.assertRaisesRegex(
+        ValueError, 'cannot request HBM block spec for a non-HBM source'
+    ):
+      kernel()
+
   def test_emit_pipeline_input_hbm_memory_space(self):
     def pipeline_body(x_ref, y_ref, z_ref, o_ref, scratch_ref):
       pltpu.sync_copy(y_ref, o_ref)
@@ -944,7 +962,7 @@ class PallasCallMultipleBufferedPipelineTest(jtu.JaxTestCase):
 
   @parameterized.product(
       in_buffer_count=[2, 4],
-      out_buffer_count=[2],
+      out_buffer_count=[2, 3, 4],
   )
   def test_copy(self, in_buffer_count, out_buffer_count):
     x = jnp.reshape(jnp.arange(512 * 512), (512, 512))
@@ -972,10 +990,126 @@ class PallasCallMultipleBufferedPipelineTest(jtu.JaxTestCase):
     result = fn(x)
     np.testing.assert_allclose(result, x)
 
+  def test_mixed_output_buffer_counts(self):
+    x = jnp.reshape(jnp.arange(512 * 512, dtype=jnp.float32), (512, 512))
+
+    @pl.kernel(
+        out_type=(jax.ShapeDtypeStruct.like(x), jax.ShapeDtypeStruct.like(x)),
+        mesh=pltpu.TensorCoreMesh(axis_name='core'),
+    )
+    def copy_kernel(x_hbm_ref, o1_hbm_ref, o2_hbm_ref):
+      def inner_kernel(x_ref, o1_ref, o2_ref):
+        o1_ref[...] = x_ref[...] + 1.0
+        o2_ref[...] = x_ref[...] + 2.0
+      pltpu.emit_pipeline(
+          inner_kernel,
+          grid=(4, 4),
+          core_axis_name='core',
+          dimension_semantics=(pltpu.PARALLEL, pltpu.PARALLEL),
+          in_specs=[
+              pl.BlockSpec((128, 128), lambda i, j: (i, j),
+                pipeline_mode=pl.Buffered(buffer_count=2)),
+          ],
+          out_specs=[
+              pl.BlockSpec((128, 128), lambda i, j: (i, j),
+                pipeline_mode=pl.Buffered(buffer_count=2)),
+              pl.BlockSpec((128, 128), lambda i, j: (i, j),
+                pipeline_mode=pl.Buffered(buffer_count=4)),
+          ],
+      )(x_hbm_ref, o1_hbm_ref, o2_hbm_ref)
+
+    res1, res2 = copy_kernel(x)
+    np.testing.assert_allclose(res1, x + 1.0)
+    np.testing.assert_allclose(res2, x + 2.0)
+
+  def test_buffer_counts_come_from_the_allocations(self):
+    # The pipeline must take its lookahead depth from the allocations: the
+    # block specs are absent here, so deriving it from them would under-size
+    # the scheduler's grid index lookahead.
+    x = jnp.reshape(jnp.arange(512 * 512, dtype=jnp.float32), (512, 512))
+    spec = pl.BlockSpec((128, 128), lambda i, j: (i, j))
+    allocs = [
+        pltpu.BufferedRef.input(spec, jnp.float32, buffer_count=4),
+        pltpu.BufferedRef.output(spec, jnp.float32, buffer_count=4),
+    ]
+
+    @pl.kernel(
+        out_type=jax.ShapeDtypeStruct.like(x),
+        mesh=pltpu.TensorCoreMesh(axis_name='core'),
+        scratch_types=allocs,
+    )
+    def add_kernel(x_hbm_ref, o_hbm_ref, x_bref, o_bref):
+      def inner_kernel(x_ref, o_ref):
+        o_ref[...] = x_ref[...] + 1.0
+
+      pltpu.emit_pipeline(
+          inner_kernel,
+          grid=(4, 4),
+          core_axis_name='core',
+          dimension_semantics=(pltpu.PARALLEL, pltpu.PARALLEL),
+      )(x_hbm_ref, o_hbm_ref, allocations=[x_bref, o_bref])
+
+    np.testing.assert_allclose(add_kernel(x), x + 1.0)
+
+  def test_output_copies_are_always_awaited(self):
+    # A single output buffer means the base BufferedRef writes back
+    # synchronously, but subclasses may still issue an async copy, so the
+    # pipeline must always give them the chance to wait on it.
+    copies, waits = [], []
+
+    @jax.tree_util.register_dataclass
+    @dataclasses.dataclass(frozen=True)
+    class CountingRef(pltpu.BufferedRef):
+
+      def copy_out(self, dst_ref, grid_indices):
+        copies.append(grid_indices)
+        super().copy_out(dst_ref, grid_indices)
+
+      def wait_out(self, dst_ref, grid_indices):
+        waits.append(grid_indices)
+        super().wait_out(dst_ref, grid_indices)
+
+    x = jnp.reshape(jnp.arange(512 * 512, dtype=jnp.float32), (512, 512))
+    spec = pl.BlockSpec((128, 128), lambda i, j, k: (i, j))
+    allocs = [
+        pltpu.BufferedRef.input(spec, jnp.float32),
+        # buffer_count=2 is (in=2, out=1), i.e. a synchronous writeback.
+        CountingRef.input_output(spec, jnp.float32, buffer_count=2),
+    ]
+
+    @pl.kernel(
+        out_type=jax.ShapeDtypeStruct.like(x),
+        mesh=pltpu.TensorCoreMesh(axis_name='core'),
+        scratch_types=allocs,
+    )
+    def add_kernel(x_hbm_ref, o_hbm_ref, x_bref, o_bref):
+      # Each block spans 2 grid steps, so it is incremented twice.
+      def inner_kernel(x_ref, o_ref):
+        @pl.when(pl.program_id(2) == 0)
+        def _():
+          o_ref[...] = x_ref[...]
+        o_ref[...] += 1.0
+
+      pltpu.emit_pipeline(
+          inner_kernel,
+          grid=(4, 4, 2),
+          core_axis_name='core',
+          dimension_semantics=(pltpu.PARALLEL, pltpu.PARALLEL, pltpu.ARBITRARY),
+      )(x_hbm_ref, o_hbm_ref, allocations=[x_bref, o_bref])
+
+    np.testing.assert_allclose(add_kernel(x), x + 2.0)
+    # The loop body issues one copy_out and awaits the copy issued one step
+    # earlier; the epilogue awaits the copy issued on the last step. The
+    # indices are loop carries, so only their structure is known at trace time.
+    self.assertLen(copies, 1)
+    self.assertLen(waits, 2)
+    for grid_indices in copies + waits:
+      self.assertLen(grid_indices, 3)
+
   @parameterized.product(
       x_buffer_count=[2, 4],
       y_buffer_count=[2, 4],
-      out_buffer_count=[2],
+      out_buffer_count=[2, 4],
   )
   def test_matmul(self, x_buffer_count, y_buffer_count, out_buffer_count):
     block_shape = (128, 128)
@@ -1027,7 +1161,7 @@ class PallasCallMultipleBufferedPipelineTest(jtu.JaxTestCase):
   @parameterized.product(
       x_buffer_count=[2, 4],
       y_buffer_count=[2, 4],
-      out_buffer_count=[2],
+      out_buffer_count=[2, 4],
   )
   def test_matmul_megacore(self, x_buffer_count, y_buffer_count,
                            out_buffer_count):
@@ -1142,7 +1276,7 @@ class PallasCallMultipleBufferedPipelineTest(jtu.JaxTestCase):
 
   @parameterized.product(
       in_buffer_count=[2, 4],
-      out_buffer_count=[2],
+      out_buffer_count=[2, 4],
       out_block_indices=[
         [0, 0, 2, 2, 2, 5, 3, 3],
         [5, 5, 5, 5, 5, 5, 5, 5],
@@ -1193,7 +1327,12 @@ class PallasCallMultipleBufferedPipelineTest(jtu.JaxTestCase):
     expected = jnp.concatenate(expected, axis=0)
     np.testing.assert_allclose(result, expected)
 
-  def test_matmul_with_input_output(self):
+  # An int n means (n, 1), so 1/2 cover the synchronous writeback and the
+  # pairs cover asynchronous writeback with symmetric and skewed depths.
+  @parameterized.product(
+      buffer_count=[1, 2, (2, 2), (2, 4), (4, 2), (1, 2)],
+  )
+  def test_matmul_with_input_output(self, buffer_count):
     M, N, K = 512, 512, 512
     blk_m, blk_n, blk_k = 128, 128, 128
     nm, nn, nk = M // blk_m, N // blk_n, K // blk_k
@@ -1203,7 +1342,8 @@ class PallasCallMultipleBufferedPipelineTest(jtu.JaxTestCase):
         pltpu.BufferedRef.input(
             pl.BlockSpec((blk_k, blk_n), lambda n, m, k: (k, n)), jnp.float32),
         pltpu.BufferedRef.input_output(
-            pl.BlockSpec((blk_m, blk_n), lambda n, m, k: (m, n)), jnp.float32),
+            pl.BlockSpec((blk_m, blk_n), lambda n, m, k: (m, n)), jnp.float32,
+            buffer_count=buffer_count),
         ]
 
     def matmul_kernel(x_hbm, y_hbm, o_hbm, x_bref, y_bref, o_bref):
@@ -1235,6 +1375,67 @@ class PallasCallMultipleBufferedPipelineTest(jtu.JaxTestCase):
     )
     result = fn(x, y)
     np.testing.assert_allclose(result, x @ y, atol=5e-5)
+
+  @parameterized.product(
+      buffer_count=[1, 2, 3, (2, 2), (2, 3), (3, 2)],
+  )
+  def test_input_output_new_block_every_step(self, buffer_count):
+    # Every grid step starts a new block, unlike the other input_output tests
+    # which keep a block for several steps.
+    x = jnp.reshape(jnp.arange(512 * 512, dtype=jnp.float32), (512, 512))
+    spec = pl.BlockSpec((128, 128), lambda r, i, j: (i, j))
+    allocs = [
+        pltpu.BufferedRef.input(spec, jnp.float32),
+        pltpu.BufferedRef.input_output(
+            spec, jnp.float32, buffer_count=buffer_count),
+    ]
+
+    @pl.kernel(
+        out_type=jax.ShapeDtypeStruct.like(x),
+        mesh=pltpu.TensorCoreMesh(axis_name='core'),
+        scratch_types=allocs,
+    )
+    def add_kernel(x_hbm_ref, o_hbm_ref, x_bref, o_bref):
+      # Each block is visited twice, so it is copied in, out and back in.
+      def inner_kernel(x_ref, o_ref):
+        @pl.when(pl.program_id(0) == 0)
+        def _():
+          o_ref[...] = x_ref[...]
+        o_ref[...] += 1.0
+
+      pltpu.emit_pipeline(
+          inner_kernel,
+          grid=(2, 4, 4),
+          core_axis_name='core',
+          dimension_semantics=(pltpu.ARBITRARY, pltpu.PARALLEL, pltpu.PARALLEL),
+      )(x_hbm_ref, o_hbm_ref, allocations=[x_bref, o_bref])
+
+    np.testing.assert_allclose(add_kernel(x), x + 2.0)
+
+  @parameterized.product(buffer_count=[0, (0, 2), (2, 0)])
+  def test_input_output_buffer_count_must_be_positive(self, buffer_count):
+    spec = pl.BlockSpec((128, 128), lambda i, j: (i, j))
+    with self.assertRaisesRegex(ValueError, 'must be at least 1'):
+      pltpu.BufferedRef.input_output(
+          spec, jnp.float32, buffer_count=buffer_count)
+
+  @parameterized.product(buffer_count=[(2, 3, 4), (2.0, 2)])
+  def test_input_output_buffer_count_must_be_an_int_pair(self, buffer_count):
+    spec = pl.BlockSpec((128, 128), lambda i, j: (i, j))
+    with self.assertRaisesRegex(ValueError, 'must be a static int'):
+      pltpu.BufferedRef.input_output(
+          spec, jnp.float32, buffer_count=buffer_count)
+
+  def test_buffer_count_must_be_static(self):
+    spec = pl.BlockSpec((128, 128), lambda i, j: (i, j))
+    with self.assertRaisesRegex(ValueError, 'must be a static int'):
+      pltpu.BufferedRef.input_output(
+          spec, jnp.float32, buffer_count=jnp.int32(2))
+
+  def test_input_buffer_count_cannot_be_a_pair(self):
+    spec = pl.BlockSpec((128, 128), lambda i, j: (i, j))
+    with self.assertRaisesRegex(ValueError, 'must be a static int'):
+      pltpu.BufferedRef.input(spec, jnp.float32, buffer_count=(2, 2))
 
   def test_single_buffered_output(self):
     def body(o_ref):
@@ -1703,6 +1904,56 @@ class PaddedPipelineEmitterTest(htu.HypothesisShardedTestCase):
 
 
 class PallasCallBoundedSliceIndexingTest(jtu.JaxTestCase):
+
+  @parameterized.product(buffer_count=[2, 3, 4])
+  def test_block_spec_bounded_slice_ragged(self, buffer_count):
+    if not jtu.is_device_tpu():
+      self.skipTest('Only works on TPU.')
+    if not jtu.is_device_tpu_at_least(4):
+      self.skipTest('Only works on TPU v4+')
+
+    n = 20
+    bs = 8
+    shape = (24, 8, 128)
+    block_shape = (pl.BoundedSlice(bs), 8, 128)
+
+    def kernel(x_ref, o_ref):
+      o_ref[...] = x_ref[...] + 1
+
+    x = jnp.arange(np.prod(shape), dtype=np.int32).reshape(shape)
+
+    @jax.jit
+    def f(x):
+      @pl.kernel(
+          mesh=pltpu.TensorCoreMesh(axis_name='core'),
+          out_type=x,
+      )
+      def kernel_fn(x_ref, y_ref):
+        def index_map(i):
+          start = i * bs
+          size = jnp.minimum(bs, n - start)
+          return (pl.ds(start, size), 0, 0)
+
+        in_block_spec = pl.BlockSpec(
+            block_shape,
+            index_map,
+            pipeline_mode=pl.Buffered(buffer_count=buffer_count),
+        )
+        out_block_spec = pl.BlockSpec(
+            block_shape,
+            index_map,
+        )
+        pltpu.emit_pipeline(
+            kernel,
+            grid=(3,),
+            in_specs=(in_block_spec,),
+            out_specs=out_block_spec,
+        )(x_ref, y_ref)
+
+      return kernel_fn(x)
+
+    out = f(x)
+    np.testing.assert_allclose(out[:n], x[:n] + 1)
 
   def test_block_spec_bounded_slice_invalid_index(self):
     if not jtu.is_device_tpu():

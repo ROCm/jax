@@ -52,6 +52,9 @@ class PallasSCMeshTest(jtu.JaxTestCase):
     if not jtu.is_device_tpu(5, "p") and not jtu.is_device_tpu_at_least(6):
       self.skipTest("SparseCore only supported on TPU v5p+")
     super().setUp()
+    self.enter_context(
+        jtu.ignore_warning(category=plsc.SparseCorePushStreamWarning)
+    )
 
   def test_scalar_subcore_mesh(self):
     sc_info = plsc.get_sparse_core_info()
@@ -92,6 +95,9 @@ class PallasSCTest(jtu.JaxTestCase):
     if not jtu.is_device_tpu(5, "p") and not jtu.is_device_tpu_at_least(6):
       self.skipTest("SparseCore only supported on TPU v5p+")
     super().setUp()
+    self.enter_context(
+        jtu.ignore_warning(category=plsc.SparseCorePushStreamWarning)
+    )
 
   @property
   def sc_info(self):
@@ -1229,7 +1235,7 @@ class VectorSubcoreTest(PallasSCTest):
 
   @parameterized.product(mask_fn=MASK_FNS, needs_layout_passes=[False, True])
   def test_load_expanded(self, mask_fn, needs_layout_passes):
-    if needs_layout_passes and not jtu.is_libtpu_at_least("0.0.50"):
+    if not jtu.is_libtpu_at_least("0.0.50"):
       self.skipTest("Needs libtpu >= 0.0.50")
     @self.vector_subcore_kernel(
         out_shape=jax.ShapeDtypeStruct(
@@ -1269,7 +1275,7 @@ class VectorSubcoreTest(PallasSCTest):
 
   @parameterized.product(mask_fn=MASK_FNS, needs_layout_passes=[False, True])
   def test_store_compressed(self, mask_fn, needs_layout_passes):
-    if needs_layout_passes and not jtu.is_libtpu_at_least("0.0.50"):
+    if not jtu.is_libtpu_at_least("0.0.50"):
       self.skipTest("Needs libtpu >= 0.0.50")
     @self.vector_subcore_kernel(
         out_shape=jax.ShapeDtypeStruct(
@@ -1328,7 +1334,7 @@ class VectorSubcoreTest(PallasSCTest):
 
   @parameterized.product(mask_fn=MASK_FNS, needs_layout_passes=[False, True])
   def test_addupdate_compressed(self, mask_fn, needs_layout_passes):
-    if needs_layout_passes and not jtu.is_libtpu_at_least("0.0.50"):
+    if not jtu.is_libtpu_at_least("0.0.50"):
       self.skipTest("Needs libtpu >= 0.0.50")
     @self.vector_subcore_kernel(
         out_shape=jax.ShapeDtypeStruct(
@@ -1355,26 +1361,22 @@ class VectorSubcoreTest(PallasSCTest):
     )
 
   @parameterized.product(
-      dtype=[jnp.int32], new_dtype=[jnp.int8, jnp.int16, jnp.float32]
+      dtype=[jnp.int32],
+      new_dtype=[jnp.int8, jnp.int16, jnp.float32],
+      needs_layout_passes=[False, True],
   )
-  def test_plsc_bitcast(self, dtype, new_dtype):
+  def test_plsc_bitcast(self, dtype, new_dtype, needs_layout_passes):
     self.skip_if_tc_tiling(
         "Fails due to incorrectly inferred tiling in tpu.memref_squeeze"
     )
     new_shape = (
         self.num_lanes * jnp.dtype(dtype).itemsize // jnp.dtype(new_dtype).itemsize,
     )
-    # TODO(b/562994815): Until bitwidth-changing plsc.bitcast is supported with
-    # layout passes, test_bitcast0/1 (i32 -> i8/i16 on 1D vectors) cannot move
-    # off needs_layout_passes=False.
-    changes_bitwidth = (
-        jnp.dtype(dtype).itemsize != jnp.dtype(new_dtype).itemsize
-    )
 
     @self.vector_subcore_kernel(
         out_shape=jax.ShapeDtypeStruct(shape=new_shape, dtype=new_dtype),
         compiler_params=pltpu.CompilerParams(
-            needs_layout_passes=not changes_bitwidth
+            needs_layout_passes=needs_layout_passes
         ),
     )
     def kernel(x_ref, o_ref):
@@ -1521,7 +1523,6 @@ class VectorSubcoreTest(PallasSCTest):
             jax.ShapeDtypeStruct(shape, jnp.int32),
             jax.ShapeDtypeStruct(shape, jnp.int32),
         ),
-        compiler_params=pltpu.CompilerParams(needs_layout_passes=False),
     )
     def kernel(x_ref, counts_ref, mask_ref):
       counts_ref[...], mask = plsc.scan_count(x_ref[...])
@@ -1591,14 +1592,11 @@ class VectorSubcoreTest(PallasSCTest):
     np.testing.assert_array_equal(kernel(x), x + np.arange(self.num_lanes))
 
   def test_write_to_transformed_ref(self):
+    if not jtu.is_libtpu_at_least("0.0.50"):
+      self.skipTest("Needs libtpu >= 0.0.50")
     x = jnp.arange(2 * self.num_lanes)
 
-    @self.vector_subcore_kernel(
-        out_shape=x,
-        # TODO(b/517477562): Enable layout passes once splat i1 constants are
-        # supported.
-        compiler_params=pltpu.CompilerParams(needs_layout_passes=False),
-    )
+    @self.vector_subcore_kernel(out_shape=x)
     def kernel(x_ref, o_ref):
       plsc.store_compressed(
           o_ref.at[pl.ds(5, self.num_lanes)],
@@ -1612,7 +1610,7 @@ class VectorSubcoreTest(PallasSCTest):
 
   @parameterized.product(needs_layout_passes=[False, True])
   def test_load_transformed_ref(self, needs_layout_passes):
-    if needs_layout_passes and not jtu.is_libtpu_at_least("0.0.50"):
+    if not jtu.is_libtpu_at_least("0.0.50"):
       self.skipTest("Needs libtpu >= 0.0.50")
     x = jnp.arange(2 * self.num_lanes)
 
@@ -2384,8 +2382,8 @@ class VectorSubcoreTest(PallasSCTest):
       dtype=[jnp.int32, jnp.float32], trailing_shape=[(), (256,)]
   )
   def test_scatter_add(self, dtype, trailing_shape):
-    if trailing_shape and not jtu.is_libtpu_at_least("0.0.49"):
-      self.skipTest("Needs a newer libtpu")
+    if not jtu.is_libtpu_at_least("0.0.50"):
+      self.skipTest("Needs libtpu >= 0.0.50")
 
     shape = (self.sc_info.num_subcores, 32, *trailing_shape)
     x = jnp.arange(math.prod(shape), dtype=dtype).reshape(*shape)
@@ -2581,7 +2579,6 @@ class VectorSubcoreTest(PallasSCTest):
 
     @self.vector_subcore_kernel(
         out_shape=(keys, values, *maybe_mask_arg),
-        compiler_params=pltpu.CompilerParams(needs_layout_passes=False),
     )
     def kernel(*args):
       if use_mask:
@@ -2625,10 +2622,7 @@ class VectorSubcoreTest(PallasSCTest):
     keys = np.arange(vec_dim, dtype=dtype)
     np.random.shuffle(keys)
 
-    @self.vector_subcore_kernel(
-        out_shape=(keys, keys),
-        compiler_params=pltpu.CompilerParams(needs_layout_passes=False),
-    )
+    @self.vector_subcore_kernel(out_shape=(keys, keys))
     def kernel(x_ref, o1_ref, o2_ref):
       o1_ref[...] = jnp.sort(x_ref[...], descending=True)
       o2_ref[...] = jnp.flip(x_ref[...], axis=-1)
@@ -2651,10 +2645,7 @@ class VectorSubcoreTest(PallasSCTest):
     values = [np.arange(vec_dim, dtype=dtype) for dtype in values_dtypes]
     _ = [np.random.shuffle(v) for v in values]
 
-    @self.vector_subcore_kernel(
-        out_shape=(keys, *values),
-        compiler_params=pltpu.CompilerParams(needs_layout_passes=False),
-    )
+    @self.vector_subcore_kernel(out_shape=(keys, *values))
     def kernel(*args):
       keys_ref, *values_refs = args[: len(args) // 2]
       keys_out, *all_values_out = jax.lax.sort(
