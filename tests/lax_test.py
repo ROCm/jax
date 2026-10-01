@@ -1266,6 +1266,24 @@ class LaxTest(jtu.JaxTestCase):
           raise SkipTest(
               f"The dot algorithm '{algorithm}' requires CUDA compute "
               "capability >= 8.0.")
+        # gfx1151 (Strix Halo) does not support all of the algorithms that are
+        # available on CUDA GPUs. The TF32 and the extended-precision BF16
+        # (X3/X6/X9) algorithms either fail to compile ("INTERNAL: No
+        # candidates could be compiled.") or are explicitly unimplemented
+        # ("UNIMPLEMENTED: Unsupported algorithm on the current device(s)").
+        # Only F16_F16_F32 and BF16_BF16_F32 from this set are supported on
+        # gfx1151, so skip the rest. This is gated on the specific gfx target
+        # (not all ROCm GPUs) because other AMD archs (e.g. MI300 / gfx942)
+        # may support these algorithms.
+        if jtu.is_device_rocm_gfx("gfx1151") and algorithm in {
+            lax.DotAlgorithmPreset.TF32_TF32_F32,
+            lax.DotAlgorithmPreset.BF16_BF16_F32_X3,
+            lax.DotAlgorithmPreset.BF16_BF16_F32_X6,
+            lax.DotAlgorithmPreset.BF16_BF16_F32_X9,
+        }:
+          raise SkipTest(
+              f"The dot algorithm '{algorithm}' is not supported on ROCm "
+              "gfx1151 (Strix Halo).")
       elif algorithm not in {
           lax.DotAlgorithmPreset.DEFAULT,
           lax.DotAlgorithmPreset.ANY_F8_ANY_F8_F32,

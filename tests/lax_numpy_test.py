@@ -7048,6 +7048,22 @@ class NumpyUfuncTests(jtu.JaxTestCase):
     if name in ['arctanh', 'atanh'] and jnp.issubdtype(arg_dtypes[0], jnp.complexfloating):
       self.skipTest("np.arctanh & jnp.arctanh have mismatched NaNs for complex input.")
 
+    # TODO(rocm): The prebuilt ROCm wheel's gfx1151 (Strix Halo APU) backend
+    # computes float16 arcsin/asin incorrectly. The input here is exactly 1.0
+    # (the arcsin domain boundary, expected ~pi/2). On this device the float16
+    # result is wrong and non-deterministic across runs (observed values incl.
+    # NaN, 0.0 and ~5.5), while float32/float64 are correct and CPU is correct
+    # for all dtypes. Since jax.lax.asin lowers directly to chlo.asin, this is a
+    # backend codegen/numerics bug in the wheel, not fixable at the JAX/Python
+    # level. Gated on the gfx1151 target specifically (not all ROCm GPUs) so
+    # that other AMD archs still exercise this test. Skip narrowly: only
+    # arcsin/asin, only float16, only on gfx1151.
+    if (name in ['arcsin', 'asin']
+        and jnp.issubdtype(arg_dtypes[0], jnp.float16)
+        and jtu.is_device_rocm_gfx("gfx1151")):
+      self.skipTest("gfx1151 ROCm wheel computes float16 arcsin/asin "
+                    "inaccurately at the |x|==1 domain boundary.")
+
     jnp_op = getattr(jnp, name)
     np_op = getattr(np, name)
     np_op = jtu.ignore_warning(category=RuntimeWarning,
