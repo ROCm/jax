@@ -38,8 +38,8 @@ permissions:
   actions: read
 
 on:
-  schedule:
-    - cron: "0 */3 * * *" # Run once every 3 hours
+  # No schedule on the fork: amd-main is the default branch, so an upstream cron
+  # here fires against the fork every few hours. Run it on demand instead.
   workflow_dispatch: # allows triggering the workflow run manually
     inputs:
       halt-for-connection:
