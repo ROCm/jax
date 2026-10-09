@@ -29,13 +29,13 @@ export TF_CPP_MIN_LOG_LEVEL=0
 export JAX_ENABLE_X64="$JAXCI_ENABLE_X64"
 
 # ==============================================================================
-# Number of parallel processes for pytest: 4 test workers per GPU.
+# Number of parallel processes for pytest: 1 test worker per GPU.
 # ==============================================================================
 
 export gpu_count=$(rocminfo | egrep -c "Device Type:\s+GPU")
 echo "Number of GPUs detected: $gpu_count"
 
-export num_processes=$((gpu_count * 4))
+export num_processes=$((gpu_count * 1))
 echo "Number of processes to run: $num_processes"
 
 export JAX_ENABLE_ROCM_XDIST="$gpu_count"
