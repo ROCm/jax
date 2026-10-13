@@ -30,9 +30,9 @@ export JAX_ENABLE_X64="$JAXCI_ENABLE_X64"
 
 # ==============================================================================
 # Pytest workers: 1 per device in DPX, 4 otherwise. amd-smi reports the
-# partition mode. Note: amd-smi CSV output uses CRLF line endings inside
-# containers; tr -d '\r' strips the carriage return so the string comparison
-# against "DPX" succeeds.
+# partition mode. Notes:
+#   - CSV row ordering is non-deterministic; skip header and N/A rows.
+#   - CRLF endings inside containers need tr -d '\r'.
 # ==============================================================================
 
 export gpu_count=$(rocminfo | egrep -c "Device Type:\s+GPU")
@@ -42,7 +42,7 @@ echo "Number of GPUs detected: $gpu_count"
 partition_mode="UNKNOWN"
 if command -v amd-smi >/dev/null 2>&1; then
   detected_mode=$(amd-smi partition -c --csv 2>/dev/null \
-    | awk -F, 'NR==2 {print toupper($3); exit}' \
+    | awk -F, 'NR>1 && $3!="N/A" {print toupper($3); exit}' \
     | tr -d '\r')
   [[ -n "$detected_mode" ]] && partition_mode="$detected_mode"
 fi
