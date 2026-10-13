@@ -29,7 +29,7 @@ export TF_CPP_MIN_LOG_LEVEL=0
 export JAX_ENABLE_X64="$JAXCI_ENABLE_X64"
 
 # ==============================================================================
-# Pytest workers: 2 per device in DPX, 4 otherwise. amd-smi reports the
+# Pytest workers: 1 per device in DPX, 4 otherwise. amd-smi reports the
 # partition mode.
 # ==============================================================================
 
@@ -45,7 +45,7 @@ if command -v amd-smi >/dev/null 2>&1; then
 fi
 
 if [[ "$partition_mode" == "DPX" ]]; then
-  workers_per_gpu=2
+  workers_per_gpu=1
 else
   workers_per_gpu=4
 fi
