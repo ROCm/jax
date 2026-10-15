@@ -28,6 +28,18 @@ set -exu -o history -o allexport
 
 source ./ci/utilities/prepare_rocm_tests.sh
 
+# Debug branch only: log per-thread CPU and native stacks if the suite stalls.
+# Yama only lets ancestors ptrace by default, so test processes opt in.
+"$JAXCI_PYTHON" -m pip install py-spy || true
+PYSPY="$("$JAXCI_PYTHON" -c 'import sysconfig; print(sysconfig.get_path("scripts"))')/py-spy"
+hang_debug_dir=$(mktemp -d)
+printf 'import ctypes\ntry:\n    ctypes.CDLL(None).prctl(0x59616d61, ctypes.c_ulong(-1), 0, 0, 0)\nexcept Exception:\n    pass\n' \
+  > "$hang_debug_dir/sitecustomize.py"
+PYTHONPATH="$hang_debug_dir${PYTHONPATH:+:$PYTHONPATH}"
+bash ./ci/rocm_hang_watchdog.sh &
+watchdog_pid=$!
+trap 'kill "$watchdog_pid" 2>/dev/null || true' EXIT
+
 # ==============================================================================
 # Run tests
 # ==============================================================================
@@ -40,6 +52,7 @@ set +e
 
 # Run single-accelerator tests in parallel
 "$JAXCI_PYTHON" -m pytest -n $num_processes --tb=short \
+-o faulthandler_timeout=1200 \
 --json-report --json-report-file=${LOGS_DIR}/pytest_results_single.json \
 --junitxml=test-artifacts/junit-single.xml \
 -m "not multiaccelerator" \

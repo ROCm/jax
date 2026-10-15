@@ -30,12 +30,14 @@ on:
         default: "3.12"
         options:
           - "3.12"
+          - "3.14"
       rocm-version:
         description: "Which ROCm version to test?"
         type: choice
         default: "7.2.0"
         options:
           - "7.2.0"
+          - "10"
       rocm-tag:
         description: "ROCm tag for container image (e.g., rocm720)"
         type: string
