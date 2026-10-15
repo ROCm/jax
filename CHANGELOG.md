@@ -16,6 +16,8 @@ When releasing, please add the new-release-boilerplate to docs/pallas/CHANGELOG.
 
 ## Unreleased
 
+## JAX 0.12.0 (October 15, 2026)
+
 * New features
   * Added {func}`jax.scipy.special.erfcinv` for the inverse complementary
     error function.
