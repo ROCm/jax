@@ -31,17 +31,24 @@ while true; do
     (( d > 300 )) && busy+=("$p")
   done
   for p in "${busy[@]}"; do
-    echo "----- busy pid $p: threads (ticks in 10 s, tid, name)"
+    echo "----- busy pid $p: threads (ticks in window, tid, name)"
+    hot=()
     for t in /proc/$p/task/*; do
       tid=${t##*/}
-      d=$(( $(ticks $t/stat) - ${tbefore[$p.$tid]:-0} ))
+      [[ -n ${tbefore[$p.$tid]:-} ]] || continue
+      d=$(( $(ticks $t/stat) - ${tbefore[$p.$tid]} ))
       (( d > 0 )) && echo "  $d $tid $(<$t/comm)"
-    done | sort -rn | head -20
+    done | sort -rn | head -20 | tee /tmp/hot.$p
+    while read -r d tid _; do (( d > 300 )) && hot+=("$tid"); done < /tmp/hot.$p
     echo "----- busy pid $p: ROCm library mappings"
     grep -E 'amdhip64|hsa-runtime64|rocprofiler|roctracer|librccl|amd_comgr' /proc/$p/maps | awk '{print $1, $3, $6}' | head -30
-    echo "----- busy pid $p: gdb thread apply all bt"
-    timeout 300 gdb -p "$p" -batch -ex 'set pagination off' -ex 'thread apply all bt 25' 2>&1 \
-      | grep -vE '^(\[New LWP|warning: )' | head -500
+    # A full "thread apply all" over ~900 threads hides the hot ones; dump only those.
+    if (( ${#hot[@]} )); then
+      echo "----- busy pid $p: gdb bt of hot threads ${hot[*]}"
+      timeout 300 gdb -p "$p" -batch -ex 'set pagination off' \
+        -ex "python [(t.switch(), print('=== LWP %d' % t.ptid[1]), gdb.execute('bt 40')) for t in gdb.selected_inferior().threads() if t.ptid[1] in ($(IFS=,; echo "${hot[*]}"),)]" \
+        2>&1 | grep -vE '^(\[New LWP|warning: )' | head -400
+    fi
     echo "----- busy pid $p: py-spy dump --native"
     timeout 180 "${PYSPY:-py-spy}" dump --native --pid "$p" 2>&1 | head -120
   done
