@@ -41,6 +41,14 @@ bash ./ci/rocm_hang_watchdog.sh &
 watchdog_pid=$!
 trap 'kill "$watchdog_pid" 2>/dev/null || true' EXIT
 
+# A/B branch only: keep XLA's ROCm tracer from registering with rocprofiler-sdk,
+# so no rocprofiler context or queue interception exists in the test processes.
+command -v cc >/dev/null || (apt-get install -y -qq gcc >/dev/null 2>&1 || true)
+printf 'int rocprofiler_force_configure(void *f) { (void)f; return 0; }\n' > "$hang_debug_dir/noprof.c"
+cc -shared -fPIC -o "$hang_debug_dir/libnoprof.so" "$hang_debug_dir/noprof.c"
+LD_PRELOAD="$hang_debug_dir/libnoprof.so${LD_PRELOAD:+:$LD_PRELOAD}"
+rocm_pytest_deselect="${rocm_pytest_deselect:-} --ignore=tests/profiler_test.py"
+
 # ==============================================================================
 # Run tests
 # ==============================================================================
