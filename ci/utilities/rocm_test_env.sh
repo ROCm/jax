@@ -64,3 +64,9 @@ export rocm_pytest_deselect="\
 --deselect=tests/multi_device_test.py::MultiDeviceTest::test_computation_follows_data \
 --deselect=tests/multiprocess_gpu_test.py::MultiProcessGpuTest::test_distributed_jax_visible_devices \
 --deselect=tests/compilation_cache_test.py::CompilationCacheTest::test_task_using_cache_metric"
+# A/B branch only: no test may start or stop the profiler; XLA's tracer stays registered.
+export rocm_pytest_deselect="$rocm_pytest_deselect \
+--ignore=tests/profiler_test.py --ignore=tests/profiler_session_test.py \
+--ignore=tests/pgle_test.py --ignore=tests/multiprocess/pgle_test.py \
+--ignore=tests/thunky/collective_matmul_test.py --ignore=tests/thunky/thunky_collective_test.py \
+--ignore=tests/mosaic/profiler_cupti_test.py"
