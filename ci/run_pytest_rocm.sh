@@ -31,6 +31,7 @@ source ./ci/utilities/prepare_rocm_tests.sh
 # Debug branch only: log per-thread CPU and native stacks if the suite stalls.
 # Yama only lets ancestors ptrace by default, so test processes opt in.
 "$JAXCI_PYTHON" -m pip install py-spy || true
+(apt-get update -qq && apt-get install -y -qq gdb) >/dev/null 2>&1 || echo "gdb install failed"
 PYSPY="$("$JAXCI_PYTHON" -c 'import sysconfig; print(sysconfig.get_path("scripts"))')/py-spy"
 hang_debug_dir=$(mktemp -d)
 printf 'import ctypes\ntry:\n    ctypes.CDLL(None).prctl(0x59616d61, ctypes.c_ulong(-1), 0, 0, 0)\nexcept Exception:\n    pass\n' \

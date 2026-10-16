@@ -1,15 +1,50 @@
 #!/bin/bash
-# Debug only. Once the suite has run WATCHDOG_START_MIN minutes, log per-thread
-# CPU use and a native stack of every Python process every WATCHDOG_EVERY_MIN
-# minutes. Threads pinned near 100% CPU across dumps mean a busy spin.
+# Debug only. Once the suite has run WATCHDOG_START_MIN minutes, every
+# WATCHDOG_EVERY_MIN minutes find the Python processes burning CPU over a 10 s
+# window and log, for each: per-thread CPU and names (native threads included),
+# the load addresses of the ROCm libraries, gdb backtraces of every thread, and
+# a py-spy dump.
 set +x -u
-sleep $(( ${WATCHDOG_START_MIN:-40} * 60 ))
+
+ticks() {  # utime+stime of a /proc stat file; comm may contain spaces
+  local s
+  s=$(<"$1") 2>/dev/null || { echo 0; return; }
+  s=${s##*) }
+  set -- $s
+  echo $(( ${12} + ${13} ))
+}
+
+sleep $(( ${WATCHDOG_START_MIN:-35} * 60 ))
 while true; do
   echo "===== hang watchdog $(date -u +%H:%M:%S) ====="
-  ps -eLo pid,tid,pcpu,stat,wchan:28,comm --sort=-pcpu | head -60
-  for pid in $(pgrep python || true); do
-    echo "----- py-spy dump --native --pid $pid"
-    timeout 180 "${PYSPY:-py-spy}" dump --native --pid "$pid" 2>&1 | head -250
+  declare -A before=() tbefore=()
+  pids=$(pgrep python || true)
+  for p in $pids; do
+    before[$p]=$(ticks /proc/$p/stat)
+    for t in /proc/$p/task/*; do tbefore[$p.${t##*/}]=$(ticks $t/stat); done
   done
-  sleep $(( ${WATCHDOG_EVERY_MIN:-15} * 60 ))
+  sleep 10
+  busy=()
+  for p in $pids; do
+    d=$(( $(ticks /proc/$p/stat) - ${before[$p]:-0} ))
+    echo "pid $p cpu_ticks_10s=$d $(tr '\0' ' ' < /proc/$p/cmdline 2>/dev/null | cut -c1-80)"
+    (( d > 300 )) && busy+=("$p")
+  done
+  for p in "${busy[@]}"; do
+    echo "----- busy pid $p: threads (ticks in 10 s, tid, name)"
+    for t in /proc/$p/task/*; do
+      tid=${t##*/}
+      d=$(( $(ticks $t/stat) - ${tbefore[$p.$tid]:-0} ))
+      (( d > 0 )) && echo "  $d $tid $(<$t/comm)"
+    done | sort -rn | head -20
+    echo "----- busy pid $p: ROCm library mappings"
+    grep -E 'amdhip64|hsa-runtime64|rocprofiler|roctracer|librccl|amd_comgr' /proc/$p/maps | awk '{print $1, $3, $6}' | head -30
+    echo "----- busy pid $p: gdb thread apply all bt"
+    timeout 300 gdb -p "$p" -batch -ex 'set pagination off' -ex 'thread apply all bt 25' 2>&1 \
+      | grep -vE '^(\[New LWP|warning: )' | head -500
+    echo "----- busy pid $p: py-spy dump --native"
+    timeout 180 "${PYSPY:-py-spy}" dump --native --pid "$p" 2>&1 | head -120
+  done
+  unset before tbefore
+  sleep $(( ${WATCHDOG_EVERY_MIN:-20} * 60 ))
 done
