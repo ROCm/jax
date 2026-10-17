@@ -41,6 +41,9 @@ bash ./ci/rocm_hang_watchdog.sh &
 watchdog_pid=$!
 trap 'kill "$watchdog_pid" 2>/dev/null || true' EXIT
 
+# A/B branch only: keep HIP's AQL rings in system memory (the pre-8-Oct default).
+DEBUG_CLR_AQL_DEV_QUEUE=0
+
 # ==============================================================================
 # Run tests
 # ==============================================================================
