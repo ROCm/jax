@@ -41,11 +41,11 @@ bash ./ci/rocm_hang_watchdog.sh &
 watchdog_pid=$!
 trap 'kill "$watchdog_pid" 2>/dev/null || true' EXIT
 
-# Swap branch only: run these libraries from 10.2.0a20261005 on this image's newer ROCm.
+# Swap branch only: run these libraries from 10.2.0a20261009 on this image's newer ROCm.
 swap_re='_rocm_sdk_core/lib/(libamdhip64|libhiprtc|libhiprtc-builtins)\.so\.7'
 core_lib=$(dirname "$(find /usr/local/lib -path '*_rocm_sdk_core/lib/libamdhip64.so.7' | head -1)")
 curl -fsSL -o "$hang_debug_dir/old.whl" \
-  https://nightly.repo.amd.com/rocm/whl-next/rocm-sdk-core/rocm_sdk_core-10.2.0a20261005-py3-none-linux_x86_64.whl
+  https://nightly.repo.amd.com/rocm/whl-next/rocm-sdk-core/rocm_sdk_core-10.2.0a20261009-py3-none-linux_x86_64.whl
 "$JAXCI_PYTHON" - "$hang_debug_dir/old.whl" "$core_lib" "$swap_re" <<'EOF'
 import hashlib, os, re, sys, zipfile
 whl, dest, pattern = sys.argv[1:]
