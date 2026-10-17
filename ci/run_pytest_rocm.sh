@@ -42,7 +42,7 @@ watchdog_pid=$!
 trap 'kill "$watchdog_pid" 2>/dev/null || true' EXIT
 
 # Swap branch only: run these libraries from 10.2.0a20261005 on this image's newer ROCm.
-swap_re='_rocm_sdk_core/lib/(libamdhip64|libhiprtc|libhiprtc-builtins)\.so\.7'
+swap_re='_rocm_sdk_core/lib/libhsa-runtime64\.so\.1'
 core_lib=$(dirname "$(find /usr/local/lib -path '*_rocm_sdk_core/lib/libamdhip64.so.7' | head -1)")
 curl -fsSL -o "$hang_debug_dir/old.whl" \
   https://nightly.repo.amd.com/rocm/whl-next/rocm-sdk-core/rocm_sdk_core-10.2.0a20261005-py3-none-linux_x86_64.whl
