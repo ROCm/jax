@@ -41,6 +41,25 @@ bash ./ci/rocm_hang_watchdog.sh &
 watchdog_pid=$!
 trap 'kill "$watchdog_pid" 2>/dev/null || true' EXIT
 
+# Swap branch only: run the 10.2.0a20261005 rocprofiler-sdk on this image's newer ROCm.
+rprof_lib=$(dirname "$(find /usr/local/lib -path '*_rocm_sdk_core/lib/librocprofiler-sdk.so.1' | head -1)")
+md5sum "$rprof_lib"/librocprofiler-sdk*.so.1
+curl -fsSL -o "$hang_debug_dir/old.whl" \
+  https://nightly.repo.amd.com/rocm/whl-next/rocm-sdk-core/rocm_sdk_core-10.2.0a20261005-py3-none-linux_x86_64.whl
+"$JAXCI_PYTHON" - "$hang_debug_dir/old.whl" "$rprof_lib" <<'EOF'
+import os, re, sys, zipfile
+whl, dest = sys.argv[1:]
+with zipfile.ZipFile(whl) as z:
+    for name in z.namelist():
+        if re.fullmatch(r"_rocm_sdk_core/lib/librocprofiler-sdk[a-z-]*\.so\.1", name):
+            target = os.path.join(dest, os.path.basename(name))
+            with open(target + ".swap", "wb") as f:
+                f.write(z.read(name))
+            os.replace(target + ".swap", target)
+            print("swapped", target)
+EOF
+md5sum "$rprof_lib"/librocprofiler-sdk*.so.1
+
 # ==============================================================================
 # Run tests
 # ==============================================================================
