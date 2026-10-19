@@ -133,6 +133,7 @@ on:
 permissions:
   id-token: write
   contents: read
+  actions: read
 
 env:
   UV_DEFAULT_INDEX: "https://us-python.pkg.dev/ml-oss-artifacts-published/pypi-mirror/simple"
@@ -182,6 +183,13 @@ jobs:
           gcs_download_uri: ${{ inputs.gcs_download_uri }}
           s3_download_uri: ${{ inputs.s3_download_uri }}
           jax-jaxlib-source: ${{ inputs.jax-jaxlib-source }}
+      - name: Download librocprofiler-sdk with rocm-systems PR 13720
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: librocprofiler-sdk-rprof13720
+          path: rprof13720
+          run-id: 39211168587
+          github-token: ${{ github.token }}
       - name: Install Python dependencies
         run: |
           $JAXCI_PYTHON -m pip install uv~=0.12.3

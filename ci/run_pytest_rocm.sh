@@ -41,6 +41,30 @@ bash ./ci/rocm_hang_watchdog.sh &
 watchdog_pid=$!
 trap 'kill "$watchdog_pid" 2>/dev/null || true' EXIT
 
+# Swap branch only: run librocprofiler-sdk built from the 10.2.0a20261017 nightly's
+# rocm-systems pin plus rocm-systems PR 13720. It is only ABI-matched to that nightly.
+cat rprof13720/BUILD_INFO
+rprof_nightly_md5=025c95e8dcdc370182932ec95a79b3a7
+rprof_swapped=0
+for rprof_lib in $(find /usr/local/lib /opt -path '*_rocm_sdk_core/lib/librocprofiler-sdk.so.1' 2>/dev/null); do
+  rprof_old_md5=$(md5sum < "$rprof_lib" | cut -d' ' -f1)
+  if [[ $rprof_old_md5 != "$rprof_nightly_md5" ]]; then
+    echo "$rprof_lib is not the 10.2.0a20261017 build"
+    exit 1
+  fi
+  cp rprof13720/librocprofiler-sdk.so.1 "$rprof_lib.swap"
+  mv "$rprof_lib.swap" "$rprof_lib"
+  if ldd "$rprof_lib" | grep 'not found'; then
+    exit 1
+  fi
+  echo "RPROF13720_SWAP $rprof_lib before=$rprof_old_md5 after=$(md5sum < "$rprof_lib" | cut -d' ' -f1)"
+  rprof_swapped=$((rprof_swapped + 1))
+done
+if [[ $rprof_swapped -eq 0 ]]; then
+  echo "no _rocm_sdk_core librocprofiler-sdk.so.1 found to swap"
+  exit 1
+fi
+
 # ==============================================================================
 # Run tests
 # ==============================================================================
