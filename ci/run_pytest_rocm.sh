@@ -41,6 +41,9 @@ bash ./ci/rocm_hang_watchdog.sh &
 watchdog_pid=$!
 trap 'kill "$watchdog_pid" 2>/dev/null || true' EXIT
 
+# A/B branch only: kernel arguments in system memory, AQL ring setting left at its default.
+HIP_FORCE_DEV_KERNARG=0
+
 # ==============================================================================
 # Run tests
 # ==============================================================================
