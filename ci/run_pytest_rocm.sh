@@ -41,6 +41,12 @@ bash ./ci/rocm_hang_watchdog.sh &
 watchdog_pid=$!
 trap 'kill "$watchdog_pid" 2>/dev/null || true' EXIT
 
+# Queue-log branch only: HIP's post-create queue flags with the nightly, then the patched,
+# librocprofiler-sdk; the suite is skipped.
+qlog_py='import jax.numpy as jnp; print(jnp.ones(4).sum())'
+AMD_LOG_LEVEL=3 AMD_LOG_MASK=0x10 timeout 300 "$JAXCI_PYTHON" -c "$qlog_py" 2>&1 \
+  | grep -E 'Created SWq|queue-intercept' | head -8 | sed 's/^/QLOG nightly: /'
+
 # Swap branch only: run librocprofiler-sdk built from the 10.2.0a20261017 nightly's
 # rocm-systems pin plus rocm-systems PR 13720. It is only ABI-matched to that nightly.
 cat rprof13720/BUILD_INFO
@@ -64,6 +70,9 @@ if [[ $rprof_swapped -eq 0 ]]; then
   echo "no _rocm_sdk_core librocprofiler-sdk.so.1 found to swap"
   exit 1
 fi
+AMD_LOG_LEVEL=3 AMD_LOG_MASK=0x10 timeout 300 "$JAXCI_PYTHON" -c "$qlog_py" 2>&1 \
+  | grep -E 'Created SWq|queue-intercept' | head -8 | sed 's/^/QLOG patched: /'
+exit 0
 
 # ==============================================================================
 # Run tests
