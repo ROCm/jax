@@ -1,0 +1,37 @@
+# Debug branch only: build librocprofiler-sdk with rocm-systems PR 13720 for the ROCm
+# pytest job to swap in. The test image is Ubuntu 24.04, so build on the same base.
+name: Debug - rocprofiler-sdk PR 13720 build
+
+on:
+  push:
+    branches:
+      - users/gulsumgudukbay/prerelease-hang-rprof13720
+    paths:
+      - .github/workflows/rocm_rprof13720_build.yml
+      - ci/rocm_build_rprof13720.sh
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    container: ubuntu:24.04
+    timeout-minutes: 150
+    steps:
+      - name: Install build tools
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq --no-install-recommends \
+            binutils ca-certificates curl diffutils g++ git python3-dev python3-venv
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build librocprofiler-sdk
+        run: ./ci/rocm_build_rprof13720.sh rprof13720
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: librocprofiler-sdk-rprof13720
+          path: rprof13720/
+          if-no-files-found: error
+          retention-days: 14
