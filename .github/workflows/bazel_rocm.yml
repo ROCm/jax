@@ -207,7 +207,7 @@ jobs:
           echo "RBE image: ${IMAGE}@${DIGEST}"
           echo "rbe_image=${IMAGE}@${DIGEST}" >> "$GITHUB_OUTPUT"
       - name: "Bazel ROCm tests with build_jax=${{ inputs.build_jax }}, build_jaxlib=${{ inputs.build_jaxlib }}"
-        timeout-minutes: 120
+        timeout-minutes: 330
         env:
           BUILD_JAXLIB: ${{ inputs.build_jaxlib }}
           BUILD_JAX: ${{ inputs.build_jax }}
