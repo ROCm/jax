@@ -393,6 +393,34 @@ def supported_dtypes() -> set[DTypeLike]:
 def is_device_rocm() -> bool:
   return 'rocm' in xla_bridge.get_backend().platform_version
 
+def rocm_gfx_target() -> str | None:
+  """Returns the ROCm GPU's ISA / gfx target (e.g. "gfx1151"), or None.
+
+  ROCm behaviour (supported dot algorithms, fp16 numerics) varies by GPU
+  architecture, so arch-specific test skips must be gated on the gfx target
+  rather than on is_device_rocm() alone (which is true for every AMD GPU). On
+  ROCm the device's ``compute_capability`` is the gfx ISA name, mirroring how
+  ``compute_capability`` holds the SM version on CUDA.
+  """
+  if not is_device_rocm():
+    return None
+  d, *_ = xla_bridge.local_devices(backend="gpu")
+  return d.compute_capability
+
+def is_device_rocm_gfx(*targets: str) -> bool:
+  """True iff running on a ROCm GPU whose gfx target is one of ``targets``.
+
+  Example: ``is_device_rocm_gfx("gfx1151")`` gates a skip to Strix Halo only,
+  leaving MI200/MI300 (gfx90a/gfx942) etc. to run the test.
+  """
+  gfx = rocm_gfx_target()
+  return gfx is not None and gfx in targets
+
+# Per-workgroup shared memory (LDS) size in bytes. All AMD GPUs currently
+# targeted by JAX (CDNA MI100/MI200/MI300 and RDNA APUs such as gfx1151) expose
+# 64KB of LDS per workgroup.
+ROCM_SHARED_MEMORY_LIMIT_BYTES = 64 * 1024
+
 def is_device_cuda() -> bool:
   return 'cuda' in xla_bridge.get_backend().platform_version
 
