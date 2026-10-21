@@ -142,6 +142,14 @@ class NNFunctionsTest(jtu.JaxTestCase):
     if jtu.is_device_cuda() and not jtu.is_cuda_compute_capability_at_least("10.0"):
       raise unittest.SkipTest("Needs compute capability 10.0 or higher.")
 
+    # TODO: Re-enable once gfx942 scaled dots no longer go through Triton,
+    # which mishandles fp4 operands that are not packed along K.
+    if mode == "mxfp4" and jtu.is_device_rocm():
+      device = jax.local_devices(backend="gpu")[0]
+      cc = getattr(device, "compute_capability", "").split(":", 1)[0]
+      if cc == "gfx942":
+        self.skipTest("Skipped on gfx942: mxfp4 returns wrong results.")
+
     configs = create_mx_configs_if_available(mode)
     cast_to_representable = partial(
         quantize_dequantize,
