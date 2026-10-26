@@ -722,6 +722,14 @@ def _empty_array(prefix, length_spec, aval):
   # empty = lax.empty((*prefix, *aval.shape), aval.dtype, out_sharding=sharding,
   #                   memory_space=aval.memory_space)
   # return core.pvary(empty, tuple(aval.mat.varying))
+  if aval.memory_space == core.MemorySpace.Device:
+    # Every iteration writes its slice, so the stacked output needs no zero
+    # initialization: on GPU a broadcast of zeros is a full write of the buffer
+    # (a pad of the first slice once XLA peels the loop).
+    with use_abstract_mesh(sharding.mesh):
+      empty = lax.empty((*prefix, *aval.shape), aval.dtype,
+                        out_sharding=sharding)
+    return core.pvary(empty, tuple(aval.mat.varying))
   empty = core.pvary(lax.empty2(aval.dtype, memory_space=aval.memory_space),
                      tuple(aval.mat.varying))
   with use_abstract_mesh(sharding.mesh):
