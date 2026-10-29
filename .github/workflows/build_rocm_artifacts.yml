@@ -39,10 +39,10 @@ on:
         description: "Full ROCm release version (e.g., 7.2.0) for container image and S3 paths"
         type: string
         default: "7.2.0"
-      manylinux-image:
-        description: "Override the manylinux container image (e.g., ghcr.io/rocm/jax-manylinux_2_28-therock-latest:latest)"
+      rocm-tag:
+        description: "TheRock release to pip-install (e.g. therock-10.0, therock-latest)"
         type: string
-        default: ""
+        default: "therock-10.0"
       clone_main_xla:
         description: "Should latest XLA be used?"
         type: choice
@@ -91,10 +91,10 @@ on:
         description: "Full ROCm release version (e.g., 7.2.0) for container image and S3 paths"
         type: string
         default: "7.2.0"
-      manylinux-image:
-        description: "Override the manylinux container image (e.g., ghcr.io/rocm/jax-manylinux_2_28-therock-latest:latest)"
+      rocm-tag:
+        description: "TheRock release to pip-install (e.g. therock-10.0, therock-latest)"
         type: string
-        default: ""
+        default: "therock-10.0"
       clone_main_xla:
         description: "Should latest XLA be used?"
         type: string
@@ -143,7 +143,7 @@ jobs:
     outputs:
       s3_upload_uri: ${{ steps.store-s3-upload-uri.outputs.s3_upload_uri }}
     container:
-      image: "${{ inputs.manylinux-image || format('ghcr.io/rocm/jax-manylinux_2_28-rocm-{0}:latest', inputs.rocm-release-version) }}"  # zizmor: ignore[unpinned-images]
+      image: ghcr.io/rocm/jax-build-ubu24.rocmless@sha256:fe966c6f77ad7dcd279bad02833d4cd70f72a9cd87640912ae37b20b3de7edea
       volumes:
         - /data:/data
       options: >-
@@ -172,6 +172,22 @@ jobs:
         uses: google-ml-infra/actions/ci_connection@7f5ca0c263a81ed09ea276524c1b9192f1304e3c
         with:
           halt-dispatch-input: ${{ inputs.halt-for-connection }}
+      - name: Install TheRock (ROCm via pip)
+        env:
+          ROCM_TAG: ${{ inputs.rocm-tag }}
+        run: |
+          set -euo pipefail
+          case "${ROCM_TAG}" in
+            therock-latest) index=https://nightly.repo.amd.com/rocm/whl-next/; pin="" ;;
+            therock-7.14) index=https://repo.amd.com/rocm/whl-multi-arch/; pin=7.14 ;;
+            therock-*) index=https://stable.repo.amd.com/rocm/whl-next/; pin="${ROCM_TAG#therock-}" ;;
+            *) echo "::error::rocm-tag '${ROCM_TAG}' has no TheRock pip release"; exit 1 ;;
+          esac
+          if [[ "${index}" == *whl-next* ]]; then index="${ROCM_PIP_INDEX_URL:-${index}}"; fi
+          python3.12 -m pip install --break-system-packages --pre --index-url "${index}" \
+            "rocm[libraries,devel,device-gfx942,device-gfx950]${pin:+==}${pin}"
+          rocm-sdk init
+          rocm-sdk path --root
       - name: Build ${{ inputs.artifact }}
         timeout-minutes: 120
         run: ./ci/build_rocm_artifacts.sh "$INPUTS_ARTIFACT"
