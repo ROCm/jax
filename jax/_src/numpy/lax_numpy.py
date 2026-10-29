@@ -2987,7 +2987,7 @@ def bincount(x: ArrayLike, weights: ArrayLike | None = None,
         asarray, x,
         "The error occurred because of argument 'x' of jnp.bincount. "
         "To avoid this error, pass a static `length` argument.")
-    length = max(minlength, x_arr.size and int(max(0, x_arr.max())) + 1)
+    length = max(minlength, x_arr.size and max(0, int(x_arr.max())) + 1)
   else:
     length = core.concrete_dim_or_error(
         length,
@@ -4223,7 +4223,7 @@ def _pad(array: ArrayLike, pad_width: PadValueLike[int], mode: str,
   elif mode in stat_funcs:
     if stat_length is not None:
       stat_length = _broadcast_to_pairs(stat_length, nd, "stat_length")
-    return _pad_stats(array, pad_width, stat_length, stat_funcs[str(mode)])
+    return _pad_stats(array, pad_width, stat_length, stat_funcs[mode])
 
   elif mode == "empty":
     return _pad_empty(array, pad_width)
@@ -6156,7 +6156,7 @@ def i0(x: ArrayLike) -> Array:
   Examples:
     >>> x = jnp.array([-2, -1, 0, 1, 2])
     >>> jnp.i0(x)
-    Array([2.2795851, 1.266066 , 1.0000001, 1.266066 , 2.2795851], dtype=float32)
+    Array([2.2795854, 1.2660658, 1.       , 1.2660658, 2.2795854], dtype=float32)
   """
   x, = util.promote_args_inexact("i0", x)
   if not issubdtype(x.dtype, np.floating):

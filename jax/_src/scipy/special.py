@@ -37,15 +37,16 @@ from jax._src.lax.erf import (
     erfcx_grad_large,
     erfcx_impl as _erfcx_impl,
     erfcx_large,
+    ndtr as _ndtr,
 )
 from jax._src.lax.lax import AccuracyMode, _const as _lax_const
-from jax._src.lax.special import ndtr as _ndtr
 from jax._src.lax.special import random_gamma_grad
 from jax._src.numpy import einsum as jnp_einsum
 from jax._src.numpy import lax_numpy
 from jax._src.numpy import vectorize as jnp_vectorize
 from jax._src.numpy.util import promote_args_complex, promote_args_inexact, promote_dtypes_inexact
 from jax._src.ops import special as ops_special
+from jax._src.scipy.bessel import jn as jn
 from jax._src.scipy.gamma import gamma_real
 from jax._src.third_party.scipy.betaln import betaln as _betaln_impl
 from jax._src.typing import Array, ArrayLike
@@ -1527,7 +1528,7 @@ def _dawsn_impl(x: Array) -> Array:
   return sign * result
 
 
-@custom_derivatives.custom_jvp
+@jit
 def logit(x: ArrayLike) -> Array:
   r"""The logit function
 
@@ -1544,9 +1545,38 @@ def logit(x: ArrayLike) -> Array:
     array containing values of the logit function.
   """
   x, = promote_args_inexact("logit", x)
-  return lax.log(lax.div(x, lax.sub(_lax_const(x, 1), x)))
-logit.defjvps(
-    lambda g, ans, x: lax.div(g, lax.mul(x, lax.sub(_lax_const(x, 1), x))))
+  return _logit(x)
+
+
+@custom_derivatives.custom_jvp
+def _logit(x: Array) -> Array:
+  # Computing log(x / (1 - x)) directly loses precision in two places:
+  # - Near x = 0.5, x / (1 - x) is close to 1, so rounding the quotient to
+  #   floating-point before calling log throws away low bits (and just below
+  #   0.5, 1 - x rounds to 0.5, cutting the result in half).
+  # - Near x = 1, 1 - x rounds away low bits before the division.
+  #
+  # Use symmetry around 0.5 (logit(1 - x) = -logit(x)) to fold x onto
+  # p = min(x, 1 - x) in [0, 0.5], compute logit(p) <= 0, and flip the sign at
+  # the end when x >= 0.5.
+  lt_half = x < 0.5
+  p = jnp.where(lt_half, x, 1 - x)
+  d = jnp.where(lt_half, 0.5 - x, x - 0.5)
+
+  # Split into two regions that share a single log1p call:
+  # - Near 0.5 (0.25 <= x <= 0.75, so d <= 0.25): both d = |x - 0.5| and
+  #   p = min(x, 1 - x) subtract numbers within a factor of 2 of each other,
+  #   so both are exact without rounding error, and 1 - p = 0.5 + d = p + 2 * d.
+  #   Thus:
+  #     logit(p) = -log((1 - p) / p) = -log1p(2 * d / p).
+  # - Away from 0.5 (p < 0.25): write logit(p) = log(p) - log1p(-p).
+  #   Here |log(p)| > 1.38 while |log1p(-p)| < 0.29, so the two terms do not
+  #   cancel (and p <= 0 naturally gives -inf at 0 and NaN for < 0).
+  near_half = d <= 0.25
+  l1p = jnp.log1p(jnp.where(near_half, 2 * d / p, -p))
+  res = jnp.where(near_half, -l1p, jnp.log(p) - l1p)
+  return jnp.where(lt_half, res, -res)
+_logit.defjvps(lambda g, ans, x: g / (x * (1 - x)))
 
 
 def expit(x: ArrayLike) -> Array:
@@ -3098,6 +3128,10 @@ def sph_harm_y(n: Array,
 
 def _expint1(x: Array) -> Array:
   # 0 < x <= 2
+  # jnp.piecewise evaluates every branch, so bound x to a safe domain.
+  x = jnp.where(
+      (x < _lax_const(x, 0.0)) | jnp.isinf(x), _lax_const(x, 1.0), x
+  )
   A = np.array([
     -5.350447357812542947283e0,
     2.185049168816613393830e2,
@@ -3121,7 +3155,9 @@ def _expint1(x: Array) -> Array:
 
 def _eval_expint_k(A: ArrayLike, B: ArrayLike, x: Array) -> Array:
   # helper function for all subsequent intervals
+  # jnp.piecewise evaluates every branch, so bound x to a safe domain.
   one = _lax_const(x, 1.0)
+  x = jnp.where((x <= _lax_const(x, 0.0)) | jnp.isinf(x), one, x)
   w = one / x
   f = jnp.polyval(A, w) / jnp.polyval(B, w)
   f = w * f + one
@@ -3286,18 +3322,30 @@ def _expint7(x):
 def _expi_pos(x: Array) -> Array:
   # x >= 0
   _c = _lax_const
-  conds = [(_c(x, 0) <= x) & (x <= _c(x, 2))] + [
-    (_c(x, 2 ** i) < x) & (x <= _c(x, 2 ** (i + 1))) for i in range(1, 6)
-  ]
+  conds = (
+      [(_c(x, 0) <= x) & (x <= _c(x, 2))]
+      + [(_c(x, 2**i) < x) & (x <= _c(x, 2 ** (i + 1))) for i in range(1, 6)]
+      + [jnp.isposinf(x)]
+  )
   return jnp.piecewise(
-    x,
-    conds,
-    [_expint1, _expint2, _expint3, _expint4, _expint5, _expint6, _expint7],
+      x,
+      conds,
+      [
+          _expint1,
+          _expint2,
+          _expint3,
+          _expint4,
+          _expint5,
+          _expint6,
+          np.inf,
+          _expint7,
+      ],
   )
 
 def _expi_neg(x: Array) -> Array:
   # x < 0
-  return -exp1(-x)
+  # jnp.piecewise evaluates every branch, so bound x to a safe domain.
+  return -exp1(jnp.where(x >= _lax_const(x, 0.0), _lax_const(x, 1.0), -x))
 
 @custom_derivatives.custom_jvp
 @jit
@@ -4063,58 +4111,55 @@ def _hyp1f1_asymptotic(a, b, x):
 
 @jit
 @jnp_vectorize.vectorize
+def _hyp1f1_param_derivative(a, b, x, p):
+  """Computes the parameter-derivative series for 1F1 at parameter ``p``.
+
+  Evaluates ``sum_{k=1}^inf ((a)_k / (b)_k) (x^k / k!) H_k(p)`` where
+  ``H_k(p) = sum_{j=0}^{k-1} 1 / (p + j) = digamma(p + k) - digamma(p)``.
+  This equals ``d/da hyp1f1(a, b, x)`` for ``p = a`` and
+  ``-d/db hyp1f1(a, b, x)`` for ``p = b``. Factored into a single ``@jit``
+  helper to save trace and compile time across ``a`` and ``b``.
+  """
+  precision = dtypes.finfo(x.dtype).eps
+
+  def body(state):
+    serie, k, term, h = state
+    serie += term * h
+    term *= (a + k) / (b + k) * x / (k + 1)
+    h += 1 / (p + k)
+    k += 1
+
+    return serie, k, term, h
+
+  def cond(state):
+    serie, k, term, _ = state
+
+    return (k < 250) & (lax.abs(term) / lax.abs(serie) > precision)
+
+  term = a / b * x
+  h = 1 / p
+  serie = jnp.zeros((), dtype=dtypes.result_type(term, h))
+  init = serie, 1, term, h
+
+  return lax.while_loop(cond, body, init)[0]
+
+
 def _hyp1f1_a_derivative(a, b, x):
   """
   Define it as a series using:
   https://functions.wolfram.com/HypergeometricFunctions/Hypergeometric1F1/20/01/01/
   """
 
-  precision = dtypes.finfo(x.dtype).eps
-
-  def body(state):
-    serie, k, term = state
-    serie += term * (digamma(a + k) - digamma(a))
-    term *= (a + k) / (b + k) * x / (k + 1)
-    k += 1
-
-    return serie, k, term
-
-  def cond(state):
-    serie, k, term = state
-
-    return (k < 250) & (lax.abs(term) / lax.abs(serie) > precision)
-
-  init = 0, 1, a / b * x
-
-  return lax.while_loop(cond, body, init)[0]
+  return _hyp1f1_param_derivative(a, b, x, a)
 
 
-@jit
-@jnp_vectorize.vectorize
 def _hyp1f1_b_derivative(a, b, x):
   """
   Define it as a series using:
   https://functions.wolfram.com/HypergeometricFunctions/Hypergeometric1F1/20/01/02/
   """
 
-  precision = dtypes.finfo(x.dtype).eps
-
-  def body(state):
-    serie, k, term = state
-    serie += term * (digamma(b) - digamma(b + k))
-    term *= (a + k) / (b + k) * x / (k + 1)
-    k += 1
-
-    return serie, k, term
-
-  def cond(state):
-    serie, k, term = state
-
-    return (k < 250) & (lax.abs(term) / lax.abs(serie) > precision)
-
-  init = 0, 1, a / b * x
-
-  return lax.while_loop(cond, body, init)[0]
+  return -_hyp1f1_param_derivative(a, b, x, b)
 
 
 @jit
@@ -4415,89 +4460,64 @@ def _hyp2f1_digamma_transform(a, b, c, x, log_gamma_ratio, sgn_gamma_ratio):
 
 @jit
 @jnp_vectorize.vectorize
+def _hyp2f1_param_derivative(a, b, c, x, p):
+  """Computes the parameter-derivative series for 2F1 at parameter ``p``.
+
+  Evaluates ``sum_{k=1}^inf ((a)_k (b)_k / (c)_k) (x^k / k!) H_k(p)`` where
+  ``H_k(p) = sum_{j=0}^{k-1} 1 / (p + j) = digamma(p + k) - digamma(p)``.
+  This equals ``d/dp hyp2f1(a, b, c, x)`` for ``p in {a, b}`` and
+  ``-d/dc hyp2f1(a, b, c, x)`` for ``p = c``. Factored into a single ``@jit``
+  helper to save trace and compile time across ``a``, ``b``, and ``c``.
+  """
+  precision = dtypes.finfo(x.dtype).eps
+
+  def body(state):
+    serie, k, term, h = state
+    serie += term * h
+    term *= (a + k) * (b + k) / (c + k) / (k + 1) * x
+    h += 1 / (p + k)
+    k += 1
+
+    return serie, k, term, h
+
+  def cond(state):
+    serie, k, term, _ = state
+
+    return (k < 250) & (lax.abs(term) / lax.abs(serie) > precision)
+
+  term = a * b / c * x
+  h = 1 / p
+  serie = jnp.zeros((), dtype=dtypes.result_type(term, h))
+  init = serie, 1, term, h
+
+  return lax.while_loop(cond, body, init)[0]
+
+
 def _hyp2f1_a_derivative(a, b, c, x):
   """
   Define it as a series using:
   https://functions.wolfram.com/HypergeometricFunctions/Hypergeometric2F1/20/01/01/
   """
 
-  precision = dtypes.finfo(x.dtype).eps
-
-  def body(state):
-    serie, k, term, h = state
-    serie += term * h
-    term *= (a + k) * (b + k) / (c + k) / (k + 1) * x
-    h += 1 / (a + k)
-    k += 1
-
-    return serie, k, term, h
-
-  def cond(state):
-    serie, k, term, _ = state
-
-    return (k < 250) & (lax.abs(term) / lax.abs(serie) > precision)
-
-  init = 0, 1, a * b / c * x, 1 / a
-
-  return lax.while_loop(cond, body, init)[0]
+  return _hyp2f1_param_derivative(a, b, c, x, a)
 
 
-@jit
-@jnp_vectorize.vectorize
 def _hyp2f1_b_derivative(a, b, c, x):
   """
   Define it as a series using:
   https://functions.wolfram.com/HypergeometricFunctions/Hypergeometric2F1/20/01/02/
   """
 
-  precision = dtypes.finfo(x.dtype).eps
-
-  def body(state):
-    serie, k, term, h = state
-    serie += term * h
-    term *= (a + k) * (b + k) / (c + k) / (k + 1) * x
-    h += 1 / (b + k)
-    k += 1
-
-    return serie, k, term, h
-
-  def cond(state):
-    serie, k, term, _ = state
-
-    return (k < 250) & (lax.abs(term) / lax.abs(serie) > precision)
-
-  init = 0, 1, a * b / c * x, 1 / b
-
-  return lax.while_loop(cond, body, init)[0]
+  return _hyp2f1_param_derivative(a, b, c, x, b)
 
 
-@jit
-@jnp_vectorize.vectorize
 def _hyp2f1_c_derivative(a, b, c, x):
   """
   Define it as a series using:
   https://functions.wolfram.com/HypergeometricFunctions/Hypergeometric2F1/20/01/03/
   """
 
-  precision = dtypes.finfo(x.dtype).eps
-
-  def body(state):
-    serie, k, term, h = state
-    serie += term * h
-    term *= (a + k) * (b + k) / (c + k) / (k + 1) * x
-    h -= 1 / (c + k)
-    k += 1
-
-    return serie, k, term, h
-
-  def cond(state):
-    serie, k, term, _ = state
-
-    return (k < 250) & (lax.abs(term) / lax.abs(serie) > precision)
-
-  init = 0, 1, a * b / c * x, -1 / c
-
-  return lax.while_loop(cond, body, init)[0]
+  return -_hyp2f1_param_derivative(a, b, c, x, c)
 
 
 @jit

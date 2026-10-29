@@ -423,8 +423,8 @@ def gather(operand: ArrayLike, start_indices: ArrayLike,
   return gather_p.bind(
       operand, start_indices, dimension_numbers=dimension_numbers,
       slice_sizes=core.canonicalize_shape(slice_sizes),
-      unique_indices=bool(unique_indices),
-      indices_are_sorted=bool(indices_are_sorted),
+      unique_indices=unique_indices,
+      indices_are_sorted=indices_are_sorted,
       mode=parsed_mode,
       fill_value=fill_value)
 
@@ -1000,7 +1000,6 @@ def slice_in_dim(operand: Array | np.ndarray, start_index: int | None,
   if limit_index_int < 0:
     limit_index_int = limit_index_int + len_axis
 
-  axis = int(axis)
   start_indices[axis] = start_index_int
   limit_indices[axis] = limit_index_int
   strides[axis] = core._canonicalize_dimension(stride)
@@ -1055,7 +1054,7 @@ def index_in_dim(operand: Array | np.ndarray, index: int, axis: int = 0,
     - :func:`jax.lax.slice_in_dim`
     - :func:`jax.lax.dynamic_index_in_dim`
   """
-  index, axis = core._canonicalize_dimension(index), int(axis)
+  index = core._canonicalize_dimension(index)
   axis_size = operand.shape[axis]
   wrapped_index = index + axis_size if index < 0 else index
   if not 0 <= wrapped_index < axis_size:
@@ -1124,7 +1123,6 @@ def dynamic_slice_in_dim(operand: Array | np.ndarray,
   """
   start_indices: list[ArrayLike] = [lax._const(start_index, 0)] * operand.ndim
   slice_sizes = list(operand.shape)
-  axis = int(axis)
   allow_negative = [False] * operand.ndim
   allow_negative[axis] = allow_negative_indices
   start_indices[axis] = start_index
@@ -1255,7 +1253,6 @@ def dynamic_update_slice_in_dim(operand: Array | np.ndarray,
     - :func:`jax.lax.dynamic_update_index_in_dim`
     - :func:`jax.lax.dynamic_slice_in_dim`
   """
-  axis = int(axis)
   start_indices: list[ArrayLike] = [lax._const(start_index, 0)] * lax._ndim(operand)
   start_indices[axis] = start_index
   allow_negative = [False] * operand.ndim
@@ -1328,7 +1325,6 @@ def dynamic_update_index_in_dim(operand: Array | np.ndarray,
     - :func:`jax.lax.dynamic_update_index_in_dim`
     - :func:`jax.lax.dynamic_index_in_dim`
   """
-  axis = int(axis)
   if lax._ndim(update) != lax._ndim(operand):
     assert lax._ndim(update) + 1 == lax._ndim(operand)
     update = lax.expand_dims(update, (axis,))
@@ -1484,6 +1480,7 @@ slice_p = standard_primitive(_slice_shape_rule, input_dtype, 'slice',
 ad.primitive_jvps[slice_p] = _slice_jvp_rule
 ad.fancy_transposes[slice_p] = _slice_transpose_fancy
 batching.primitive_batchers[slice_p] = _slice_batching_rule
+lax_utils.register_unreduced_lojax(slice_p)
 
 # Override the standard impl to defer to dynamic_slice whenever possible.
 # This lets us reuse the same program for many applications of slicing for as
@@ -1793,6 +1790,7 @@ ad.primitive_transposes[dynamic_update_slice_p] = \
     _dynamic_update_slice_transpose_rule
 batching.primitive_batchers[dynamic_update_slice_p] = \
     _dynamic_update_slice_batching_rule
+lax_utils.register_unreduced_lojax(dynamic_update_slice_p)
 
 def _dynamic_update_slice_lower(ctx, x, update, *start_indices):
   aval_out, = ctx.avals_out
@@ -3051,6 +3049,7 @@ scatter_add_p = standard_primitive(
 ad.primitive_jvps[scatter_add_p] = partial(_scatter_addsub_jvp, scatter_add_p)
 ad.primitive_transposes[scatter_add_p] = partial(_scatter_addsub_transpose_rule, scatter_add_p)
 batching.fancy_primitive_batchers[scatter_add_p] = partial(_scatter_batching_rule, scatter_add_p)
+lax_utils.register_unreduced_lojax(scatter_add_p)
 
 scatter_sub_p = standard_primitive(
     _scatter_shape_rule, _scatter_dtype_rule, 'scatter-sub',

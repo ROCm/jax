@@ -249,6 +249,8 @@ class PinnedBufferTest(jtu.JaxTestCase):
       f(x)
 
   def test_basic_vmem(self):
+    if not jtu.is_device_tpu_at_least(5):
+      self.skipTest("Only supported on TPU v5+")
     @jax.jit
     def f(x):
       x_pinned = pin(x, to='vmem')
@@ -382,6 +384,17 @@ class CoreMapTest(jtu.JaxTestCase):
         Exception, "You can only close over scalars and Refs"
     ):
       f(x)
+
+  def test_raises_on_write_to_array_input(self):
+    @pl.kernel(mesh=pltpu.TensorCoreMesh(axis_name="x"))
+    def kernel(x_ref, y_ref):
+      pltpu.sync_copy(x_ref, y_ref)
+
+    x = jnp.arange(8 * 128, dtype=jnp.int32).reshape((8, 128))
+    with self.assertRaisesRegex(
+        ValueError, "writes to input y_ref .* which was passed as an array"
+    ):
+      kernel(x, jnp.zeros_like(x))
 
   @parameterized.product(
       core_type=[*pltpu.CoreType], use_tc_tiling_on_sc=[True, False]
