@@ -30,12 +30,16 @@ on:
         default: "3.12"
         options:
           - "3.12"
+          - "3.13"
+          - "3.14"
+          - "3.15"
       rocm-version:
         description: "Which ROCm version to test?"
         type: choice
         default: "7.2.0"
         options:
           - "7.2.0"
+          - "10"
       rocm-tag:
         description: "ROCm tag for container image (e.g., rocm720)"
         type: string
@@ -66,6 +70,13 @@ on:
         description: "S3 URI for ROCm plugin/PJRT wheels (use 'latest' to resolve via LATEST pointer)"
         type: string
         default: 'latest'
+      jax-jaxlib-source:
+        description: "Where to take the base jax/jaxlib wheels from: 'upstream' or 'vendor'"
+        type: choice
+        default: 'upstream'
+        options:
+          - 'upstream'
+          - 'vendor'
       halt-for-connection:
         description: 'Should this workflow run wait for a remote connection?'
         type: string
