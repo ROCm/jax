@@ -547,9 +547,9 @@ void RegisterFfiApis(nb::module_& m) {
         }
         nb::dict handlers;
         handlers["xla_buffer_python_gpu_callback"] =
-            EncapsulateFfiHandler(&kXlaBufferPythonGpuCallbackRocm);
+            EncapsulateFfiHandler(kXlaBufferPythonGpuCallbackRocm);
         handlers["xla_buffer_python_gpu_callback_cmd_buffer"] =
-            EncapsulateFfiHandler(&kXlaBufferPythonGpuCallbackRocmCmdBuffer);
+            EncapsulateFfiHandler(kXlaBufferPythonGpuCallbackRocmCmdBuffer);
         return handlers;
       },
       nb::arg("platform"));
