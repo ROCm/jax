@@ -505,7 +505,7 @@ jobs:
         fail-fast: false
         matrix:
           runner: ["amd-do-linux.jax.cpu"]
-          artifact: ["jax-rocm-plugin", "jax-rocm-pjrt"]
+          artifact: ${{ (github.repository_owner == 'ROCm' && fromJSON('["jax-rocm-plugin", "jax-rocm-pjrt", "jax", "jaxlib"]')) || fromJSON('["jax-rocm-plugin", "jax-rocm-pjrt"]') }}
           python: ["3.12", "3.13", "3.14", "3.15"]
           rocm: [
             {label: "TheRock 10.0.0", wheel-version: "10", release-version: "10.0.0"},
@@ -516,6 +516,18 @@ jobs:
             - artifact: "jax-rocm-pjrt"
               python: "3.14"
             - artifact: "jax-rocm-pjrt"
+              python: "3.15"
+            - artifact: "jax"
+              python: "3.13"
+            - artifact: "jax"
+              python: "3.14"
+            - artifact: "jax"
+              python: "3.15"
+            - artifact: "jaxlib"
+              python: "3.13"
+            - artifact: "jaxlib"
+              python: "3.14"
+            - artifact: "jaxlib"
               python: "3.15"
     name: "Build ROCm artifacts ${{ matrix.rocm.label }}"
     with:
@@ -562,6 +574,7 @@ jobs:
       jaxlib-version: "head"
       gcs_download_uri: ${{ needs.build-jaxlib-artifact.outputs.gcs_upload_uri || 'gs://jax-nightly-artifacts/latest' }}
       s3_download_uri: 's3://jax-ci-amd/rocm-wheels/${{ github.repository }}/${{ github.ref_name }}/${{ matrix.rocm.release-version }}/wheel-tests-continuous/${{ github.run_number }}/${{ github.run_attempt }}'
+      jax-jaxlib-source: ${{ github.repository_owner == 'ROCm' && 'vendor' || 'upstream' }}
       halt-for-connection: 'no'
 
   # LINT.IfChange(run_bazel_test_rocm)
@@ -601,6 +614,7 @@ jobs:
       build_jaxlib: ${{ 'false' }}
       build_jax: ${{ 'false' }}
       jaxlib-version: "head"
+      jax-jaxlib-source: ${{ github.repository_owner == 'ROCm' && 'vendor' || 'upstream' }}
       run_multiaccelerator_tests: ${{ 'false' }}
       clone_main_xla: 0
       xla_commit: ''
