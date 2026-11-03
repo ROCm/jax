@@ -19,6 +19,7 @@ import pathlib
 
 from jax._src import hardware_utils
 from jax._src.lib import xla_client
+from jaxlib import _jax
 import jax._src.xla_bridge as xb
 
 _MIN_SHM_SIZE_MB = 64
@@ -105,13 +106,14 @@ def initialize():
       xla_client.register_custom_type(
           _name, _value, platform='ROCM'
       )
-    for _name, _value in rocm_plugin_extension.ffi_handlers().items():
+    # Prefer jaxlib's buffer callback handlers when available; retain the plugin
+    # handlers for compatibility with older jaxlib versions.
+    handlers = dict(rocm_plugin_extension.ffi_handlers())
+    if hasattr(_jax, 'gpu_buffer_callback_handlers'):
+      handlers.update(_jax.gpu_buffer_callback_handlers('ROCM'))
+    for _name, _value in handlers.items():
       xla_client.register_custom_call_target(
           _name, _value, platform='ROCM', api_version=1
-      )
-    for _name, _capsule in xla_client._xla.rocm_buffer_callback_handlers().items():
-      xla_client.register_custom_call_target(
-          _name, _capsule, platform='ROCM', api_version=1
       )
   else:
     logger.warning('rocm_plugin_extension is not found.')

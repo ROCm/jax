@@ -89,6 +89,10 @@ nb::dict FfiHandlers() {
       EncapsulateFfiHandler(hip::kXlaFfiPythonGpuCallback);
   dict["xla_ffi_python_gpu_callback"] = gpu_callback_dict;
   dict["xla_ffi_partitioned_python_gpu_callback"] = gpu_callback_dict;
+  dict["xla_buffer_python_gpu_callback"] =
+      EncapsulateFfiHandler(hip::kXlaBufferPythonGpuCallback);
+  dict["xla_buffer_python_gpu_callback_cmd_buffer"] =
+      EncapsulateFfiHandler(hip::kXlaBufferPythonGpuCallbackCmdBuffer);
   dict["dce_sink"] =
       EncapsulateFfiHandler(hip::dce_sink_gpu_ffi);
   return dict;

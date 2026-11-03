@@ -33,6 +33,7 @@ limitations under the License.
 #include "absl/strings/str_format.h"
 #include "absl/types/span.h"
 #include "include/dlpack/dlpack.h"
+#include "jaxlib/kernel_nanobind_helpers.h"
 #include "nanobind/nanobind.h"
 #include "nanobind/stl/optional.h"  // IWYU pragma: keep
 #include "nanobind/stl/pair.h"  // IWYU pragma: keep
@@ -535,14 +536,23 @@ void RegisterFfiApis(nb::module_& m) {
       nb::arg("fn_name"), nb::arg("fn"), nb::arg("platform"),
       nb::arg("api_version") = 0, nb::arg("traits") = 0);
 
-  m.def("rocm_buffer_callback_handlers", []() {
-    nb::dict handlers;
-    handlers["xla_buffer_python_gpu_callback"] =
-        nb::capsule(absl::bit_cast<void*>(&kXlaBufferPythonGpuCallbackRocm));
-    handlers["xla_buffer_python_gpu_callback_cmd_buffer"] = nb::capsule(
-        absl::bit_cast<void*>(&kXlaBufferPythonGpuCallbackRocmCmdBuffer));
-    return handlers;
-  });
+  m.def(
+      "gpu_buffer_callback_handlers",
+      [](const std::string& platform) {
+        if (platform != "ROCM") {
+          std::string message = absl::StrFormat(
+              "gpu_buffer_callback_handlers does not support platform '%s'",
+              platform);
+          throw nb::value_error(message.c_str());
+        }
+        nb::dict handlers;
+        handlers["xla_buffer_python_gpu_callback"] =
+            EncapsulateFfiHandler(&kXlaBufferPythonGpuCallbackRocm);
+        handlers["xla_buffer_python_gpu_callback_cmd_buffer"] =
+            EncapsulateFfiHandler(&kXlaBufferPythonGpuCallbackRocmCmdBuffer);
+        return handlers;
+      },
+      nb::arg("platform"));
 
   m.def(
       "custom_call_targets",

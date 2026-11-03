@@ -29,10 +29,8 @@ GpuTransposePlanCacheTypeInfo();
 
 XLA_FFI_DECLARE_HANDLER_SYMBOL(kGpuTransposePlanCacheInstantiate);
 XLA_FFI_DECLARE_HANDLER_SYMBOL(kXlaFfiPythonGpuCallback);
-#if defined(JAX_GPU_CUDA) || defined(JAX_GPU_ONEAPI)
 XLA_FFI_DECLARE_HANDLER_SYMBOL(kXlaBufferPythonGpuCallback);
 XLA_FFI_DECLARE_HANDLER_SYMBOL(kXlaBufferPythonGpuCallbackCmdBuffer);
-#endif
 XLA_FFI_DECLARE_HANDLER_SYMBOL(dce_sink_gpu_ffi);
 
 }  // namespace JAX_GPU_NAMESPACE
