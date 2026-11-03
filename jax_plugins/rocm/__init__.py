@@ -109,5 +109,9 @@ def initialize():
       xla_client.register_custom_call_target(
           _name, _value, platform='ROCM', api_version=1
       )
+    for _name, _capsule in xla_client._xla.rocm_buffer_callback_handlers().items():
+      xla_client.register_custom_call_target(
+          _name, _capsule, platform='ROCM', api_version=1
+      )
   else:
     logger.warning('rocm_plugin_extension is not found.')

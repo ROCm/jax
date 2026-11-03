@@ -431,6 +431,30 @@ nb::tuple PyFfiAnyBuffer::DLPackDevice() const {
   return nb::make_tuple(static_cast<int32_t>(device_type_), device_ordinal_);
 }
 
+// Keep nanobind conversions alongside the Python type bindings to avoid
+// sharing bound types across incompatible nanobind ABIs.
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    kXlaBufferPythonGpuCallbackRocm,
+    (XlaBufferCallback<kDLROCM>),
+    xla::ffi::Ffi::Bind()
+        .Ctx<xla::ffi::Context>()
+        .Ctx<xla::ffi::DeviceOrdinal>()
+        .Ctx<xla::ffi::UserData<xla::FfiLoadedHostCallbacks>>()
+        .Attr<uint64_t>("index")
+        .RemainingArgs()
+        .RemainingRets());
+XLA_FFI_DEFINE_HANDLER_SYMBOL(
+    kXlaBufferPythonGpuCallbackRocmCmdBuffer,
+    (XlaBufferCallback<kDLROCM>),
+    xla::ffi::Ffi::Bind()
+        .Ctx<xla::ffi::Context>()
+        .Ctx<xla::ffi::DeviceOrdinal>()
+        .Ctx<xla::ffi::UserData<xla::FfiLoadedHostCallbacks>>()
+        .Attr<uint64_t>("index")
+        .RemainingArgs()
+        .RemainingRets(),
+    {ffi::Traits::kCmdBufferCompatible});
+
 void RegisterFfiApis(nb::module_& m) {
   nb::module_ ffi_module =
       m.def_submodule("ffi", "Python bindings for the XLA FFI.");
@@ -510,6 +534,15 @@ void RegisterFfiApis(nb::module_& m) {
       },
       nb::arg("fn_name"), nb::arg("fn"), nb::arg("platform"),
       nb::arg("api_version") = 0, nb::arg("traits") = 0);
+
+  m.def("rocm_buffer_callback_handlers", []() {
+    nb::dict handlers;
+    handlers["xla_buffer_python_gpu_callback"] =
+        nb::capsule(absl::bit_cast<void*>(kXlaBufferPythonGpuCallbackRocm));
+    handlers["xla_buffer_python_gpu_callback_cmd_buffer"] = nb::capsule(
+        absl::bit_cast<void*>(kXlaBufferPythonGpuCallbackRocmCmdBuffer));
+    return handlers;
+  });
 
   m.def(
       "custom_call_targets",

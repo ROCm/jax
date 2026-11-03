@@ -299,14 +299,13 @@ XLA_FFI_REGISTER_HANDLER(xla::ffi::GetXlaFfiApi(),
                          {kGpuTransposePlanCacheInstantiate, nullptr, nullptr,
                           kXlaFfiPythonGpuCallback});
 
+#if defined(JAX_GPU_CUDA) || defined(JAX_GPU_ONEAPI)
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
     kXlaBufferPythonGpuCallback,
 #ifdef JAX_GPU_CUDA
     (jax::XlaBufferCallback<kDLCUDA>),
-#elif defined(JAX_GPU_ONEAPI)
-    (jax::XlaBufferCallback<kDLOneAPI>),
 #else
-    (jax::XlaBufferCallback<kDLROCM>),
+    (jax::XlaBufferCallback<kDLOneAPI>),
 #endif
     xla::ffi::Ffi::Bind()
         .Ctx<xla::ffi::Context>()
@@ -320,10 +319,8 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     kXlaBufferPythonGpuCallbackCmdBuffer,
 #ifdef JAX_GPU_CUDA
     (jax::XlaBufferCallback<kDLCUDA>),
-#elif defined(JAX_GPU_ONEAPI)
-    (jax::XlaBufferCallback<kDLOneAPI>),
 #else
-    (jax::XlaBufferCallback<kDLROCM>),
+    (jax::XlaBufferCallback<kDLOneAPI>),
 #endif
     xla::ffi::Ffi::Bind()
         .Ctx<xla::ffi::Context>()
@@ -342,6 +339,7 @@ XLA_FFI_REGISTER_HANDLER(xla::ffi::GetXlaFfiApi(),
                          "xla_buffer_python_gpu_callback_cmd_buffer",
                          absl::AsciiStrToUpper(JAX_GPU_PLUGIN_NAME),
                          kXlaBufferPythonGpuCallbackCmdBuffer);
+#endif  // JAX_GPU_CUDA || JAX_GPU_ONEAPI
 
 xla::ffi::Error DceSinkImpl(xla::ffi::AnyBuffer x) {
   return xla::ffi::Error::Success();
