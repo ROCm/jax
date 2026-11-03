@@ -538,9 +538,9 @@ void RegisterFfiApis(nb::module_& m) {
   m.def("rocm_buffer_callback_handlers", []() {
     nb::dict handlers;
     handlers["xla_buffer_python_gpu_callback"] =
-        nb::capsule(absl::bit_cast<void*>(kXlaBufferPythonGpuCallbackRocm));
+        nb::capsule(absl::bit_cast<void*>(&kXlaBufferPythonGpuCallbackRocm));
     handlers["xla_buffer_python_gpu_callback_cmd_buffer"] = nb::capsule(
-        absl::bit_cast<void*>(kXlaBufferPythonGpuCallbackRocmCmdBuffer));
+        absl::bit_cast<void*>(&kXlaBufferPythonGpuCallbackRocmCmdBuffer));
     return handlers;
   });
 
