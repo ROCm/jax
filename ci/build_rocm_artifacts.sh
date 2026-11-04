@@ -77,18 +77,34 @@ fi
 
 echo "Building $artifact..."
 
-python build/build.py build --wheels="$artifact" \
-  --bazel_startup_options="--bazelrc=build/rocm/rocm.bazelrc" \
-  $bazel_startup_options \
-  --bazel_options=--config=rocm_release_wheel \
-  --bazel_options=--config=rocm_rbe \
-  --bazel_options=--remote_download_toplevel \
-  --python_version=$JAXCI_HERMETIC_PYTHON_VERSION \
-  --verbose --detailed_timestamped_log \
-  --output_path="$JAXCI_OUTPUT_DIR" \
-  $artifact_tag_flags \
-  $override_xla_repo \
-  "${rocm_path_flags[@]}"
+# Temporary, for testing on this branch only. Do not include in the upstream PR.
+# rocm_release_wheel forces libstdc++. Upstream Linux jaxlib uses ci_linux_x86_64,
+# which keeps the platform default: libc++ and static_libcxx. The plugin stays
+# on rocm_release_wheel so the test pair is libc++ jaxlib plus libstdc++ plugin.
+if [[ "$artifact" == "jaxlib" ]]; then
+  python build/build.py build --wheels="$artifact" \
+    $bazel_startup_options \
+    --bazel_options=--config=ci_linux_x86_64 \
+    --bazel_options=--config=rbe_cpu_pool \
+    --python_version=$JAXCI_HERMETIC_PYTHON_VERSION \
+    --verbose --detailed_timestamped_log \
+    --output_path="$JAXCI_OUTPUT_DIR" \
+    $artifact_tag_flags \
+    $override_xla_repo
+else
+  python build/build.py build --wheels="$artifact" \
+    --bazel_startup_options="--bazelrc=build/rocm/rocm.bazelrc" \
+    $bazel_startup_options \
+    --bazel_options=--config=rocm_release_wheel \
+    --bazel_options=--config=rocm_rbe \
+    --bazel_options=--remote_download_toplevel \
+    --python_version=$JAXCI_HERMETIC_PYTHON_VERSION \
+    --verbose --detailed_timestamped_log \
+    --output_path="$JAXCI_OUTPUT_DIR" \
+    $artifact_tag_flags \
+    $override_xla_repo \
+    "${rocm_path_flags[@]}"
+fi
 
 # Verify manylinux compliance. "jax" is pure Python, as in ci/build_artifacts.sh.
 if [[ "$artifact" != "jax" ]]; then
