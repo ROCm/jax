@@ -31,6 +31,7 @@ from jax._src.interpreters import batching
 from jax._src.interpreters import mlir
 from jax._src.lax import parallel as lax_parallel
 from jax._src.lib import cuda_versions
+from jax._src.lib import rocm_versions
 from jax._src.lib.mlir import ir
 from jax._src.lib.mlir.dialects import hlo
 from jax._src.sharding_impls import NamedSharding, PartitionSpec
@@ -361,6 +362,13 @@ def check_is_flash_attention(
         _, T, _, qH = query.shape
         _, S, _, vH = value.shape
 
+    if is_rocm_backend():
+      check_hipdnn_flash_attention_support(
+          qH, is_training=is_training, is_packed=is_packed,
+          is_paged_attention=is_paged_attention, is_fp8=is_fp8,
+          is_score_mod=is_score_mod)
+      return
+
     if is_cuda_compute_capability_equal("10.3") and cudnn_version < 91100:
       # cudnn support compute_cap 10.3 on cudnn 9.11+
       raise NotImplementedError(
@@ -405,7 +413,40 @@ def check_is_flash_attention(
             "score_mod (flex attention) requires a GPU with at least "
             "Hopper architecture.")
 
+def is_rocm_backend():
+  return 'rocm' in xla_bridge.get_backend().platform_version
+
+def check_hipdnn_flash_attention_support(
+    head_dim, *, is_training, is_packed, is_paged_attention, is_fp8,
+    is_score_mod):
+  # hipDNN 0.4 ships engines for forward attention with an optional bias and
+  # either no mask or a causal one. Everything else on this list has no engine,
+  # so XLA would fail to compile the Custom Call; raising here keeps the error
+  # on the jax call that asked for it.
+  unsupported = {
+      "training (hipDNN has no backward attention engine)": is_training,
+      "packed/ragged sequences": is_packed,
+      "paged attention": is_paged_attention,
+      "fp8": is_fp8,
+      "score_mod (flex attention)": is_score_mod,
+  }
+  for what, requested in unsupported.items():
+    if requested:
+      raise NotImplementedError(f"hipDNN attention does not support {what}.")
+
+  if head_dim % 8 != 0 or head_dim > 128:
+    raise NotImplementedError(
+        f"hipDNN attention needs a head dim <= 128 and a multiple of 8, but "
+        f"got {head_dim}.")
+
 def check_cudnn_version():
+  # On ROCm the custom calls below are served by hipDNN, which has its own
+  # version line; returning it here keeps the one call site platform-agnostic,
+  # but it is only ever compared against hipDNN thresholds.
+  if is_rocm_backend():
+    if rocm_versions is None:
+      raise RuntimeError("hipDNN is not detected.")
+    return rocm_versions.hipdnn_get_version()
   # check if cuDNN is installed
   if cuda_versions is None:
     raise RuntimeError("cuDNN is not detected.")
@@ -1307,7 +1348,7 @@ def _make_dot_product_attention_bwd_lower_wrapper(lower):
 def _register_fused_attention_primitive(
     name, *, abstract_eval, cuda_lowering, impl, lowering_impl,
     lowering_wrapper, batcher, static_argnums, infer_sharding_from_operands,
-    partition, sharding_rule):
+    partition, sharding_rule, lower_on_rocm=False):
   # Each fused-attention op is backed by two primitives: a core primitive that
   # lowers directly to the cuDNN custom call, and a wrapper primitive that also
   # carries the batching and custom-partitioning rules. Returns
@@ -1326,6 +1367,12 @@ def _register_fused_attention_primitive(
   core_p.def_impl(functools.partial(dispatch.apply_primitive, core_p))
   core_p.def_abstract_eval(abstract_eval)
   mlir.register_lowering(core_p, cuda_lowering, platform="cuda")
+  if lower_on_rocm:
+    # The lowering only builds the Custom Call; on ROCm hipDNN picks it up
+    # behind the same target name. Registered only for the primitives hipDNN
+    # has an engine for, so the others fail at lowering instead of at
+    # compilation.
+    mlir.register_lowering(core_p, cuda_lowering, platform="rocm")
 
   wrapper_p = core.Primitive(name + "_wrapper")
   wrapper_p.multiple_results = True
@@ -1357,7 +1404,8 @@ _dot_product_attention_fwd_p, _dot_product_attention_fwd_p_wrapper = (
         static_argnums=(11, 12, 13, 14, 15, 16, 17, 18, 19),
         infer_sharding_from_operands=_dot_product_attention_fwd_infer_sharding_from_operands,
         partition=_dot_product_attention_fwd_partition,
-        sharding_rule=_dot_product_attention_fwd_shardy_rule))
+        sharding_rule=_dot_product_attention_fwd_shardy_rule,
+        lower_on_rocm=True))
 
 _dot_product_attention_bwd_p, _dot_product_attention_bwd_p_wrapper = (
     _register_fused_attention_primitive(
@@ -2127,6 +2175,16 @@ def dot_product_attention(
   # in the kernel implementation (c++) code.
   cudnn_version = check_cudnn_version()
   layout = _normalize_layout(qkv_layout)
+
+  if is_rocm_backend():
+    if dropout_rate > 0:
+      raise NotImplementedError("hipDNN attention does not support dropout.")
+    if mask_type not in (MaskType.NO_MASK, MaskType.CAUSAL):
+      raise NotImplementedError(
+          f"hipDNN attention supports NO_MASK and CAUSAL only, got {mask_type}.")
+    if sliding_window_length is not None:
+      raise NotImplementedError(
+          "hipDNN attention does not support sliding windows.")
 
   if use_fp8:
     if fp8_params is None:
