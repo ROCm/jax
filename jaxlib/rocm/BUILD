@@ -599,6 +599,44 @@ py_library(
         ":_solver",
         ":_sparse",
         ":_triton",
+        ":_versions",
+    ],
+)
+
+cc_library(
+    name = "versions_helpers",
+    srcs = ["versions_helpers.cc"],
+    hdrs = ["versions_helpers.h"],
+    copts = [
+        "-fexceptions",
+        "-fno-strict-aliasing",
+    ],
+    features = ["-use_header_modules"],
+    deps = [
+        ":hip_gpu_kernel_helpers",
+        ":hip_vendor",
+        "@com_google_absl//absl/base:dynamic_annotations",
+        "@local_config_rocm//rocm:hip_runtime",
+        "@local_config_rocm//rocm:hipdnn",
+        "@local_config_rocm//rocm:hipdnn_headers",
+    ],
+)
+
+rocm_nanobind_extension(
+    name = "_versions",
+    srcs = ["versions.cc"],
+    copts = [
+        "-fexceptions",
+        "-fno-strict-aliasing",
+    ],
+    features = ["-use_header_modules"],
+    module_name = "_versions",
+    deps = [
+        ":hip_vendor",
+        ":versions_helpers",
+        "//jaxlib:kernel_nanobind_helpers",
+        "@local_config_rocm//rocm:hip_runtime",
+        "@nanobind",
     ],
 )
 

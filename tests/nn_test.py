@@ -306,7 +306,10 @@ class NNFunctionsTest(jtu.JaxTestCase):
   )
   def testDotProductAttention(self, dtype, group_num, use_vmap, impl):
     if impl == 'cudnn' and jtu.is_device_rocm():
-      raise unittest.SkipTest("cuDNN not available on ROCm.")
+      # hipDNN serves the forward Custom Call on ROCm but has no backward
+      # attention engine, and this test differentiates through it. The
+      # inference path is covered by fused_attention_stablehlo_test.
+      raise unittest.SkipTest("hipDNN has no backward attention engine.")
     if impl == 'cudnn' and not jtu.is_cuda_compute_capability_at_least("8.0"):
       raise unittest.SkipTest("Needs compute capability 8.0 or higher.")
     if impl == 'cudnn' and dtype == jnp.float32:

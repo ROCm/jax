@@ -145,6 +145,18 @@ for pkg_name in ['jax_cuda13_plugin', 'jax_cuda12_plugin', 'jaxlib.cuda']:
   else:
     break
 
+rocm_versions: ModuleType | None
+for pkg_name in ['jax_rocm10_plugin', 'jax_rocm7_plugin', 'jax_rocm60_plugin',
+                 'jaxlib.rocm']:
+  try:
+    rocm_versions = importlib.import_module(
+        f'{pkg_name}._versions'
+    )
+  except ImportError:
+    rocm_versions = None
+  else:
+    break
+
 import jaxlib.gpu_solver as gpu_solver  # noqa: F401
 import jaxlib.gpu_sparse as gpu_sparse  # noqa: F401
 import jaxlib.gpu_prng as gpu_prng  # noqa: F401

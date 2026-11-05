@@ -14,6 +14,7 @@
 
 from functools import partial
 from absl.testing import absltest
+from absl.testing import parameterized
 
 import numpy as np
 import jax
@@ -939,6 +940,105 @@ class DotProductAttentionDbiasTest(jtu.JaxTestCase):
         jax.grad(f, argnums=3), q, k, v, fmask)
     self.assertTrue(has_bias)
     self.assertTrue(has_dbias)
+
+
+class HipdnnAttentionTest(jtu.JaxTestCase):
+  """Covers the attention variants hipDNN has an engine for on ROCm.
+
+  hipDNN serves the __cudnn$fmha* Custom Calls on this backend, but only in
+  the forward direction and only with an optional bias and a causal or absent
+  mask. The training tests above stay CUDA-only for that reason.
+  """
+
+  # Routing these Custom Calls to hipDNN is opt-in; MIOpen remains the default.
+  HIPDNN_OPTIONS = {"xla_gpu_enable_hipdnn": True}
+
+  def setUp(self):
+    super().setUp()
+    if not jtu.test_device_matches(["rocm"]):
+      self.skipTest("hipDNN attention is a ROCm path.")
+
+  @staticmethod
+  def _attention_ref(query, key, value, bias, is_causal, scale):
+    # sdpa_ref above replaces the caller's bias with the causal mask rather
+    # than adding to it, so a bias combined with a causal mask needs its own
+    # reference.
+    logits = jnp.einsum("bqhd,bkhd->bhqk", query, key,
+                        preferred_element_type=jnp.float32) * scale
+    if bias is not None:
+      logits += bias.astype(jnp.float32)
+    if is_causal:
+      T, S = logits.shape[-2:]
+      row = jax.lax.broadcasted_iota(np.int32, (T, S), 0)
+      col = jax.lax.broadcasted_iota(np.int32, (T, S), 1)
+      logits = jnp.where(col <= row, logits, -jnp.inf)
+    probs = jax.nn.softmax(logits, axis=-1).astype(query.dtype)
+    return jnp.einsum("bhqk,bkhd->bqhd", probs, value,
+                      preferred_element_type=jnp.float32).astype(query.dtype)
+
+  @parameterized.product(
+      dtype=[jnp.bfloat16, jnp.float16],
+      mask_type=[MaskType.NO_MASK, MaskType.CAUSAL],
+      has_bias=[False, True],
+  )
+  def test_sdpa_inference(self, dtype, mask_type, has_bias):
+    B, T, S, N, H = 2, 128, 128, 4, 64
+    keys = jax.random.split(jax.random.key(0), 4)
+    query = jax.random.normal(keys[0], (B, T, N, H), dtype=dtype)
+    key = jax.random.normal(keys[1], (B, S, N, H), dtype=dtype)
+    value = jax.random.normal(keys[2], (B, S, N, H), dtype=dtype)
+    bias = (jax.random.normal(keys[3], (1, N, T, S), dtype=dtype)
+            if has_bias else None)
+
+    out = jax.jit(partial(dot_product_attention, scale=0.5,
+                          mask_type=mask_type, dropout_rate=0),
+                  compiler_options=self.HIPDNN_OPTIONS)(
+                      query, key, value, bias)
+    out_ref = jax.jit(partial(self._attention_ref, is_causal=
+                              mask_type == MaskType.CAUSAL, scale=0.5))(
+                                  query, key, value, bias)
+    self.assertArraysAllClose(out, out_ref, rtol=1e-2, atol=1e-2)
+
+  def test_sdpa_lowers_to_custom_call(self):
+    B, T, S, N, H = 2, 128, 128, 4, 64
+    keys = jax.random.split(jax.random.key(0), 3)
+    query = jax.random.normal(keys[0], (B, T, N, H), dtype=jnp.bfloat16)
+    key = jax.random.normal(keys[1], (B, S, N, H), dtype=jnp.bfloat16)
+    value = jax.random.normal(keys[2], (B, S, N, H), dtype=jnp.bfloat16)
+    hlo = jax.jit(dot_product_attention).lower(query, key, value).as_text()
+    self.assertIn("__cudnn$fmhaSoftmax", hlo)
+
+  def test_sdpa_training_is_rejected(self):
+    B, T, S, N, H = 2, 128, 128, 4, 64
+    keys = jax.random.split(jax.random.key(0), 3)
+    query = jax.random.normal(keys[0], (B, T, N, H), dtype=jnp.bfloat16)
+    key = jax.random.normal(keys[1], (B, S, N, H), dtype=jnp.bfloat16)
+    value = jax.random.normal(keys[2], (B, S, N, H), dtype=jnp.bfloat16)
+
+    def loss(q, k, v):
+      return dot_product_attention(q, k, v).astype(jnp.float32).sum()
+
+    with self.assertRaisesRegex(NotImplementedError, "backward"):
+      jax.grad(loss)(query, key, value)
+
+  @parameterized.named_parameters(
+      ("dropout", {"dropout_rate": 0.1}, "dropout"),
+      ("padding", {"mask_type": MaskType.PADDING}, "NO_MASK and CAUSAL"),
+      ("sliding_window", {"sliding_window_length": 4}, "sliding windows"),
+  )
+  def test_unsupported_options_are_rejected(self, kwargs, message):
+    B, T, S, N, H = 2, 128, 128, 4, 64
+    keys = jax.random.split(jax.random.key(0), 3)
+    query = jax.random.normal(keys[0], (B, T, N, H), dtype=jnp.bfloat16)
+    key = jax.random.normal(keys[1], (B, S, N, H), dtype=jnp.bfloat16)
+    value = jax.random.normal(keys[2], (B, S, N, H), dtype=jnp.bfloat16)
+    q_seqlen = jnp.full((B,), T, dtype=jnp.int32)
+    kv_seqlen = jnp.full((B,), S, dtype=jnp.int32)
+    if kwargs.get("mask_type") == MaskType.PADDING:
+      kwargs |= {"q_seqlen": q_seqlen, "kv_seqlen": kv_seqlen}
+
+    with self.assertRaisesRegex(NotImplementedError, message):
+      dot_product_attention(query, key, value, **kwargs)
 
 
 if __name__ == "__main__":

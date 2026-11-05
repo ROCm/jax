@@ -206,6 +206,7 @@ def prepare_wheel_rocm(
           f"{source_file_prefix}jaxlib/rocm/_hybrid.{pyext}",
           f"{source_file_prefix}jaxlib/rocm/_rnn.{pyext}",
           f"{source_file_prefix}jaxlib/rocm/_triton.{pyext}",
+          f"{source_file_prefix}jaxlib/rocm/_versions.{pyext}",
           f"{source_file_prefix}jaxlib/rocm/rocm_plugin_extension.{pyext}",
           f"{source_file_prefix}jaxlib/version.py",
       ],
