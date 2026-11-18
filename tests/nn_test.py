@@ -201,6 +201,42 @@ class NNFunctionsTest(jtu.JaxTestCase):
 
   @parameterized.product(
       mode=["mxfp8", "mxfp4"],
+      output_type=[jnp.float16, jnp.bfloat16, jnp.float32],
+  )
+  def testScaledDotGeneralPackedAxis(self, mode, output_type):
+    # lhs[b, m, k] = 1 iff k == m % K selects one row of rhs, so
+    # out[b, m, n] = rhs[b, m % K, n] exactly. rhs is diagonal with distinct
+    # e2m1 values and zeros elsewhere: every value is exact in the element
+    # format and every output is a single product, so the result must match
+    # bit for bit, and a sub-byte operand unpacked along the wrong axis shows
+    # up as nonzeros off the diagonal. The shapes and dimension numbers match
+    # testScaledDotGeneral, where the rhs contracts over dim 1 and the
+    # packed fp4 rhs is laid out along N.
+    if not jtu.test_device_matches(["gpu"]):
+      raise unittest.SkipTest("Test requires GPU.")
+    if jtu.is_device_cuda() and not jtu.is_cuda_compute_capability_at_least("10.0"):
+      raise unittest.SkipTest("Needs compute capability 10.0 or higher.")
+    configs = create_mx_configs(mode)
+    b, m, k, n = 2, 256, 96, 160
+    values = jnp.array([1, 2, 3, 4, 6, -1, -2, -3], jnp.float32)
+    rows = jnp.arange(m) % k
+    lhs = jnp.broadcast_to(
+        (jnp.arange(k)[None, :] == rows[:, None]).astype(jnp.float32),
+        (b, m, k))
+    rhs = jnp.broadcast_to(
+        jnp.where(jnp.arange(k)[:, None] == jnp.arange(n)[None, :],
+                  values[jnp.arange(k) % values.shape[0]][:, None], 0.0),
+        (b, k, n))
+    expected = rhs[:, rows, :]
+
+    out = jax.jit(partial(
+        nn.scaled_dot_general, dimension_numbers=(([2], [1]), ([0], [0])),
+        preferred_element_type=output_type, configs=configs))(
+            lhs.astype(output_type), rhs.astype(output_type))
+    self.assertArraysEqual(out, expected.astype(output_type))
+
+  @parameterized.product(
+      mode=["mxfp8", "mxfp4"],
       dtype=[jnp.bfloat16, jnp.float32],
   )
   def testMxQuantize(self, mode, dtype):
