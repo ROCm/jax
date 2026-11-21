@@ -16,8 +16,6 @@ from collections.abc import Callable, Sequence
 import functools
 import itertools
 import math
-import re
-import subprocess
 import sys
 from typing import Any
 import unittest
@@ -81,34 +79,6 @@ def trace_to_jaxpr(f: Callable, *args: Any):
 
 def is_power_of_two(n: int) -> bool:
   return (n > 0) and (n & (n - 1) == 0)
-
-
-def get_rocm_shared_memory_limit() -> int:
-  """Get the shared memory (LDS) limit in bytes for ROCm devices.
-
-  Queries rocminfo to get the GROUP segment size dynamically.
-  Returns 64KB as default if rocminfo fails (MI100/MI200/MI300 all have 64KB LDS).
-  """
-  try:
-    result = subprocess.run(
-        ['rocminfo'], capture_output=True, text=True, timeout=10
-    )
-    if result.returncode != 0:
-      return 64 * 1024  # Default if rocminfo fails
-    lines = result.stdout.split('\n')
-    for i, line in enumerate(lines):
-      if 'Segment:' in line and 'GROUP' in line:
-        if i + 1 < len(lines):
-          size_line = lines[i + 1]
-          # Match "Size: <number>(<hex>) KB" with case-insensitive KB check
-          match = re.search(r'Size:\s+(\d+)\s*\([^)]+\)\s*KB', size_line, re.IGNORECASE)
-          if match:
-            size_kb = int(match.group(1))
-            return size_kb * 1024  # Convert KB to bytes
-  except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
-    pass
-  # Default for AMD GPUs (MI100/MI200/MI300 all have 64KB LDS)
-  return 64 * 1024
 
 
 def smem_on_tpu():
@@ -2311,7 +2281,7 @@ class OpsTest(PallasBaseTest):
       # Check shared memory limit: Triton loads lhs + rhs into shared memory
       if jtu.is_device_rocm():
         dtype_size = jnp.dtype(dtype).itemsize
-        if (math.prod(lhs_shape) + math.prod(rhs_shape)) * dtype_size > get_rocm_shared_memory_limit():
+        if (math.prod(lhs_shape) + math.prod(rhs_shape)) * dtype_size > jtu.ROCM_SHARED_MEMORY_LIMIT_BYTES:
           self.skipTest("Shared memory size limit exceeded")
       elif math.prod(lhs_shape) + math.prod(rhs_shape) + math.prod(out_shape) > (256 * 256) * 2:
         self.skipTest("Shared memory size limit exceeded")

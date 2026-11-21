@@ -217,6 +217,27 @@ class PagedAttentionKernelTest(PallasBaseTest):
     if (quant_dtype == jnp.float8_e4m3fn
         and not jtu.is_cuda_compute_capability_at_least("8.9")):
       self.skipTest("Skipping since float8_e4m3fn is not supported on < sm89")
+    if jtu.is_device_rocm():
+      # The Triton kernel stages the K/V compute block in shared memory (LDS)
+      # with double buffering, so the LDS footprint scales with
+      # page_size * pages_per_compute_block * head_dim. The largest configs
+      # (page_size=32, head_dim=64, pages_per_compute_block=8) request ~80KB
+      # (81920 bytes), which exceeds the 64KB per-workgroup LDS that every AMD
+      # GPU exposes, and the compiler rejects it with RESOURCE_EXHAUSTED.
+      # Compared against the LDS limit (a capability, not a fixed gfx target),
+      # so this correctly skips only the over-budget configs on any AMD arch;
+      # the rest run.
+      # Empirically ~5 bytes per staged element (double-buffered fp16 K + fp16 V
+      # plus scales/overhead).
+      kv_tile_elems = page_size * pages_per_compute_block * head_dim
+      estimated_lds_bytes = kv_tile_elems * 5
+      lds_limit = jtu.ROCM_SHARED_MEMORY_LIMIT_BYTES
+      if estimated_lds_bytes > lds_limit:
+        self.skipTest(
+            "Shared memory (LDS) size limit exceeded on ROCm: this config "
+            f"needs ~{estimated_lds_bytes} bytes of LDS but the device only "
+            f"provides {lds_limit} bytes per workgroup."
+        )
     max_kv_len = 2048
     seq_lens = np.asarray([3, 256, 513, 1023, 2048], dtype=jnp.int32)
     q, k_pages, v_pages, block_tables = _generate_qkv(
